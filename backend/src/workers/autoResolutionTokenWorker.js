@@ -22,6 +22,7 @@ import {
   WORKER_TENANT_ISOLATION_ENABLED,
 } from "../config/appConfig.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
+import { findActiveResolutionTokenScoped } from "../repositories/feActionTokenRepository.js";
 
 const BATCH_SIZE = 10;
 
@@ -83,22 +84,13 @@ async function getActiveResolutionToken({ ticketId, tenantId = null }) {
   const hasTokenState = await hasPublicColumn("fe_action_tokens", "token_state");
   const hasOrgOnTokens = await hasPublicColumn("fe_action_tokens", "organisation_id");
   const nowIso = new Date().toISOString();
-  let query = supabase
-    .from("fe_action_tokens")
-    .select("id, fe_id, created_at")
-    .eq("ticket_id", ticketId)
-    .eq("action_type", "RESOLUTION")
-    .eq("used", false)
-    .gt("expires_at", nowIso);
-  if (hasOrgOnTokens && tenantId) query = query.eq("organisation_id", tenantId);
-  if (hasOrgOnTokens && !tenantId) query = query.is("organisation_id", null);
-  if (hasTokenState) {
-    query = query.in("token_state", ["LOCKED", "ACTIVE"]);
-  }
-  const { data, error } = await query.maybeSingle();
-
-  if (error) return null;
-  return data ?? null;
+  return findActiveResolutionTokenScoped({
+    ticketId,
+    tenantId,
+    nowIso,
+    hasTokenState,
+    hasOrgOnTokens,
+  });
 }
 
 async function getAssignedFe({ assignmentId, tenantId = null }) {

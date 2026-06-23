@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseClient.js";
 import { jsonRes, jsonOk, safeDbErrorForClient } from "../utils/http.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
+import { getFeActionTokenByIdSingle } from "../repositories/feActionTokenRepository.js";
 
 export async function validateFeActionToken(req, res) {
   try {
@@ -12,11 +13,7 @@ export async function validateFeActionToken(req, res) {
 
     const nowISO = new Date().toISOString();
 
-    const { data: actionToken, error } = await supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("id", token)
-      .single();
+    const { data: actionToken, error } = await getFeActionTokenByIdSingle(token);
 
     if (error || !actionToken) {
       return jsonRes(res, 404, { error: "Invalid token" });

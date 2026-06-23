@@ -7,6 +7,13 @@ import { hasPublicColumn } from "../services/schemaCompatService.js";
 import { jsonError, jsonOk } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { buildCreatorDisplayByTicketId } from "../utils/ticketDisplayEnrichment.js";
+import { findOrganisationsBySlugs } from "../repositories/organisationRepository.js";
+import { findUsersByEmails } from "../repositories/userRepository.js";
+import {
+  findFieldExecutiveByUserId,
+  findFieldExecutiveByName,
+} from "../repositories/fieldExecutiveRepository.js";
+import { listFeActionTokensByFeAndTicketIds } from "../repositories/feActionTokenRepository.js";
 
 const router = express.Router();
 
@@ -18,22 +25,13 @@ router.use(requireTenantOrSuperAdmin);
 async function resolveFeIdFromAppUser(req) {
   const appUserId = req.appUser?.id ? String(req.appUser.id) : null;
   if (appUserId && (await hasPublicColumn("field_executives", "user_id"))) {
-    let byUser = supabase
-      .from("field_executives")
-      .select("id, organisation_id")
-      .eq("user_id", appUserId)
-      .maybeSingle();
-    if (req.tenantId) byUser = byUser.eq("organisation_id", req.tenantId);
-    const { data: byUserRow } = await byUser;
+    const { data: byUserRow } = await findFieldExecutiveByUserId(appUserId, req.tenantId ?? null);
     if (byUserRow?.id) return byUserRow.id;
   }
 
-  // Fallback: legacy name-based matching (unchanged behaviour when user_id unset).
   const name = req.appUser?.name ? String(req.appUser.name).trim() : "";
   if (!name) return null;
-  let q = supabase.from("field_executives").select("id, organisation_id").eq("name", name).maybeSingle();
-  if (req.tenantId) q = q.eq("organisation_id", req.tenantId);
-  const { data } = await q;
+  const { data } = await findFieldExecutiveByName(name, req.tenantId ?? null);
   return data?.id ?? null;
 }
 
@@ -70,7 +68,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   );
   const orgNameBySlug = new Map();
   if (clientSlugs.length > 0) {
-    const { data: orgRows, error: orgErr } = await supabase.from("organisations").select("slug, name").in("slug", clientSlugs);
+    const { data: orgRows, error: orgErr } = await findOrganisationsBySlugs(clientSlugs);
     if (!orgErr && Array.isArray(orgRows)) {
       for (const o of orgRows) {
         const slug = o?.slug != null ? String(o.slug).trim() : "";
@@ -97,10 +95,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   );
   const reporterNameByEmail = new Map();
   if (reporterEmails.length > 0) {
-    const { data: userRows, error: userErr } = await supabase
-      .from("users")
-      .select("email, name")
-      .in("email", reporterEmails);
+    const { data: userRows, error: userErr } = await findUsersByEmails(reporterEmails);
     if (!userErr && Array.isArray(userRows)) {
       for (const u of userRows) {
         const em = u?.email != null ? String(u.email).trim() : "";
@@ -124,12 +119,11 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       ? "id, ticket_id, fe_id, action_type, expires_at, used, token_state, created_at"
       : "id, ticket_id, fe_id, action_type, expires_at, used, created_at";
 
-    const { data: tokRows, error: tokErr } = await supabase
-      .from("fe_action_tokens")
-      .select(cols)
-      .eq("fe_id", feId)
-      .in("ticket_id", ticketIds)
-      .order("created_at", { ascending: false });
+    const { data: tokRows, error: tokErr } = await listFeActionTokensByFeAndTicketIds(
+      feId,
+      ticketIds,
+      cols
+    );
 
     token_query_rows = !tokErr && Array.isArray(tokRows) ? tokRows.length : 0;
     if (tokErr) {

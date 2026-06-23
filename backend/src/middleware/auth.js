@@ -1,5 +1,5 @@
-import { supabase } from '../supabaseClient.js';
 import { jsonRes } from '../utils/http.js';
+import { findAppUserByAuthId } from '../repositories/userRepository.js';
 
 async function fetchSupabaseAuthUser(accessToken) {
   const base = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -87,11 +87,7 @@ export async function requireAuth(req, res, next) {
 
   req.user = authUser;
 
-  const { data: appUser, error: appError } = await supabase
-    .from('users')
-    .select('id, role, is_active, active, organisation_id, name, email')
-    .eq('auth_id', authUser.id)
-    .maybeSingle();
+  const { data: appUser, error: appError } = await findAppUserByAuthId(authUser.id);
 
   if (!appError && appUser) {
     const isActive = appUser.is_active !== false && appUser.is_active !== null;

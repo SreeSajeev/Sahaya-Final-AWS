@@ -1,7 +1,6 @@
 // src/services/assignmentService.js
 // Isolated ticket assignment logic (single + bulk callers).
 
-import { supabase } from "../supabaseClient.js";
 import {
   countAssignmentsForTicket,
   getAssignmentById,
@@ -14,6 +13,7 @@ import {
   setTicketAssigned,
   updateTicketById,
 } from "../repositories/ticketQueryRepository.js";
+import { getFieldExecutiveContactById, getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.js";
 import {
   issueAssignmentTokenPair,
   revokeTokensForTicket,
@@ -131,11 +131,7 @@ async function collectAssignmentNotifications({
   const email = { success: false, error: null };
   const sms = { success: false, error: null };
 
-  const { data: feContact, error: feContactErr } = await supabase
-    .from("field_executives")
-    .select("email, phone")
-    .eq("id", feId)
-    .maybeSingle();
+  const { data: feContact, error: feContactErr } = await getFieldExecutiveContactById(feId);
 
   if (feContactErr) {
     console.error(
@@ -746,11 +742,7 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     };
   }
 
-  const { data: newFeRow } = await supabase
-    .from("field_executives")
-    .select("name")
-    .eq("id", feId)
-    .maybeSingle();
+  const { data: newFeRow } = await getFieldExecutiveById(feId, "name");
   const newFeName = newFeRow?.name != null ? String(newFeRow.name).trim() : null;
   const newDueDate =
     hasAssignmentDueAt && (assignment.assignment_due_at ?? assignment_due_at)

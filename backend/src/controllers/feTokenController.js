@@ -2,6 +2,7 @@
 
 import { supabase } from "../supabaseClient.js";
 import { sendFETokenEmail } from "../services/emailService.js";
+import { insertFeActionTokenReturning } from "../repositories/feActionTokenRepository.js";
 
 /**
  * Generate FE Action Token + Send Email
@@ -26,17 +27,13 @@ export async function generateAndSendFEToken(req, res) {
     ).toISOString();
 
     // 2️⃣ Insert token
-    const { data: tokenRow, error: tokenError } = await supabase
-      .from("fe_action_tokens")
-      .insert({
-        ticket_id: ticketId,
-        fe_id: feId,
-        action_type: type,
-        expires_at: expiresAt,
-        used: false,
-      })
-      .select("id")
-      .single();
+    const { data: tokenRow, error: tokenError } = await insertFeActionTokenReturning({
+      ticket_id: ticketId,
+      fe_id: feId,
+      action_type: type,
+      expires_at: expiresAt,
+      used: false,
+    }, "id");
 
     if (tokenError || !tokenRow) {
       console.error("Token insert error:", tokenError?.message || tokenError);

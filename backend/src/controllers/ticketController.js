@@ -10,6 +10,7 @@ import { handleClientResolutionNotification } from "../services/clientNotificati
 import { setAssignmentDeadline } from "../services/slaService.js";
 import { sendFESms, buildFEActionURL } from "../services/smsService.js";
 import { redactFeActionUrls, redactPhone } from "../utils/redact.js";
+import { consumeOnSiteTokenForTicket } from "../repositories/feActionTokenRepository.js";
 
 /* =====================================================
    ASSIGN FE TO TICKET
@@ -157,14 +158,7 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
     }
 
     /* 🔐 Consume ON_SITE token (single-use) */
-    const { data: consumed, error: consumeError } = await supabase
-      .from("fe_action_tokens")
-      .update({ used: true })
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "ON_SITE")
-      .eq("used", false)
-      .select("id")
-      .limit(1);
+    const { data: consumed, error: consumeError } = await consumeOnSiteTokenForTicket(ticketId);
 
     if (consumeError) throw consumeError;
 

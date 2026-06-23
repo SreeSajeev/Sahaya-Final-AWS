@@ -32,19 +32,10 @@ export async function insertAuditLogRow(row) {
   return supabase.from("audit_logs").insert(row);
 }
 
+import { findOrganisationIdBySlug as findOrgIdBySlugRepo } from "./organisationRepository.js";
+
 export async function findOrganisationIdBySlug(slug) {
-  if (isPrismaDbMode()) {
-    try {
-      const row = await prisma.organisation.findFirst({
-        where: { slug },
-        select: { id: true },
-      });
-      return row?.id ?? null;
-    } catch {
-      return null;
-    }
-  }
-  const { data, error } = await supabase.from("organisations").select("id").eq("slug", slug).maybeSingle();
+  const { data, error } = await findOrgIdBySlugRepo(slug);
   if (error || !data?.id) return null;
   return data.id;
 }

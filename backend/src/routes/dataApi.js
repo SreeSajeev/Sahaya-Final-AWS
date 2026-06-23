@@ -70,6 +70,31 @@ import {
   listAllAssignmentsScoped,
 } from "../repositories/assignmentRepository.js";
 import { insertComment, listCommentsForTicket } from "../repositories/commentRepository.js";
+import {
+  listUsersScoped,
+  listUsersOrganisationIds,
+  countUsersGlobal,
+} from "../repositories/userRepository.js";
+import {
+  listOrganisations,
+  getOrganisationById,
+  insertOrganisation,
+} from "../repositories/organisationRepository.js";
+import {
+  listFieldExecutivesScoped,
+  getFieldExecutiveByIdScoped,
+  listFieldExecutivesOrganisationIds,
+  listAllFieldExecutivesScoped,
+  countFieldExecutivesGlobal,
+} from "../repositories/fieldExecutiveRepository.js";
+import {
+  getConfigurationByKey,
+  configurationKeyExists,
+  listConfigurationsByKeys,
+  listAllConfigurations,
+  upsertConfiguration,
+} from "../repositories/configurationRepository.js";
+import { findActiveFeActionTokenForTicket } from "../repositories/feActionTokenRepository.js";
 
 const router = express.Router();
 
@@ -214,15 +239,12 @@ router.get("/field-executives", async (req, res) => {
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
 
   try {
-    let q = supabase.from("field_executives").select("*").order("name", { ascending: true });
-    if (!req.isSuperAdmin) {
-      q = withTenantScope(q, req);
-    } else if (organisationIdOverride) {
-      q = q.eq("organisation_id", organisationIdOverride);
-    }
-    if (activeOnly) q = q.eq("active", true);
-    q = q.range(offset, offset + limit - 1);
-    const { data, error } = await q;
+    const { data, error } = await listFieldExecutivesScoped(req, {
+      limit,
+      offset,
+      organisationIdOverride,
+      activeOnly,
+    });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.fieldExecutives.list", {
       tenantId: req.tenantId ?? null,
@@ -240,9 +262,7 @@ router.get("/field-executives/:id", async (req, res) => {
   const startedAt = Date.now();
   const id = req.params.id;
   try {
-    let q = supabase.from("field_executives").select("*").eq("id", id);
-    q = withTenantScope(q, req);
-    const { data, error } = await q.maybeSingle();
+    const { data, error } = await getFieldExecutiveByIdScoped(req, id, "*");
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Field executive not found");
     logEvent("dataApi.fieldExecutives.get", { tenantId: req.tenantId ?? null, feId: id, ms: Date.now() - startedAt });
@@ -262,11 +282,7 @@ router.get("/configurations/:key", async (req, res) => {
   if (!key) return jsonError(res, 400, "Key required");
 
   try {
-    const { data, error } = await supabase
-      .from("configurations")
-      .select("key, value, updated_at")
-      .eq("key", key)
-      .maybeSingle();
+    const { data, error } = await getConfigurationByKey(key);
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.configurations.get", { tenantId: req.tenantId ?? null, key, ms: Date.now() - startedAt });
     return jsonOk(res, data || null);
@@ -299,20 +315,11 @@ router.put("/configurations/:key", async (req, res) => {
 
   try {
     const updated_at = new Date().toISOString();
-    const { data: existing, error: exErr } = await supabase
-      .from("configurations")
-      .select("key")
-      .eq("key", key)
-      .maybeSingle();
+    const { data: existing, error: exErr } = await configurationKeyExists(key);
     if (exErr) return jsonError(res, 500, exErr.message);
 
-    if (existing?.key) {
-      const { error } = await supabase.from("configurations").update({ value, updated_at }).eq("key", key);
-      if (error) return jsonError(res, 500, error.message);
-    } else {
-      const { error } = await supabase.from("configurations").insert({ key, value, updated_at });
-      if (error) return jsonError(res, 500, error.message);
-    }
+    const { error } = await upsertConfiguration(key, value, updated_at);
+    if (error) return jsonError(res, 500, error.message);
 
     logEvent("dataApi.configurations.put", { tenantId: req.tenantId ?? null, key, ms: Date.now() - startedAt });
     return jsonOk(res, { ok: true });
@@ -449,10 +456,7 @@ router.post("/tickets-row-supplement", async (req, res) => {
     const orgResolutionHoursByOrgId = new Map();
     for (const ch of chunkIds(uniqueOrgIds, 50)) {
       const keys = ch.map((orgId) => orgTicketConfigKey(orgId));
-      const { data: cfgRows, error: cfgErr } = await supabase
-        .from("configurations")
-        .select("key, value")
-        .in("key", keys);
+      const { data: cfgRows, error: cfgErr } = await listConfigurationsByKeys(keys);
       if (cfgErr) return jsonError(res, 500, cfgErr.message);
       for (const row of cfgRows || []) {
         const key = row?.key != null ? String(row.key) : "";
@@ -1012,10 +1016,7 @@ router.get("/organisations", async (req, res) => {
   const startedAt = Date.now();
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
   try {
-    const { data, error } = await supabase
-      .from("organisations")
-      .select("id, name, slug, created_at, status")
-      .order("name", { ascending: true });
+    const { data, error } = await listOrganisations();
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.organisations.list", { ms: Date.now() - startedAt, count: (data || []).length });
     return jsonOk(res, { items: data || [] });
@@ -1031,11 +1032,10 @@ router.get("/organisations/:id", async (req, res) => {
   const tenantMayRead = req.tenantId && id === req.tenantId;
   if (!req.isSuperAdmin && !tenantMayRead) return jsonError(res, 403, "Forbidden");
   try {
-    const { data, error } = await supabase
-      .from("organisations")
-      .select("id, name, slug, status, review_field_label, review_field_helper_text")
-      .eq("id", id)
-      .maybeSingle();
+    const { data, error } = await getOrganisationById(
+      id,
+      "id, name, slug, status, review_field_label, review_field_helper_text"
+    );
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Organisation not found");
     logEvent("dataApi.organisations.get", { ms: Date.now() - startedAt, orgId: id });
@@ -1056,7 +1056,7 @@ router.post("/organisations", async (req, res) => {
     const insert = { name, slug, status: "active" };
     const email = safeTrim(req.body?.email);
     if (email) insert.email = email;
-    const { data, error } = await supabase.from("organisations").insert(insert).select("id, name, slug, created_at, status").single();
+    const { data, error } = await insertOrganisation(insert);
     if (error) return jsonError(res, 400, error.message);
     logEvent("dataApi.organisations.create", { ms: Date.now() - startedAt, orgId: data?.id });
     return jsonOk(res, data);
@@ -1078,22 +1078,13 @@ router.get("/users", async (req, res) => {
   const role = safeTrim(req.query.role);
 
   try {
-    let q = supabase.from("users").select("*").order("created_at", { ascending: false });
-
-    if (!req.isSuperAdmin) {
-      q = withTenantScope(q, req);
-    } else if (organisationId) {
-      q = q.eq("organisation_id", organisationId);
-    }
-    if (approvalStatus) {
-      q = q.eq("approval_status", approvalStatus);
-    }
-    if (role) {
-      q = q.eq("role", role);
-    }
-
-    q = q.range(offset, offset + limit - 1);
-    const { data, error } = await q;
+    const { data, error } = await listUsersScoped(req, {
+      limit,
+      offset,
+      organisationId,
+      approvalStatus,
+      role,
+    });
     if (error) return jsonError(res, 500, error.message);
 
     logEvent("dataApi.users.list", {
@@ -1254,8 +1245,8 @@ router.get("/organisations/stats", async (req, res) => {
   try {
     const [ticketsRes, usersRes, feRes, slaRes] = await Promise.all([
       listTicketOrgStatsRows(orgStatsCap, req),
-      supabase.from("users").select("organisation_id").limit(orgStatsCap + 1),
-      supabase.from("field_executives").select("organisation_id").limit(orgStatsCap + 1),
+      listUsersOrganisationIds(orgStatsCap),
+      listFieldExecutivesOrganisationIds(orgStatsCap),
       listSlaBreachRowsGlobal(orgStatsCap),
     ]);
     if (ticketsRes.error) return jsonError(res, 500, ticketsRes.error.message);
@@ -1449,15 +1440,10 @@ router.get("/tickets/:ticketId/fe-action-tokens/active", async (req, res) => {
     if (te) return jsonError(res, 500, te.message);
     if (!ticket) return jsonError(res, 404, "Ticket not found");
 
-    let q = supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("ticket_id", ticketId)
-      .eq("used", false)
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false })
-      .limit(1);
-    const { data, error } = await q.maybeSingle();
+    const { data, error } = await findActiveFeActionTokenForTicket(
+      ticketId,
+      new Date().toISOString()
+    );
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.feToken.active", { ticketId, ms: Date.now() - startedAt, found: !!data });
     return jsonOk(res, { token: data || null });
@@ -1495,7 +1481,7 @@ router.get("/configurations", async (req, res) => {
   const startedAt = Date.now();
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
   try {
-    const { data, error } = await supabase.from("configurations").select("*").order("key", { ascending: true }).limit(500);
+    const { data, error } = await listAllConfigurations(500);
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.configurations.list", { ms: Date.now() - startedAt, count: (data || []).length });
     return jsonOk(res, { items: data || [] });
@@ -1523,9 +1509,7 @@ router.get("/analytics/summary", async (req, res) => {
     const { data: sla, error: slaErr } = await listAllSlaRowsScoped(req);
     if (slaErr) return jsonError(res, 500, slaErr.message);
 
-    let feQ = supabase.from("field_executives").select("*");
-    feQ = withTenantScope(feQ, req);
-    const { data: fes, error: feErr } = await feQ;
+    const { data: fes, error: feErr } = await listAllFieldExecutivesScoped(req);
     if (feErr) return jsonError(res, 500, feErr.message);
 
     const { data: assignments, error: asErr } = await listAllAssignmentsScoped(req);
@@ -1571,8 +1555,8 @@ router.get("/platform/overview", async (req, res) => {
 
   try {
     const [usersRes, feRes, ticketsRes] = await Promise.all([
-      supabase.from("users").select("id", { count: "exact", head: true }),
-      supabase.from("field_executives").select("id", { count: "exact", head: true }),
+      countUsersGlobal(),
+      countFieldExecutivesGlobal(),
       listTicketClientSlugsGlobal(),
     ]);
     if (usersRes.error) return jsonError(res, 500, usersRes.error.message);

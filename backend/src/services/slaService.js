@@ -11,7 +11,7 @@ import {
   updateSlaById,
   updateSlaByTicketId,
 } from "../repositories/slaRepository.js";
-import { supabase } from "../supabaseClient.js";
+import { listSlaConfigurationKeys } from "../repositories/configurationRepository.js";
 
 const CONFIG_KEYS = [
   "assignment_sla_hours",
@@ -25,10 +25,7 @@ const DEFAULTS = { assignment_sla_hours: 4, onsite_sla_hours: 24, resolution_sla
  * @returns {{ assignment_sla_hours: number, onsite_sla_hours: number, resolution_sla_hours: number }}
  */
 export async function getSlaConfig() {
-  const { data: rows, error } = await supabase
-    .from("configurations")
-    .select("key, value")
-    .in("key", CONFIG_KEYS);
+  const { data: rows, error } = await listSlaConfigurationKeys(CONFIG_KEYS);
 
   if (error) {
     console.warn("[SLA] getSlaConfig failed, using defaults:", error.message);

@@ -13,6 +13,10 @@ import {
 } from "../services/tokenService.js";
 import { SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
+import {
+  getFeActionTokenById,
+  markFeActionTokenExpired,
+} from "../repositories/feActionTokenRepository.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { replicateProofsToS3 } from "../services/s3ProofReplication.js";
@@ -72,11 +76,7 @@ export async function uploadFeProof(req, res) {
     }
 
     const hasTokenStateColumn = await hasPublicColumn("fe_action_tokens", "token_state");
-    const { data: actionToken } = await supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("id", token)
-      .maybeSingle();
+    const { data: actionToken } = await getFeActionTokenById(token);
 
     if (!actionToken) {
       return res.status(404).json({ error: "Invalid token" });
@@ -94,11 +94,7 @@ export async function uploadFeProof(req, res) {
     }
     if (effectiveTokenState === TOKEN_STATES.EXPIRED || isTokenExpired(actionToken.expires_at)) {
       if (hasTokenStateColumn) {
-        await supabase
-          .from("fe_action_tokens")
-          .update({ token_state: TOKEN_STATES.EXPIRED })
-          .eq("id", token)
-          .eq("used", false);
+        await markFeActionTokenExpired(token);
       }
       return res.status(410).json({ error: "Token expired", code: "TOKEN_EXPIRED" });
     }

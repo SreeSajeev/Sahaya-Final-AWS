@@ -57,6 +57,8 @@ import {
 import { updateSlaByTicketId } from "../repositories/slaRepository.js";
 import { insertComment } from "../repositories/commentRepository.js";
 import { getAssignmentById } from "../repositories/assignmentRepository.js";
+import { findUserNameById } from "../repositories/userRepository.js";
+import { findActiveResolutionTokenForTicket } from "../repositories/feActionTokenRepository.js";
 
 const router = express.Router();
 
@@ -559,11 +561,7 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
 
     // Audit comment (skip duplicates if already rejected).
     if (!alreadyRejected) {
-      const { data: rejectorRow } = await supabase
-        .from("users")
-        .select("name")
-        .eq("id", req.appUser.id)
-        .maybeSingle();
+      const { data: rejectorRow } = await findUserNameById(req.appUser.id);
       const rejectedByName =
         rejectorRow?.name != null && String(rejectorRow.name).trim() !== ""
           ? String(rejectorRow.name).trim()
@@ -663,15 +661,11 @@ router.post("/:id/on-site-token", async (req, res) => {
     }
 
     const nowIso = new Date().toISOString();
-    const { data: existingActiveToken } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "RESOLUTION")
-      .eq("token_state", TOKEN_STATES.ACTIVE)
-      .eq("used", false)
-      .gt("expires_at", nowIso)
-      .maybeSingle();
+    const { data: existingActiveToken } = await findActiveResolutionTokenForTicket({
+      ticketId,
+      nowIso,
+      tokenState: TOKEN_STATES.ACTIVE,
+    });
 
     if (!existingActiveToken?.id) {
       return jsonRes(res, 409, {

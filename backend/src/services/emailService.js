@@ -3,6 +3,7 @@ import { supabase } from "../supabaseClient.js";
 import { APP_BASE_URL } from "../config/appConfig.js";
 import { redactEmail } from "../utils/redact.js";
 import { priorityDisplayLabel } from "../utils/normalizeTicketPriority.js";
+import { findUserByEmailForLookup } from "../repositories/userRepository.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
@@ -166,7 +167,7 @@ async function resolveReporterDisplayForEmail(openedByEmail) {
   if (openedByEmail == null) return null;
   const em = String(openedByEmail).trim();
   if (!em) return null;
-  const { data, error } = await supabase.from("users").select("name, email").eq("email", em).maybeSingle();
+  const { data, error } = await findUserByEmailForLookup(em);
   if (!error && data?.name && String(data.name).trim()) {
     return `${String(data.name).trim()} reported this ticket (${em})`;
   }

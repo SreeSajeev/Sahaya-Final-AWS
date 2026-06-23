@@ -1,6 +1,7 @@
 /**
  * Read-only helpers to add human-readable ticket fields without schema migrations.
  */
+import { findUsersByIds } from "../repositories/userRepository.js";
 
 /**
  * First STAFF comment per ticket (by created_at) approximates manual ticket creator
@@ -44,7 +45,7 @@ export async function buildCreatorDisplayByTicketId(supabase, tickets) {
   /** @type {Map<string, { name?: string | null; email?: string | null }>} */
   const userById = new Map();
   if (authorIds.length > 0) {
-    const { data: users, error: uErr } = await supabase.from("users").select("id, name, email").in("id", authorIds);
+    const { data: users, error: uErr } = await findUsersByIds(authorIds);
     if (uErr) {
       console.warn("[ticketDisplayEnrichment] users lookup skipped:", uErr.message);
     } else {

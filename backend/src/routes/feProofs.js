@@ -3,6 +3,10 @@ import { supabase } from "../supabaseClient.js"
 import { validateActionToken } from "../services/tokenService.js"
 import { assertValidTransition } from "../services/ticketStateMachine.js"
 import { isTenantAllowed } from "../middleware/tenantContext.js"
+import {
+  getUnusedFeActionTokenById,
+  markFeActionTokenUsedSimple,
+} from "../repositories/feActionTokenRepository.js"
 
 const router = express.Router()
 
@@ -21,12 +25,7 @@ async function handleProofSubmission({
   }
 
   /* 1️⃣ Load token */
-  const { data: token, error: tokenError } = await supabase
-    .from("fe_action_tokens")
-    .select("*")
-    .eq("id", tokenId)
-    .eq("used", false)
-    .single()
+  const { data: token, error: tokenError } = await getUnusedFeActionTokenById(tokenId)
 
   if (tokenError || !token) {
     throw new Error("Invalid or expired token")
@@ -89,10 +88,7 @@ async function handleProofSubmission({
     .eq("id", token.ticket_id)
 
   /* 7️⃣ Invalidate token */
-  await supabase
-    .from("fe_action_tokens")
-    .update({ used: true })
-    .eq("id", token.id)
+  await markFeActionTokenUsedSimple(token.id)
 }
 
 /**

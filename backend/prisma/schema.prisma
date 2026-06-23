@@ -49,11 +49,37 @@ model Ticket {
 }
 
 model Organisation {
-  id   String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name String?
-  slug String?
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  slug                  String    @unique
+  createdAt             DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  status                String    @default("active")
+  email                 String?
+  spocName              String?   @map("spoc_name")
+  spocEmail             String?   @map("spoc_email")
+  spocPhone             String?   @map("spoc_phone")
+  incomingEmails        Json?     @map("incoming_emails")
+  outgoingEmails        Json?     @map("outgoing_emails")
+  reviewFieldLabel      String?   @map("review_field_label")
+  reviewFieldHelperText String?   @map("review_field_helper_text")
 
   @@map("organisations")
+}
+
+model User {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authId         String?   @map("auth_id") @db.Uuid
+  name           String
+  email          String    @unique
+  role           String
+  active         Boolean?  @default(true)
+  isActive       Boolean?  @default(true) @map("is_active")
+  approvalStatus String?   @default("pending") @map("approval_status")
+  organisationId  String?   @map("organisation_id") @db.Uuid
+  clientSlug     String?   @map("client_slug")
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@map("users")
 }
 
 model RawEmail {
@@ -147,10 +173,15 @@ model TenantClient {
 
 model FieldExecutive {
   id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name           String?
+  name           String
   email          String?
   phone          String?
+  baseLocation   String?            @map("base_location")
+  skills         Json?
+  active         Boolean?           @default(true)
+  createdAt      DateTime?          @default(now()) @map("created_at") @db.Timestamp(6)
   organisationId String?            @map("organisation_id") @db.Uuid
+  userId         String?            @map("user_id") @db.Uuid
   assignments    TicketAssignment[]
 
   @@map("field_executives")
@@ -186,4 +217,29 @@ model SlaTracking {
   organisationId      String?   @map("organisation_id") @db.Uuid
 
   @@map("sla_tracking")
+}
+
+model FeActionToken {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId         String    @map("ticket_id") @db.Uuid
+  feId             String    @map("fe_id") @db.Uuid
+  actionType       String    @map("action_type")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamp(6)
+  used             Boolean   @default(false)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  tokenState       String    @map("token_state")
+  activatedAt      DateTime? @map("activated_at") @db.Timestamp(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamp(6)
+  idempotencyKey   String?   @map("idempotency_key")
+  organisationId   String?   @map("organisation_id") @db.Uuid
+
+  @@map("fe_action_tokens")
+}
+
+model Configuration {
+  key       String    @id
+  value     Json?
+  updatedAt DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@map("configurations")
 }
