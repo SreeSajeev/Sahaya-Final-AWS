@@ -1,0 +1,148 @@
+import express from "express";
+import { supabase } from "../supabaseClient.js";
+import { TOKEN_STATES, isTokenExpired } from "../services/tokenService.js";
+import { SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js";
+import { hasPublicColumn } from "../services/schemaCompatService.js";
+import { jsonError, jsonOk } from "../utils/http.js";
+import { logEvent } from "../utils/structuredLog.js";
+import { maskTokenForLog } from "../utils/tokenRedact.js";
+
+const router = express.Router();
+
+/** Columns required server-side for validation / tenant guard (not all exposed in JSON). */
+const TOKEN_CONTEXT_SELECT_BASE =
+  "id, action_type, token_state, used, expires_at, ticket_id";
+
+/** Columns returned to FEActionPage (plus organisation_id for server-side tenant guard). */
+const TICKET_CONTEXT_SELECT_BASE =
+  "status, ticket_number, vehicle_number, category, issue_type, location, short_description, opened_by_email, organisation_id";
+
+function buildPublicTokenPayload(actionToken, effectiveTokenState) {
+  return {
+    id: actionToken.id,
+    action_type: actionToken.action_type,
+    token_state: effectiveTokenState,
+  };
+}
+
+function buildPublicTicketPayload(ticket) {
+  return {
+    status: ticket.status,
+    ticket_number: ticket.ticket_number,
+    vehicle_number: ticket.vehicle_number ?? null,
+    category: ticket.category ?? null,
+    issue_type: ticket.issue_type ?? null,
+    location: ticket.location ?? null,
+    short_description: ticket.short_description ?? null,
+    remarks: ticket.remarks ?? null,
+    description: ticket.description ?? null,
+    opened_by_email: ticket.opened_by_email ?? null,
+    contact_number: ticket.contact_number ?? null,
+  };
+}
+
+async function tokenContextSelectColumns() {
+  const parts = TOKEN_CONTEXT_SELECT_BASE.split(", ");
+  if (await hasPublicColumn("fe_action_tokens", "organisation_id")) {
+    parts.push("organisation_id");
+  }
+  return parts.join(", ");
+}
+
+async function ticketContextSelectColumns() {
+  const parts = TICKET_CONTEXT_SELECT_BASE.split(", ");
+  if (await hasPublicColumn("tickets", "remarks")) parts.push("remarks");
+  if (await hasPublicColumn("tickets", "description")) parts.push("description");
+  if (await hasPublicColumn("tickets", "contact_number")) parts.push("contact_number");
+  return parts.join(", ");
+}
+
+/**
+ * Public FE context endpoint (no JWT required).
+ * FE uses magic link with tokenId; we must return enough context to render the page
+ * WITHOUT allowing any DB mutation here.
+ *
+ * GET /fe/action/:tokenId/context
+ */
+router.get("/action/:tokenId/context", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const startedAt = Date.now();
+  const tokenId = req.params.tokenId;
+  if (!tokenId) return jsonError(res, 400, "Token missing");
+
+  try {
+    const hasTokenStateColumn = await hasPublicColumn("fe_action_tokens", "token_state");
+    const tokenSelect = await tokenContextSelectColumns();
+
+    const { data: actionToken, error: tokenError } = await supabase
+      .from("fe_action_tokens")
+      .select(tokenSelect)
+      .eq("id", tokenId)
+      .maybeSingle();
+
+    if (tokenError) return jsonError(res, 500, tokenError.message);
+    if (!actionToken) return jsonError(res, 404, "Invalid token");
+
+    const effectiveTokenState =
+      actionToken.token_state == null && SAFE_TOKEN_LIFECYCLE
+        ? TOKEN_STATES.ACTIVE
+        : actionToken.token_state;
+
+    if (actionToken.used || effectiveTokenState === TOKEN_STATES.USED) {
+      return jsonError(res, 410, "Token already used", { code: "TOKEN_USED" });
+    }
+    if (effectiveTokenState === TOKEN_STATES.REVOKED) {
+      return jsonError(res, 410, "Token revoked", { code: "TOKEN_REVOKED" });
+    }
+    if (effectiveTokenState === TOKEN_STATES.EXPIRED || isTokenExpired(actionToken.expires_at)) {
+      // Best-effort mark expired when token_state exists; never block on it.
+      if (hasTokenStateColumn) {
+        await supabase
+          .from("fe_action_tokens")
+          .update({ token_state: TOKEN_STATES.EXPIRED })
+          .eq("id", tokenId)
+          .eq("used", false);
+      }
+      return jsonError(res, 410, "Token expired", { code: "TOKEN_EXPIRED" });
+    }
+
+    const ticketSelect = await ticketContextSelectColumns();
+    const { data: ticket, error: ticketError } = await supabase
+      .from("tickets")
+      .select(ticketSelect)
+      .eq("id", actionToken.ticket_id)
+      .maybeSingle();
+
+    if (ticketError) return jsonError(res, 500, ticketError.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+    if (ticket.status === "REJECTED") {
+      return jsonError(res, 403, "Ticket rejected — action not allowed", { code: "TICKET_REJECTED" });
+    }
+
+    if (
+      actionToken.organisation_id &&
+      ticket.organisation_id &&
+      actionToken.organisation_id !== ticket.organisation_id
+    ) {
+      return jsonError(res, 403, "Forbidden", { code: "TENANT_MISMATCH" });
+    }
+
+    logEvent("fePublic.actionContext", {
+      tokenId: maskTokenForLog(tokenId),
+      ticketId: actionToken.ticket_id,
+      actionType: actionToken.action_type,
+      tokenState: effectiveTokenState ?? null,
+      ms: Date.now() - startedAt,
+    });
+
+    return jsonOk(res, {
+      token: buildPublicTokenPayload(actionToken, effectiveTokenState),
+      ticket: buildPublicTicketPayload(ticket),
+    });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to load context");
+  }
+});
+
+export default router;
+

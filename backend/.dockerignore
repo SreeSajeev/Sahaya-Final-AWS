@@ -1,0 +1,23 @@
+# Dependencies & build
+node_modules
+npm-debug.log*
+yarn-error.log*
+
+# Secrets — never bake into image
+.env
+.env.*
+!.env.example
+
+# Git / IDE
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+
+# Docs & local tooling (keep image small)
+docs
+scripts/test-postgres-connection.js
+
+# Prisma: keep schema; generated client is produced in Docker build
+# (do not copy host-generated .prisma from developer machine)

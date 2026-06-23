@@ -1,0 +1,49 @@
+// Prisma schema for direct PostgreSQL (RDS-ready).
+// After connecting DATABASE_URL to your Postgres, run:
+//   npx prisma db pull
+// to align this model 1:1 with your live database, then:
+//   npx prisma generate
+//
+// The Ticket model below matches `public.tickets` from full_dump.sql in this repo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Maps to public.tickets — column set from full_dump.sql (sahaya/full_dump.sql)
+model Ticket {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketNumber          String    @unique @map("ticket_number")
+  status                String    @default("OPEN")
+  complaintId           String?   @map("complaint_id")
+  vehicleNumber         String?   @map("vehicle_number")
+  category              String?
+  issueType             String?   @map("issue_type")
+  location              String?
+  state                 String?
+  openedByEmail         String?   @map("opened_by_email")
+  openedAt              DateTime? @default(now()) @map("opened_at") @db.Timestamp(6)
+  currentAssignmentId   String?   @map("current_assignment_id") @db.Uuid
+  createdAt             DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+  rawEmailId            String?   @map("raw_email_id") @db.Uuid
+  remarks               String?
+  source                String?   @default("EMAIL")
+  confidenceScore       Int?      @map("confidence_score")
+  needsReview           Boolean?  @map("needs_review")
+  ackEmailSent          Boolean?  @default(false) @map("ack_email_sent")
+  resolvedAt            DateTime? @map("resolved_at") @db.Timestamp(6)
+  priority              Boolean?  @default(false)
+  priorityLevel         String    @default("MEDIUM") @map("priority_level")
+  clientSlug            String?   @map("client_slug")
+  verificationRemarks   String?   @map("verification_remarks")
+  organisationId        String?   @map("organisation_id") @db.Uuid
+  shortDescription      String?   @map("short_description")
+
+  @@map("tickets")
+}

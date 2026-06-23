@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Primary Meta -->
+    <title>Sahaya</title>
+    <meta
+      name="description"
+      content="Sahaya — Smart Field Operations & Ticket Management Platform"
+    />
+    <meta name="author" content="Sahaya" />
+
+    <!-- Content Security Policy: mitigate XSS; adjust if Supabase/analytics need more sources.
+         Note: frame-ancestors is not supported in meta; set via HTTP headers (e.g. vercel.json) if needed. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://api.sahaya.pariskq.in http://localhost:3000 http://127.0.0.1:3000; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'self';"
+    />
+
+    <!-- Favicon (Add sahaya-logo.png inside /public) -->
+    <link rel="icon" type="image/png" href="/sahaya-logo.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Sahaya" />
+    <meta
+      property="og:description"
+      content="Sahaya — Smart Field Operations & Ticket Management Platform"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/sahaya-logo.png" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Sahaya" />
+    <meta
+      name="twitter:description"
+      content="Sahaya — Smart Field Operations & Ticket Management Platform"
+    />
+    <meta name="twitter:image" content="/sahaya-logo.png" />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
