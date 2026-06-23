@@ -1,4 +1,4 @@
-import { supabase } from '../supabaseClient.js';
+import { insertEmailComment } from '../repositories/commentRepository.js';
 
 export async function addEmailComment(ticketId, text) {
   if (!ticketId) {
@@ -7,9 +7,5 @@ export async function addEmailComment(ticketId, text) {
 
   const body = text != null ? String(text) : '';
 
-  return supabase.from('ticket_comments').insert({
-    ticket_id: ticketId,
-    body,
-    source: 'EMAIL',
-  });
+  return insertEmailComment(ticketId, body);
 }

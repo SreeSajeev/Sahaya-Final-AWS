@@ -47,3 +47,110 @@ model Ticket {
 
   @@map("tickets")
 }
+
+model Organisation {
+  id   String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String?
+  slug String?
+
+  @@map("organisations")
+}
+
+model RawEmail {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId           String        @map("message_id")
+  threadId            String?       @map("thread_id")
+  fromEmail           String        @map("from_email")
+  toEmail             String        @map("to_email")
+  subject             String?
+  receivedAt          DateTime      @map("received_at") @db.Timestamp(6)
+  payload             Json
+  ticketCreated       Boolean?      @default(false) @map("ticket_created")
+  createdAt           DateTime?     @default(now()) @map("created_at") @db.Timestamp(6)
+  processingStatus    String?       @map("processing_status")
+  processingClaimedAt DateTime?     @map("processing_claimed_at") @db.Timestamptz(6)
+  organisationId      String?       @map("organisation_id") @db.Uuid
+  rawText             String?       @map("raw_text")
+  rawHtml             String?       @map("raw_html")
+  parsedEmails        ParsedEmail[]
+
+  @@map("raw_emails")
+}
+
+model ParsedEmail {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rawEmailId      String    @map("raw_email_id") @db.Uuid
+  complaintId     String?   @map("complaint_id")
+  vehicleNumber   String?   @map("vehicle_number")
+  category        String?
+  issueType       String?   @map("issue_type")
+  location        String?
+  reportedAt      DateTime? @map("reported_at") @db.Timestamp(6)
+  remarks         String?
+  confidenceScore Decimal?  @map("confidence_score") @db.Decimal
+  needsReview     Boolean?  @default(false) @map("needs_review")
+  createdAt       DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  ticketCreated   Boolean?  @default(false) @map("ticket_created")
+  organisationId  String?   @map("organisation_id") @db.Uuid
+  rawEmail        RawEmail  @relation(fields: [rawEmailId], references: [id], onDelete: Cascade)
+
+  @@map("parsed_emails")
+}
+
+model TicketComment {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId       String    @map("ticket_id") @db.Uuid
+  source         String
+  authorId       String?   @map("author_id") @db.Uuid
+  body           String?
+  attachments    Json?
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  organisationId String?   @map("organisation_id") @db.Uuid
+
+  @@map("ticket_comments")
+}
+
+model AuditLog {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entityType     String    @map("entity_type")
+  entityId       String?   @map("entity_id") @db.Uuid
+  action         String
+  performedBy    String?   @map("performed_by") @db.Uuid
+  metadata       Json?
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  organisationId String?   @map("organisation_id") @db.Uuid
+  actorUserId    String?   @map("actor_user_id") @db.Uuid
+  actorFeId      String?   @map("actor_fe_id") @db.Uuid
+  actorRole      String?   @map("actor_role")
+  requestId      String?   @map("request_id")
+  summary        String?
+
+  @@map("audit_logs")
+}
+
+model TenantClient {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String    @map("organisation_id") @db.Uuid
+  name           String
+  slug           String
+  website        String?
+  contactName    String?   @map("contact_name")
+  contactEmail   String?   @map("contact_email")
+  contactPhone   String?   @map("contact_phone")
+  status         String    @default("active")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([organisationId, slug], map: "tenant_clients_organisation_slug_unique")
+  @@map("tenant_clients")
+}
+
+model TicketAssignment {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId       String    @map("ticket_id") @db.Uuid
+  feId           String    @map("fe_id") @db.Uuid
+  assignedAt     DateTime? @default(now()) @map("assigned_at") @db.Timestamp(6)
+  organisationId String?   @map("organisation_id") @db.Uuid
+
+  @@map("ticket_assignments")
+}

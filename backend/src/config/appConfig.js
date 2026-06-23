@@ -67,7 +67,8 @@ const FE_ACTION_TOKEN_EXPIRY_HOURS = Math.min(
 
 /**
  * Database access mode for repositories (incremental migration).
- * When unset, behavior matches pre-Prisma defaults: Supabase unless USE_POSTGRES_DB forces direct PG.
+ * Primary modes: `supabase` (default) and `prisma` (AWS PostgreSQL via Prisma).
+ * Legacy modes `shadow_pg`, `postgres`, `shadow_prisma` remain for ticketRepository parity checks.
  *
  * @typedef {"supabase"|"shadow_pg"|"postgres"|"prisma"|"shadow_prisma"} DbMode
  */

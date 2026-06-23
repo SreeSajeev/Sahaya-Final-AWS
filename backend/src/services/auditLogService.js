@@ -1,6 +1,13 @@
-import { supabase } from "../supabaseClient.js";
 import { scopeQueryByTenant } from "../middleware/tenantContext.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
+import {
+  findOrganisationIdBySlug,
+  insertAuditLogRow,
+  listAssignmentIdsByTicketIds,
+  listAssignmentsForAuditBackfill,
+  listTicketIdsByOrganisation,
+  listTicketsForAuditBackfill,
+} from "../repositories/auditLogRepository.js";
 
 let auditSchemaCache = null;
 
@@ -40,15 +47,10 @@ async function resolveOrganisationIdFromSlug(client_slug) {
   if (!key) return null;
   if (organisationIdBySlugCache.has(key)) return organisationIdBySlugCache.get(key);
 
-  const { data, error } = await supabase
-    .from("organisations")
-    .select("id")
-    .eq("slug", key)
-    .maybeSingle();
-
-  if (error || !data?.id) return null;
-  organisationIdBySlugCache.set(key, data.id);
-  return data.id;
+  const orgId = await findOrganisationIdBySlug(key);
+  if (!orgId) return null;
+  organisationIdBySlugCache.set(key, orgId);
+  return orgId;
 }
 
 /**
@@ -186,7 +188,7 @@ export async function insertAuditLog({
       row.summary = summary ?? buildSummary(action, meta);
     }
 
-    const { error } = await supabase.from("audit_logs").insert(row);
+    const { error } = await insertAuditLogRow(row);
     if (error) {
       console.error("[audit-log] insert failed:", error.message, {
         entity_type,
@@ -244,11 +246,7 @@ export async function scopeAuditLogsQuery(query, req) {
     return { query: query.eq("entity_type", "__no_tenant__") };
   }
 
-  const { data: tickets, error: ticketErr } = await supabase
-    .from("tickets")
-    .select("id")
-    .eq("organisation_id", req.tenantId)
-    .limit(5000);
+  const { data: tickets, error: ticketErr } = await listTicketIdsByOrganisation(req.tenantId, 5000);
 
   if (ticketErr) {
     console.error("[audit-logs] scopeAuditLogsQuery tickets subquery error", {
@@ -264,11 +262,7 @@ export async function scopeAuditLogsQuery(query, req) {
     return { query: query.eq("entity_type", "__no_tickets__") };
   }
 
-  const { data: assignments, error: assignErr } = await supabase
-    .from("ticket_assignments")
-    .select("id")
-    .in("ticket_id", ticketIds)
-    .limit(5000);
+  const { data: assignments, error: assignErr } = await listAssignmentIdsByTicketIds(ticketIds, 5000);
 
   if (assignErr) {
     console.error("[audit-logs] scopeAuditLogsQuery assignments subquery error", {
@@ -306,11 +300,7 @@ export async function backfillAuditLogsFromData({ limit = 300 } = {}) {
   const cap = Math.min(Math.max(Number(limit) || 300, 1), 2000);
   const inserted = [];
 
-  const { data: tickets, error: tErr } = await supabase
-    .from("tickets")
-    .select("id, ticket_number, status, organisation_id, created_at, updated_at")
-    .order("created_at", { ascending: false })
-    .limit(cap);
+  const { data: tickets, error: tErr } = await listTicketsForAuditBackfill(cap);
 
   if (tErr) throw tErr;
 
@@ -346,12 +336,7 @@ export async function backfillAuditLogsFromData({ limit = 300 } = {}) {
 
   const ticketIds = (tickets || []).map((t) => t.id).filter(Boolean);
   if (ticketIds.length > 0) {
-    const { data: assignments } = await supabase
-      .from("ticket_assignments")
-      .select("id, ticket_id, fe_id, assigned_at, organisation_id")
-      .in("ticket_id", ticketIds)
-      .order("assigned_at", { ascending: false })
-      .limit(cap * 2);
+    const { data: assignments } = await listAssignmentsForAuditBackfill(ticketIds, cap * 2);
 
     for (const a of assignments || []) {
       const ticket = (tickets || []).find((t) => t.id === a.ticket_id);
