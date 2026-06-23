@@ -3,6 +3,18 @@
 
 import { supabase } from "../supabaseClient.js";
 import {
+  countAssignmentsForTicket,
+  getAssignmentById,
+  insertAssignment,
+  updateAssignmentById,
+  getAssignmentNotificationSentAt,
+} from "../repositories/assignmentRepository.js";
+import {
+  getTicketByIdForAssign,
+  setTicketAssigned,
+  updateTicketById,
+} from "../repositories/ticketQueryRepository.js";
+import {
   issueAssignmentTokenPair,
   revokeTokensForTicket,
 } from "./tokenService.js";
@@ -91,17 +103,13 @@ async function updateAssignmentNotificationSafely({ assignmentId, value }) {
     return;
   }
 
-  await supabase.from("ticket_assignments").update(payload).eq("id", assignmentId);
+  await updateAssignmentById(assignmentId, payload);
 }
 
 async function wasAssignmentEmailAlreadySent({ assignmentId }) {
   const hasSentAt = await hasPublicColumn("ticket_assignments", "assignment_notification_sent_at");
   if (!hasSentAt) return false;
-  const { data } = await supabase
-    .from("ticket_assignments")
-    .select("assignment_notification_sent_at")
-    .eq("id", assignmentId)
-    .maybeSingle();
+  const { data } = await getAssignmentNotificationSentAt(assignmentId);
   return Boolean(data?.assignment_notification_sent_at);
 }
 
@@ -405,13 +413,7 @@ export function getBulkAssignStatusRejectionReason(status) {
 export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, state: stateInput }) {
   const assignment_due_at = assignmentDueAt ?? null;
 
-  const { data: ticket, error: ticketError } = await withTenantScope(
-    supabase
-      .from("tickets")
-      .select("id, ticket_number, vehicle_number, location, status, organisation_id, client_slug, state")
-      .eq("id", ticketId),
-    req
-  ).single();
+  const { data: ticket, error: ticketError } = await getTicketByIdForAssign(req, ticketId);
 
   if (ticketError || !ticket) {
     return { ok: false, statusCode: 404, error: "Ticket not found" };
@@ -427,10 +429,10 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
 
   if (stateInput !== undefined) {
     const normalizedState = normalizeTicketState(stateInput);
-    const { error: stateUpdateError } = await supabase
-      .from("tickets")
-      .update({ state: normalizedState, updated_at: new Date().toISOString() })
-      .eq("id", ticketId);
+    const { error: stateUpdateError } = await updateTicketById(ticketId, {
+      state: normalizedState,
+      updated_at: new Date().toISOString(),
+    });
     if (stateUpdateError) {
       return {
         ok: false,
@@ -445,15 +447,11 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
 
   const hasAssignmentDueAt = await hasPublicColumn("ticket_assignments", "assignment_due_at");
 
-  const { data: assignment, error: assignmentError } = await supabase
-    .from("ticket_assignments")
-    .insert({
-      ticket_id: ticketId,
-      fe_id: feId,
-      ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
-    })
-    .select()
-    .single();
+  const { data: assignment, error: assignmentError } = await insertAssignment({
+    ticket_id: ticketId,
+    fe_id: feId,
+    ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
+  });
 
   if (assignmentError || !assignment) {
     console.error("Assignment insert error:", assignmentError?.code || "unknown");
@@ -467,13 +465,7 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     };
   }
 
-  await supabase
-    .from("tickets")
-    .update({
-      status: "ASSIGNED",
-      current_assignment_id: assignment.id,
-    })
-    .eq("id", ticketId);
+  await setTicketAssigned(ticketId, assignment.id);
 
   setAssignmentDeadline(ticketId, assignment_due_at ?? null).catch((err) =>
     console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)
@@ -485,10 +477,7 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     idempotencyKey: `assign:${assignment.id}`,
   });
 
-  const { count: assignmentCount } = await supabase
-    .from("ticket_assignments")
-    .select("*", { count: "exact", head: true })
-    .eq("ticket_id", ticketId);
+  const { count: assignmentCount } = await countAssignmentsForTicket(ticketId);
   const isFirstAssignment = (assignmentCount ?? 0) <= 1;
 
   console.log(
@@ -592,15 +581,7 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
   const assignment_due_at = assignmentDueAt ?? null;
   const reassignedAt = new Date().toISOString();
 
-  const { data: ticket, error: ticketError } = await withTenantScope(
-    supabase
-      .from("tickets")
-      .select(
-        "id, ticket_number, vehicle_number, location, status, organisation_id, client_slug, state, current_assignment_id"
-      )
-      .eq("id", ticketId),
-    req
-  ).single();
+  const { data: ticket, error: ticketError } = await getTicketByIdForAssign(req, ticketId);
 
   if (ticketError || !ticket) {
     return { ok: false, statusCode: 404, error: "Ticket not found" };
@@ -628,11 +609,10 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     ? "id, fe_id, assignment_due_at, field_executives(id, name)"
     : "id, fe_id, field_executives(id, name)";
 
-  const { data: priorAssignment, error: priorErr } = await supabase
-    .from("ticket_assignments")
-    .select(priorSelect)
-    .eq("id", ticket.current_assignment_id)
-    .maybeSingle();
+  const { data: priorAssignment, error: priorErr } = await getAssignmentById(
+    ticket.current_assignment_id,
+    priorSelect
+  );
 
   if (priorErr) {
     return {
@@ -662,10 +642,10 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
 
   if (stateInput !== undefined) {
     const normalizedState = normalizeTicketState(stateInput);
-    const { error: stateUpdateError } = await supabase
-      .from("tickets")
-      .update({ state: normalizedState, updated_at: reassignedAt })
-      .eq("id", ticketId);
+    const { error: stateUpdateError } = await updateTicketById(ticketId, {
+      state: normalizedState,
+      updated_at: reassignedAt,
+    });
     if (stateUpdateError) {
       return {
         ok: false,
@@ -678,15 +658,11 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
 
   await revokeTokensForTicket({ ticketId, reason: "reassigned" });
 
-  const { data: assignment, error: assignmentError } = await supabase
-    .from("ticket_assignments")
-    .insert({
-      ticket_id: ticketId,
-      fe_id: feId,
-      ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
-    })
-    .select()
-    .single();
+  const { data: assignment, error: assignmentError } = await insertAssignment({
+    ticket_id: ticketId,
+    fe_id: feId,
+    ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
+  });
 
   if (assignmentError || !assignment) {
     console.error("Reassignment insert error:", assignmentError?.code || "unknown");
@@ -701,14 +677,11 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
   }
 
   const priorStatus = ticket.status;
-  await supabase
-    .from("tickets")
-    .update({
-      status: "ASSIGNED",
-      current_assignment_id: assignment.id,
-      updated_at: reassignedAt,
-    })
-    .eq("id", ticketId);
+  await updateTicketById(ticketId, {
+    status: "ASSIGNED",
+    current_assignment_id: assignment.id,
+    updated_at: reassignedAt,
+  });
 
   if (assignment_due_at != null) {
     setAssignmentDeadline(ticketId, assignment_due_at).catch((err) =>
@@ -722,10 +695,7 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     idempotencyKey: `assign:${assignment.id}`,
   });
 
-  const { count: assignmentCount } = await supabase
-    .from("ticket_assignments")
-    .select("*", { count: "exact", head: true })
-    .eq("ticket_id", ticketId);
+  const { count: assignmentCount } = await countAssignmentsForTicket(ticketId);
   const isFirstAssignment = (assignmentCount ?? 0) <= 1;
 
   console.log(

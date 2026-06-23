@@ -145,12 +145,45 @@ model TenantClient {
   @@map("tenant_clients")
 }
 
+model FieldExecutive {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String?
+  email          String?
+  phone          String?
+  organisationId String?            @map("organisation_id") @db.Uuid
+  assignments    TicketAssignment[]
+
+  @@map("field_executives")
+}
+
 model TicketAssignment {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ticketId       String    @map("ticket_id") @db.Uuid
-  feId           String    @map("fe_id") @db.Uuid
-  assignedAt     DateTime? @default(now()) @map("assigned_at") @db.Timestamp(6)
-  organisationId String?   @map("organisation_id") @db.Uuid
+  id                           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId                     String          @map("ticket_id") @db.Uuid
+  feId                         String          @map("fe_id") @db.Uuid
+  assignedAt                   DateTime?       @default(now()) @map("assigned_at") @db.Timestamp(6)
+  organisationId               String?         @map("organisation_id") @db.Uuid
+  assignmentDueAt              DateTime?       @map("assignment_due_at") @db.Timestamptz(6)
+  assignmentNotificationSentAt DateTime?       @map("assignment_notification_sent_at") @db.Timestamptz(6)
+  assignmentNotificationId     String?         @map("assignment_notification_id")
+  proofStoragePath             String?         @map("proof_storage_path")
+  createdAt                    DateTime?       @default(now()) @map("created_at") @db.Timestamp(6)
+  fe                           FieldExecutive  @relation(fields: [feId], references: [id])
 
   @@map("ticket_assignments")
+}
+
+model SlaTracking {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId            String    @map("ticket_id") @db.Uuid
+  assignmentDeadline  DateTime? @map("assignment_deadline") @db.Timestamp(6)
+  onsiteDeadline      DateTime? @map("onsite_deadline") @db.Timestamp(6)
+  resolutionDeadline  DateTime? @map("resolution_deadline") @db.Timestamp(6)
+  assignmentBreached  Boolean?  @default(false) @map("assignment_breached")
+  onsiteBreached      Boolean?  @default(false) @map("onsite_breached")
+  resolutionBreached  Boolean?  @default(false) @map("resolution_breached")
+  createdAt           DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+  organisationId      String?   @map("organisation_id") @db.Uuid
+
+  @@map("sla_tracking")
 }

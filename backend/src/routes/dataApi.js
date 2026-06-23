@@ -39,6 +39,37 @@ import {
 } from "../constants/rolePolicies.js";
 import { getSlaConfig } from "../services/slaService.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
+import {
+  listTicketsScoped,
+  getTicketByIdScoped,
+  getTicketOrgCheckScoped,
+  updateTicketById,
+  listTicketsForDashboardStats,
+  countResolvedTicketsWithDateFilter,
+  listClientSlugsScoped,
+  listTenantInsightsTickets,
+  listTicketOrgStatsRows,
+  listTicketsByIds,
+  getTicketsMetaByIdsScoped,
+  listTicketsForAnalyticsSummary,
+  listTicketClientSlugsGlobal,
+} from "../repositories/ticketQueryRepository.js";
+import {
+  listSlaRowsScoped,
+  listSlaBreachesByTicketIdsScoped,
+  listSlaAssignmentDeadlinesByTicketIds,
+  listAllSlaRowsScoped,
+  listAllSlaTicketIds,
+  listTicketStatusesByIds,
+  listSlaBreachRowsGlobal,
+} from "../repositories/slaRepository.js";
+import {
+  listAssignmentsForTicket,
+  listAssignmentsByTicketIds,
+  listAssignmentsByFeIdsWithTickets,
+  listAllAssignmentsScoped,
+} from "../repositories/assignmentRepository.js";
+import { insertComment, listCommentsForTicket } from "../repositories/commentRepository.js";
 
 const router = express.Router();
 
@@ -69,40 +100,13 @@ router.get("/dashboard/stats", async (req, res) => {
 
   const IN_PROGRESS_STATUSES = ["EN_ROUTE", "ON_SITE", "RESOLVED_PENDING_VERIFICATION", "FE_ATTEMPT_FAILED"];
 
-  function applyTicketScope(query) {
-    let q = query;
-    if (!req.isSuperAdmin) {
-      q = withTenantScope(q, req);
-    } else if (organisationIdOverride) {
-      q = q.eq("organisation_id", organisationIdOverride);
-    }
-    if (clientSlug) {
-      q = q.eq("client_slug", clientSlug);
-    }
-    if (stateFilter) {
-      q = q.eq("state", stateFilter);
-    }
-    return q;
-  }
-
   try {
-    let ticketsQuery = applyTicketScope(
-      supabase
-        .from("tickets")
-        .select(
-          "id, status, confidence_score, created_at, opened_at, updated_at, resolved_at, current_assignment_id"
-        )
+    const filters = { clientSlug, stateFilter, organisationIdOverride, startDate, endDate };
+    const { data: ticketsRaw, error: ticketsError } = await listTicketsForDashboardStats(
+      req,
+      filters,
+      maxScan
     );
-
-    if (startDate) {
-      ticketsQuery = ticketsQuery.gte("opened_at", startDate);
-    }
-    if (endDate) {
-      ticketsQuery = ticketsQuery.lte("opened_at", endDate);
-    }
-
-    ticketsQuery = ticketsQuery.limit(maxScan + 1);
-    const { data: ticketsRaw, error: ticketsError } = await ticketsQuery;
     if (ticketsError) return jsonError(res, 500, ticketsError.message);
 
     const raw = ticketsRaw ?? [];
@@ -118,12 +122,7 @@ router.get("/dashboard/stats", async (req, res) => {
 
     let resolvedTickets = 0;
     if (startDate || endDate) {
-      let resolvedQ = applyTicketScope(
-        supabase.from("tickets").select("id", { count: "exact", head: true }).eq("status", "RESOLVED")
-      );
-      if (startDate) resolvedQ = resolvedQ.gte("resolved_at", startDate);
-      if (endDate) resolvedQ = resolvedQ.lte("resolved_at", endDate);
-      const { count, error: resolvedErr } = await resolvedQ;
+      const { count, error: resolvedErr } = await countResolvedTicketsWithDateFilter(req, filters);
       if (resolvedErr) return jsonError(res, 500, resolvedErr.message);
       resolvedTickets = count ?? 0;
     } else {
@@ -136,12 +135,11 @@ router.get("/dashboard/stats", async (req, res) => {
       const SLA_IN_CHUNK = 100;
       for (let i = 0; i < slaIds.length; i += SLA_IN_CHUNK) {
         const chunk = slaIds.slice(i, i + SLA_IN_CHUNK);
-        let slaQuery = supabase
-          .from("sla_tracking")
-          .select("ticket_id, assignment_breached, onsite_breached, resolution_breached")
-          .in("ticket_id", chunk);
-        slaQuery = withTenantScope(slaQuery, req);
-        const { data: slaRows, error: slaError } = await slaQuery;
+        const { data: slaRows, error: slaError } = await listSlaBreachesByTicketIdsScoped(
+          req,
+          chunk,
+          "ticket_id, assignment_breached, onsite_breached, resolution_breached"
+        );
         if (slaError) return jsonError(res, 500, slaError.message);
         slaData.push(...(slaRows ?? []));
       }
@@ -413,12 +411,7 @@ router.post("/tickets-row-supplement", async (req, res) => {
     /** @type {Map<string, { organisation_id?: string | null, opened_at?: string | null, created_at?: string | null }>} */
     const ticketMetaById = new Map();
     for (const ch of chunkIds(requested, TICKET_VERIFY_CHUNK)) {
-      let tq = supabase
-        .from("tickets")
-        .select("id, organisation_id, opened_at, created_at")
-        .in("id", ch);
-      tq = withTenantScope(tq, req);
-      const { data: rows, error: tErr } = await tq;
+      const { data: rows, error: tErr } = await getTicketsMetaByIdsScoped(req, ch);
       if (tErr) return jsonError(res, 500, tErr.message);
       for (const r of rows || []) {
         if (r?.id) {
@@ -480,16 +473,13 @@ router.post("/tickets-row-supplement", async (req, res) => {
     };
 
     const hasAssignmentDueAt = await hasPublicColumn("ticket_assignments", "assignment_due_at");
-    const assignmentSelect = hasAssignmentDueAt
-      ? "ticket_id, assigned_at, assignment_due_at, field_executives(name)"
-      : "ticket_id, assigned_at, field_executives(name)";
 
     const best = new Map();
     for (const ch of chunkIds(allowedIds, ASSIGN_CHUNK)) {
-      const { data: rows, error: aErr } = await supabase
-        .from("ticket_assignments")
-        .select(assignmentSelect)
-        .in("ticket_id", ch);
+      const { data: rows, error: aErr } = await listAssignmentsByTicketIds(ch, {
+        includeFe: true,
+        includeAssignmentDueAt: hasAssignmentDueAt,
+      });
       if (aErr) return jsonError(res, 500, aErr.message);
       for (const row of rows || []) {
         const tid = row?.ticket_id != null ? String(row.ticket_id) : "";
@@ -518,10 +508,7 @@ router.post("/tickets-row-supplement", async (req, res) => {
     /** @type {Map<string, string>} */
     const assignmentDeadlineByTicketId = new Map();
     for (const ch of chunkIds(allowedIds, ASSIGN_CHUNK)) {
-      const { data: slaPart, error: sErr } = await supabase
-        .from("sla_tracking")
-        .select("ticket_id, assignment_deadline")
-        .in("ticket_id", ch);
+      const { data: slaPart, error: sErr } = await listSlaAssignmentDeadlinesByTicketIds(ch);
       if (sErr) return jsonError(res, 500, sErr.message);
       for (const row of slaPart || []) {
         const tid = row?.ticket_id != null ? String(row.ticket_id) : "";
@@ -580,40 +567,21 @@ router.get("/tickets", async (req, res) => {
   const unassignedOnly = String(req.query.unassignedOnly || "").toLowerCase() === "true";
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q = supabase.from("tickets").select("*").order("created_at", { ascending: false });
-
-    // Tenant scoping: default to req.tenantId unless superadmin or explicitly scoping across orgs.
-    if (!req.isSuperAdmin) {
-      q = withTenantScope(q, req);
-    } else if (!scopeAllOrganisations && organisationIdFilter) {
-      q = q.eq("organisation_id", organisationIdFilter);
-    }
-
-    if (status && status !== "all") q = q.eq("status", status);
-    if (clientSlug) q = q.eq("client_slug", clientSlug);
-    if (stateFilter) q = q.eq("state", stateFilter);
-    if (startDate) q = q.gte("opened_at", startDate);
-    if (endDate) q = q.lte("opened_at", endDate);
-    if (unassignedOnly) q = q.is("current_assignment_id", null);
-
-    if (search) {
-      // Keep this conservative and explicit. If you need richer search, implement server-side parsing later.
-      const s = search.replace(/%/g, "\\%").replace(/_/g, "\\_");
-      q = q.or(
-        [
-          `ticket_number.ilike.%${s}%`,
-          `vehicle_number.ilike.%${s}%`,
-          `location.ilike.%${s}%`,
-          `state.ilike.%${s}%`,
-          `complaint_id.ilike.%${s}%`,
-        ].join(",")
-      );
-    }
-
-    q = q.range(offset, offset + limit - 1);
-
-    const { data, error } = await q;
+    const { data, error } = await listTicketsScoped(req, {
+      limit,
+      offset,
+      filters: {
+        status,
+        clientSlug,
+        stateFilter,
+        startDate,
+        endDate,
+        organisationIdFilter,
+        scopeAllOrganisations,
+        unassignedOnly,
+        search,
+      },
+    });
     if (error) return jsonError(res, 500, error.message);
 
     logEvent("dataApi.tickets.list", {
@@ -634,9 +602,7 @@ router.get("/tickets/:id", async (req, res) => {
   const startedAt = Date.now();
   const id = req.params.id;
   try {
-    let q = supabase.from("tickets").select("*").eq("id", id);
-    q = withTenantScope(q, req);
-    const { data, error } = await q.maybeSingle();
+    const { data, error } = await getTicketByIdScoped(req, id, "*");
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Ticket not found");
 
@@ -716,16 +682,11 @@ router.patch("/tickets/:id", requireRole(STAFF_OPERATION_ROLES), async (req, res
   out.updated_at = new Date().toISOString();
 
   try {
-    let checkQ = supabase.from("tickets").select("id, organisation_id, client_slug").eq("id", id);
-    checkQ = withTenantScope(checkQ, req);
-    const { data: existing, error: exErr } = await checkQ.maybeSingle();
+    const { data: existing, error: exErr } = await getTicketOrgCheckScoped(req, id);
     if (exErr) return jsonError(res, 500, exErr.message);
     if (!existing) return jsonError(res, 404, "Ticket not found");
 
-    // Tenant scope is enforced by the pre-check above. Do NOT tenant-scope the UPDATE:
-    // rows with organisation_id NULL would match 0 rows, causing false failures in UI actions (review, edits).
-    const q = supabase.from("tickets").update(out).eq("id", id).select("*");
-    const { data, error } = await q.single();
+    const { data, error } = await updateTicketById(id, out);
     if (error) return jsonError(res, 500, error.message);
 
     void insertAuditLog({
@@ -754,12 +715,7 @@ router.post("/tickets/:id/status", requireRole(STAFF_OPERATION_ROLES), async (re
   if (!status) return jsonError(res, 400, "Status required");
 
   try {
-    let checkQ = supabase
-      .from("tickets")
-      .select("id, status, organisation_id, client_slug")
-      .eq("id", id);
-    checkQ = withTenantScope(checkQ, req);
-    const { data: existing, error: exErr } = await checkQ.maybeSingle();
+    const { data: existing, error: exErr } = await getTicketOrgCheckScoped(req, id);
     if (exErr) return jsonError(res, 500, exErr.message);
     if (!existing) return jsonError(res, 404, "Ticket not found");
 
@@ -768,19 +724,12 @@ router.post("/tickets/:id/status", requireRole(STAFF_OPERATION_ROLES), async (re
       return jsonError(res, 400, transition.error);
     }
 
-    // Tenant scope is enforced by the pre-check above. Do NOT tenant-scope the UPDATE:
-    // rows with organisation_id NULL would match 0 rows, causing false failures in UI actions.
     const statusUpdate = {
       status,
       updated_at: new Date().toISOString(),
       ...(status === "OPEN" && existing.status === "NEEDS_REVIEW" ? { needs_review: false } : {}),
     };
-    const q = supabase
-      .from("tickets")
-      .update(statusUpdate)
-      .eq("id", id)
-      .select("*");
-    const { data, error } = await q.single();
+    const { data, error } = await updateTicketById(id, statusUpdate);
     if (error) return jsonError(res, 500, error.message);
 
     void insertAuditLog({
@@ -811,17 +760,11 @@ router.post("/tickets/:id/comments", async (req, res) => {
   if (!body) return jsonError(res, 400, "Body required");
 
   try {
-    let checkQ = supabase.from("tickets").select("id, organisation_id, client_slug").eq("id", id);
-    checkQ = withTenantScope(checkQ, req);
-    const { data: existing, error: exErr } = await checkQ.maybeSingle();
+    const { data: existing, error: exErr } = await getTicketOrgCheckScoped(req, id);
     if (exErr) return jsonError(res, 500, exErr.message);
     if (!existing) return jsonError(res, 404, "Ticket not found");
 
-    const { data, error } = await supabase
-      .from("ticket_comments")
-      .insert({ ticket_id: id, body, source, attachments })
-      .select("*")
-      .single();
+    const { data, error } = await insertComment({ ticket_id: id, body, source, attachments });
     if (error) return jsonError(res, 500, error.message);
 
     void insertAuditLog({
@@ -847,14 +790,7 @@ router.get("/tickets/:id/comments", async (req, res) => {
   const limit = toInt(req.query.limit, { defaultValue: 200, min: 1, max: 500 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
   try {
-    let q = supabase
-      .from("ticket_comments")
-      .select("*")
-      .eq("ticket_id", id)
-      .order("created_at", { ascending: true })
-      .range(offset, offset + limit - 1);
-    q = withTenantScope(q, req);
-    const { data, error } = await q;
+    const { data, error } = await listCommentsForTicket(req, id, { limit, offset });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.tickets.comments", {
       tenantId: req.tenantId ?? null,
@@ -874,14 +810,7 @@ router.get("/tickets/:id/assignments", async (req, res) => {
   const limit = toInt(req.query.limit, { defaultValue: 100, min: 1, max: 300 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
   try {
-    let q = supabase
-      .from("ticket_assignments")
-      .select("*, field_executives (*)")
-      .eq("ticket_id", id)
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
-    q = withTenantScope(q, req);
-    const { data, error } = await q;
+    const { data, error } = await listAssignmentsForTicket(req, id, { limit, offset, includeFe: true });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.tickets.assignments", {
       tenantId: req.tenantId ?? null,
@@ -910,25 +839,7 @@ router.get("/ticket-assignments/by-fe", async (req, res) => {
     .slice(0, 500);
   if (feIds.length === 0) return jsonOk(res, { items: [] });
   try {
-    let q = supabase
-      .from("ticket_assignments")
-      .select(
-        `
-        id,
-        fe_id,
-        created_at,
-        tickets!ticket_assignments_ticket_id_fkey (
-          id,
-          status,
-          created_at,
-          updated_at,
-          current_assignment_id
-        )
-      `
-      )
-      .in("fe_id", feIds);
-    q = withTenantScope(q, req);
-    const { data, error } = await q;
+    const { data, error } = await listAssignmentsByFeIdsWithTickets(req, feIds);
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.ticketAssignments.byFe", {
       tenantId: req.tenantId ?? null,
@@ -1342,13 +1253,10 @@ router.get("/organisations/stats", async (req, res) => {
 
   try {
     const [ticketsRes, usersRes, feRes, slaRes] = await Promise.all([
-      supabase.from("tickets").select("id, organisation_id, status, client_slug").limit(orgStatsCap + 1),
+      listTicketOrgStatsRows(orgStatsCap, req),
       supabase.from("users").select("organisation_id").limit(orgStatsCap + 1),
       supabase.from("field_executives").select("organisation_id").limit(orgStatsCap + 1),
-      supabase
-        .from("sla_tracking")
-        .select("ticket_id, assignment_breached, onsite_breached, resolution_breached")
-        .limit(orgStatsCap + 1),
+      listSlaBreachRowsGlobal(orgStatsCap),
     ]);
     if (ticketsRes.error) return jsonError(res, 500, ticketsRes.error.message);
     if (usersRes.error) return jsonError(res, 500, usersRes.error.message);
@@ -1430,16 +1338,16 @@ router.get("/sla/monitor", async (req, res) => {
   // Note: This is a compatibility endpoint for the current UI.
   // It returns joined-ish data but still in a "list of rows" shape.
   try {
-    let slaQ = supabase.from("sla_tracking").select("*").order("created_at", { ascending: false }).range(offset, offset + limit - 1);
-    slaQ = withTenantScope(slaQ, req);
-    const { data: slaRows, error: slaErr } = await slaQ;
+    const { data: slaRows, error: slaErr } = await listSlaRowsScoped(req, {
+      limit,
+      offset,
+      orderDesc: true,
+    });
     if (slaErr) return jsonError(res, 500, slaErr.message);
     const ticketIds = (slaRows || []).map((s) => s.ticket_id).filter(Boolean);
     if (ticketIds.length === 0) return jsonOk(res, { items: [], limit, offset });
 
-    let ticketsQ = supabase.from("tickets").select("*").in("id", ticketIds);
-    ticketsQ = withTenantScope(ticketsQ, req);
-    const { data: tickets, error: ticketsErr } = await ticketsQ;
+    const { data: tickets, error: ticketsErr } = await listTicketsByIds(ticketIds, req);
     if (ticketsErr) return jsonError(res, 500, ticketsErr.message);
 
     const ticketMap = new Map((tickets || []).map((t) => [t.id, t]));
@@ -1467,13 +1375,7 @@ router.get("/analytics/client-slugs", async (req, res) => {
   const startedAt = Date.now();
   const organisationIdFilter = safeTrim(req.query.organisationId);
   try {
-    let q = supabase.from("tickets").select("client_slug").not("client_slug", "is", null);
-    if (!req.isSuperAdmin) {
-      q = withTenantScope(q, req);
-    } else if (organisationIdFilter) {
-      q = q.eq("organisation_id", organisationIdFilter);
-    }
-    const { data, error } = await q;
+    const { data, error } = await listClientSlugsScoped(req, organisationIdFilter);
     if (error) return jsonError(res, 500, error.message);
     const slugs = [...new Set((data ?? []).map((r) => r.client_slug).filter(Boolean))];
     const clientSlugs = slugs.sort();
@@ -1494,10 +1396,7 @@ router.get("/tenant/:organisationId/insights", async (req, res) => {
   if (!organisationId) return jsonError(res, 400, "organisationId required");
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
   try {
-    const { data: rows, error } = await supabase
-      .from("tickets")
-      .select("client_slug, status")
-      .eq("organisation_id", organisationId);
+    const { data: rows, error } = await listTenantInsightsTickets(organisationId);
     if (error) return jsonError(res, 500, error.message);
     const clientSlugs = [...new Set((rows ?? []).map((r) => r.client_slug).filter(Boolean))].sort();
     const byClient = {};
@@ -1524,9 +1423,11 @@ router.post("/sla/by-ticket-ids", async (req, res) => {
   const clean = ids.map((x) => String(x)).filter(Boolean).slice(0, 500);
   if (clean.length === 0) return jsonOk(res, { items: [] });
   try {
-    let q = supabase.from("sla_tracking").select("ticket_id, assignment_breached, onsite_breached, resolution_breached").in("ticket_id", clean);
-    q = withTenantScope(q, req);
-    const { data, error } = await q;
+    const { data, error } = await listSlaBreachesByTicketIdsScoped(
+      req,
+      clean,
+      "ticket_id, assignment_breached, onsite_breached, resolution_breached"
+    );
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.sla.byTicketIds", { tenantId: req.tenantId ?? null, ms: Date.now() - startedAt, count: (data || []).length });
     return jsonOk(res, { items: data || [] });
@@ -1544,9 +1445,7 @@ router.get("/tickets/:ticketId/fe-action-tokens/active", async (req, res) => {
   const ticketId = safeTrim(req.params.ticketId);
   if (!ticketId) return jsonError(res, 400, "ticketId required");
   try {
-    let tq = supabase.from("tickets").select("id, organisation_id").eq("id", ticketId);
-    tq = withTenantScope(tq, req);
-    const { data: ticket, error: te } = await tq.maybeSingle();
+    const { data: ticket, error: te } = await getTicketOrgCheckScoped(req, ticketId);
     if (te) return jsonError(res, 500, te.message);
     if (!ticket) return jsonError(res, 404, "Ticket not found");
 
@@ -1617,21 +1516,11 @@ router.get("/analytics/summary", async (req, res) => {
   const endDate = safeTrim(req.query.endDate);     // expected ISO
 
   try {
-    let ticketsQ = supabase.from("tickets").select("*").order("created_at", { ascending: false });
-    ticketsQ = withTenantScope(ticketsQ, req);
-    if (clientSlug) ticketsQ = ticketsQ.eq("client_slug", clientSlug);
-    if (stateFilter) ticketsQ = ticketsQ.eq("state", stateFilter);
-    if (startDate) ticketsQ = ticketsQ.gte("opened_at", startDate);
-    if (endDate) ticketsQ = ticketsQ.lte("opened_at", endDate);
-
-    const { data: tickets, error: ticketsErr } = await ticketsQ;
+    const filters = { clientSlug, stateFilter, startDate, endDate };
+    const { data: tickets, error: ticketsErr } = await listTicketsForAnalyticsSummary(req, filters);
     if (ticketsErr) return jsonError(res, 500, ticketsErr.message);
 
-    // Compatibility: reuse the current frontend’s “compute in JS” approach,
-    // but move data fetching to backend first. We can optimize to aggregates later.
-    let slaQ = supabase.from("sla_tracking").select("*");
-    slaQ = withTenantScope(slaQ, req);
-    const { data: sla, error: slaErr } = await slaQ;
+    const { data: sla, error: slaErr } = await listAllSlaRowsScoped(req);
     if (slaErr) return jsonError(res, 500, slaErr.message);
 
     let feQ = supabase.from("field_executives").select("*");
@@ -1639,9 +1528,7 @@ router.get("/analytics/summary", async (req, res) => {
     const { data: fes, error: feErr } = await feQ;
     if (feErr) return jsonError(res, 500, feErr.message);
 
-    let asQ = supabase.from("ticket_assignments").select("*");
-    asQ = withTenantScope(asQ, req);
-    const { data: assignments, error: asErr } = await asQ;
+    const { data: assignments, error: asErr } = await listAllAssignmentsScoped(req);
     if (asErr) return jsonError(res, 500, asErr.message);
 
     logEvent("dataApi.analytics.summary", { tenantId: req.tenantId ?? null, ms: Date.now() - startedAt, tickets: (tickets || []).length });
@@ -1660,13 +1547,13 @@ router.get("/sla/tracked-count", async (req, res) => {
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
 
   try {
-    const { data: rows, error } = await supabase.from("sla_tracking").select("ticket_id");
+    const { data: rows, error } = await listAllSlaTicketIds();
     if (error) return jsonError(res, 500, error.message);
     const list = rows ?? [];
     if (list.length === 0) return jsonOk(res, { count: 0 });
 
     const ticketIds = [...new Set(list.map((r) => r.ticket_id).filter(Boolean))];
-    const { data: tickets, error: ticketErr } = await supabase.from("tickets").select("id, status").in("id", ticketIds);
+    const { data: tickets, error: ticketErr } = await listTicketStatusesByIds(ticketIds);
     if (ticketErr) return jsonError(res, 500, ticketErr.message);
 
     const rejectedIds = new Set((tickets ?? []).filter((t) => t.status === "REJECTED").map((t) => t.id));
@@ -1686,7 +1573,7 @@ router.get("/platform/overview", async (req, res) => {
     const [usersRes, feRes, ticketsRes] = await Promise.all([
       supabase.from("users").select("id", { count: "exact", head: true }),
       supabase.from("field_executives").select("id", { count: "exact", head: true }),
-      supabase.from("tickets").select("client_slug"),
+      listTicketClientSlugsGlobal(),
     ]);
     if (usersRes.error) return jsonError(res, 500, usersRes.error.message);
     if (feRes.error) return jsonError(res, 500, feRes.error.message);
