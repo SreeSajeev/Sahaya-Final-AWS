@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { supabase } from "../supabaseClient.js";
+import { findComplaintPointByPublicToken } from "../repositories/tenantComplaintPointRepository.js";
 
 /**
  * URL-safe opaque token for public complaint point URLs (Phase 2+).
@@ -16,11 +16,7 @@ export function generateComplaintPointPublicToken() {
 export async function generateUniqueComplaintPointPublicToken(maxAttempts = 5) {
   for (let i = 0; i < maxAttempts; i++) {
     const token = generateComplaintPointPublicToken();
-    const { data } = await supabase
-      .from("tenant_complaint_points")
-      .select("id")
-      .eq("public_token", token)
-      .maybeSingle();
+    const { data } = await findComplaintPointByPublicToken(token);
     if (!data) return token;
   }
   throw new Error("Unable to generate unique public token");

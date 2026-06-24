@@ -1,0 +1,59 @@
+name: Deploy Test Sahaya
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2 Test Environment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+
+            echo "===== TEST SAHAYA DEPLOY ====="
+
+            cd /var/www/apps/sahaya-final-aws-monorepo
+
+            if [ ! -d .git ]; then
+              echo "Monorepo missing"
+              exit 1
+            fi
+
+            git fetch origin
+
+            git checkout develop
+
+            git reset --hard origin/develop
+
+            echo "===== FRONTEND ====="
+
+            cd frontend
+
+            npm install
+
+            npm run build
+
+            rm -rf /var/www/test-sahaya/*
+
+            cp -R dist/* /var/www/test-sahaya/
+
+            echo "===== BACKEND ====="
+
+            cd ../backend
+
+            npm install
+
+            pm2 restart sahaya-final-aws-monorepo-api
+
+            systemctl reload nginx
+
+            echo "===== DEPLOY COMPLETE ====="

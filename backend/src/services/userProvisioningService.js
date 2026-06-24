@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { supabase } from "../supabaseClient.js";
+import { supabaseAuth } from "../supabaseAuthClient.js";
 import { PROVISION_SERVER_SIDE_ENABLED } from "../config/appConfig.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
@@ -7,6 +7,15 @@ import { safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
+import {
+  findUserByEmail,
+  insertUser,
+  updateUserById,
+} from "../repositories/userRepository.js";
+import {
+  findFieldExecutiveByUserIdFull,
+  insertFieldExecutive,
+} from "../repositories/fieldExecutiveRepository.js";
 
 const ROLES = ["CLIENT", "STAFF", "FIELD_EXECUTIVE", "ADMIN", "SUPER_ADMIN"];
 
@@ -43,7 +52,7 @@ async function findAuthUserByEmail(email) {
   const normalized = String(email).trim().toLowerCase();
   let page = 1;
   for (let i = 0; i < 10; i++) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
+    const { data, error } = await supabaseAuth.auth.admin.listUsers({ page, perPage: 200 });
     if (error) throw error;
     const users = data?.users ?? [];
     const found = users.find((u) => (u.email || "").trim().toLowerCase() === normalized);
@@ -57,7 +66,7 @@ async function findAuthUserByEmail(email) {
 async function deleteAuthUser(authUserId) {
   if (!authUserId) return;
   try {
-    await supabase.auth.admin.deleteUser(authUserId);
+    await supabaseAuth.auth.admin.deleteUser(authUserId);
   } catch (err) {
     logEvent("userProvisioning.compensateAuthDeleteFailed", {
       authUserId,
@@ -144,11 +153,7 @@ export async function provisionAdminUser({ req, body }) {
   const clientSlug = body.clientSlug;
   const active = body.active !== false;
 
-  const { data: existingUser, error: existingErr } = await supabase
-    .from("users")
-    .select("*")
-    .eq("email", email)
-    .maybeSingle();
+  const { data: existingUser, error: existingErr } = await findUserByEmail(email);
   if (existingErr) return { ok: false, status: 500, message: existingErr.message };
 
   if (existingUser?.auth_id) {
@@ -156,11 +161,7 @@ export async function provisionAdminUser({ req, body }) {
     if (role === "FIELD_EXECUTIVE" && existingUser.id) {
       const hasFeUserId = await hasPublicColumn("field_executives", "user_id");
       if (hasFeUserId) {
-        const { data: fe } = await supabase
-          .from("field_executives")
-          .select("id, organisation_id, name")
-          .eq("user_id", existingUser.id)
-          .maybeSingle();
+        const { data: fe } = await findFieldExecutiveByUserIdFull(existingUser.id, "id, organisation_id, name");
         feRow = fe ?? null;
       }
     }
@@ -185,7 +186,7 @@ export async function provisionAdminUser({ req, body }) {
       if (authUser?.id) {
         authUserId = authUser.id;
       } else {
-        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
           email,
           password: body.password,
           email_confirm: true,
@@ -216,7 +217,7 @@ export async function provisionAdminUser({ req, body }) {
         }
       }
     } else if (!existingUser) {
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
         email,
         password: body.password,
         email_confirm: true,
@@ -267,23 +268,14 @@ export async function provisionAdminUser({ req, body }) {
     let createdProfile = false;
 
     if (existingUser) {
-      const { data: updated, error: updErr } = await supabase
-        .from("users")
-        .update(userPayload)
-        .eq("id", existingUser.id)
-        .select("*")
-        .single();
+      const { data: updated, error: updErr } = await updateUserById(existingUser.id, userPayload);
       if (updErr) throw Object.assign(new Error(updErr.message), { code: updErr.code });
       profile = updated;
     } else {
-      const { data: inserted, error: insErr } = await supabase
-        .from("users")
-        .insert(userPayload)
-        .select("*")
-        .single();
+      const { data: inserted, error: insErr } = await insertUser(userPayload);
       if (insErr) {
         if (insErr.code === "23505") {
-          const { data: retry } = await supabase.from("users").select("*").eq("email", email).maybeSingle();
+          const { data: retry } = await findUserByEmail(email);
           if (retry) {
             profile = retry;
           } else {
@@ -305,11 +297,7 @@ export async function provisionAdminUser({ req, body }) {
       const feName = body.name || email;
 
       if (hasFeUserId) {
-        const { data: existingFe } = await supabase
-          .from("field_executives")
-          .select("*")
-          .eq("user_id", profile.id)
-          .maybeSingle();
+        const { data: existingFe } = await findFieldExecutiveByUserIdFull(profile.id);
         if (existingFe) {
           fieldExecutive = existingFe;
         } else {
@@ -323,11 +311,7 @@ export async function provisionAdminUser({ req, body }) {
             organisation_id: organisationId,
             user_id: profile.id,
           };
-          const { data: feData, error: feErr } = await supabase
-            .from("field_executives")
-            .insert(fePayload)
-            .select("*")
-            .single();
+          const { data: feData, error: feErr } = await insertFieldExecutive(fePayload);
           if (feErr) throw Object.assign(new Error(feErr.message), { code: feErr.code });
           fieldExecutive = feData;
         }

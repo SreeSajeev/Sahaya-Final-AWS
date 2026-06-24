@@ -1,7 +1,11 @@
-import { supabase } from "../supabaseClient.js";
-import { scopeQueryByTenant } from "../middleware/tenantContext.js";
-import { normalizeAuditLogRow, scopeAuditLogsQuery } from "./auditLogService.js";
+import { normalizeAuditLogRow } from "./auditLogService.js";
 import { safeTrim } from "../utils/http.js";
+import { searchTicketIdsByNumberIlike, getTicketsMetaByIds } from "../repositories/ticketQueryRepository.js";
+import { findAssignmentsTicketFeByIds } from "../repositories/assignmentRepository.js";
+import { findUsersByIds } from "../repositories/userRepository.js";
+import { findFieldExecutivesByIds } from "../repositories/fieldExecutiveRepository.js";
+import { findOrganisationsByIds } from "../repositories/organisationRepository.js";
+import { listAuditLogsPaginated } from "../repositories/auditLogRepository.js";
 
 const SORT_COLUMNS = new Set(["created_at", "action", "entity_type"]);
 
@@ -11,9 +15,7 @@ const SORT_COLUMNS = new Set(["created_at", "action", "entity_type"]);
 export async function resolveTicketIdsForNumberSearch(ticketNumber, req) {
   const q = safeTrim(ticketNumber);
   if (!q) return [];
-  let tq = supabase.from("tickets").select("id").ilike("ticket_number", `%${q}%`).limit(200);
-  tq = scopeQueryByTenant(tq, req, "organisation_id");
-  const { data, error } = await tq;
+  const { data, error } = await searchTicketIdsByNumberIlike(req, `%${q}%`, 200);
   if (error) throw error;
   return (data || []).map((t) => t.id).filter(Boolean);
 }
@@ -98,10 +100,7 @@ export async function enrichAuditLogRows(rows) {
   }
 
   if (assignmentIds.size > 0) {
-    const { data: assignments } = await supabase
-      .from("ticket_assignments")
-      .select("id, ticket_id, fe_id")
-      .in("id", [...assignmentIds]);
+    const { data: assignments } = await findAssignmentsTicketFeByIds([...assignmentIds]);
     for (const a of assignments || []) {
       if (a.ticket_id) ticketIds.add(a.ticket_id);
       if (a.fe_id) feIds.add(a.fe_id);
@@ -113,32 +112,21 @@ export async function enrichAuditLogRows(rows) {
   const feMap = new Map();
   const orgMap = new Map();
 
-  const loadChunked = async (table, ids, select, key = "id") => {
-    const map = new Map();
-    const list = [...ids];
-    for (let i = 0; i < list.length; i += 100) {
-      const chunk = list.slice(i, i + 100);
-      const { data } = await supabase.from(table).select(select).in(key, chunk);
-      for (const row of data || []) map.set(row[key], row);
-    }
-    return map;
-  };
-
   if (ticketIds.size) {
-    const t = await loadChunked("tickets", ticketIds, "id, ticket_number, status");
-    t.forEach((v, k) => ticketMap.set(k, v));
+    const { data: tickets } = await getTicketsMetaByIds([...ticketIds]);
+    for (const row of tickets || []) ticketMap.set(row.id, row);
   }
   if (userIds.size) {
-    const u = await loadChunked("users", userIds, "id, name, email");
-    u.forEach((v, k) => userMap.set(k, v));
+    const { data: users } = await findUsersByIds([...userIds]);
+    for (const row of users || []) userMap.set(row.id, row);
   }
   if (feIds.size) {
-    const f = await loadChunked("field_executives", feIds, "id, name, email");
-    f.forEach((v, k) => feMap.set(k, v));
+    const { data: fes } = await findFieldExecutivesByIds([...feIds]);
+    for (const row of fes || []) feMap.set(row.id, row);
   }
   if (orgIds.size) {
-    const o = await loadChunked("organisations", orgIds, "id, name, slug");
-    o.forEach((v, k) => orgMap.set(k, v));
+    const { data: orgs } = await findOrganisationsByIds([...orgIds]);
+    for (const row of orgs || []) orgMap.set(row.id, row);
   }
 
   return rows.map((row) => {
@@ -184,83 +172,18 @@ export async function enrichAuditLogRows(rows) {
 }
 
 /**
- * Build audit log list query (tenant scope + filters).
- *
- * Returns `{ query }` — not the builder directly. `buildAuditLogsListQuery` is async; returning a
- * Supabase PostgREST builder from an async function would await the thenable and execute the query
- * before `.range()` runs in the route handler.
- */
-export async function buildAuditLogsListQuery(req, filters) {
-  const {
-    entityType,
-    action,
-    dateFrom,
-    dateTo,
-    ticketNumber,
-    actorUserId,
-    actorFeId,
-    organisationId,
-    sortBy,
-    sortDir,
-  } = filters;
-
-  const { column, ascending } = parseAuditLogSort(sortBy, sortDir);
-
-  let q = supabase.from("audit_logs").select("*").order(column, { ascending });
-
-  const { query: scoped } = await scopeAuditLogsQuery(q, req);
-  q = scoped;
-
-  if (req.isSuperAdmin && organisationId) {
-    q = q.eq("organisation_id", organisationId);
-  }
-
-  if (entityType && entityType !== "all") q = q.eq("entity_type", entityType);
-  if (action && action !== "all") q = q.eq("action", action);
-  if (dateFrom) q = q.gte("created_at", dateFrom);
-  if (dateTo) q = q.lte("created_at", dateTo);
-  if (actorUserId) q = q.eq("actor_user_id", actorUserId);
-  if (actorFeId) q = q.eq("actor_fe_id", actorFeId);
-
-  if (ticketNumber) {
-    const ticketIds = await resolveTicketIdsForNumberSearch(ticketNumber, req);
-    q = applyTicketNumberFilter(q, ticketIds);
-  }
-
-  return { query: q };
-}
-
-/**
  * Run audit log list query with pagination (single execution path for the API route).
  */
 export async function listAuditLogsPage(req, filters, { limit, offset }) {
-  const built = await buildAuditLogsListQuery(req, filters);
-  const listQuery = built?.query;
-
-  if (listQuery && typeof listQuery.range === "function") {
-    const { data, error } = await listQuery.range(offset, offset + limit - 1);
-    if (error) throw error;
-    return enrichAuditLogRows(data || []);
-  }
-
-  /**
-   * Older builds: buildAuditLogsListQuery was async and returned a thenable builder;
-   * returning it executed the query early and yielded { data, error, count, … }.
-   * Paginate in memory so tenants still see rows until the image is updated.
-   */
-  if (built && Array.isArray(built.data)) {
-    console.warn("[audit-logs] using legacy executed-result pagination", {
-      requestId: req?.requestId,
-      totalRows: built.data.length,
-      offset,
-      limit,
-    });
-    const page = built.data.slice(offset, offset + limit);
-    if (built.error) throw built.error;
-    return enrichAuditLogRows(page);
-  }
-
-  throw new Error("Invalid audit log query builder");
+  const { column, ascending } = parseAuditLogSort(filters.sortBy, filters.sortDir);
+  const { data, error } = await listAuditLogsPaginated(req, filters, {
+    limit,
+    offset,
+    sortColumn: column,
+    ascending,
+  });
+  if (error) throw error;
+  return enrichAuditLogRows(data || []);
 }
 
 /** CSV export headers for operational audit grid. */

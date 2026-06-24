@@ -1,7 +1,9 @@
-import { supabase } from "../supabaseClient.js";
 import { TENANT_CLIENTS_ENABLED } from "../config/appConfig.js";
 import { normalizeClientSlug } from "./tenantClientService.js";
 import { safeTrim } from "../utils/http.js";
+import { findActiveTenantClientBySlug } from "../repositories/tenantClientRepository.js";
+import { listOrganisationsByFilter } from "../repositories/organisationRepository.js";
+import { listClientUsersByOrganisation } from "../repositories/userRepository.js";
 
 const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -80,14 +82,10 @@ export async function listClientNotificationEmails(req, { clientSlug, organisati
   let orgIdForUsers = organisationId;
 
   if (TENANT_CLIENTS_ENABLED) {
-    let tcQ = supabase
-      .from("tenant_clients")
-      .select("contact_email, organisation_id")
-      .eq("slug", slugKey)
-      .eq("status", "active");
-    if (organisationId) tcQ = tcQ.eq("organisation_id", organisationId);
-
-    const { data: tenantClient, error: tcErr } = await tcQ.maybeSingle();
+    const { data: tenantClient, error: tcErr } = await findActiveTenantClientBySlug(
+      slugKey,
+      organisationId
+    );
     if (tcErr) return { error: tcErr.message, status: 500 };
 
     if (tenantClient) {
@@ -97,18 +95,13 @@ export async function listClientNotificationEmails(req, { clientSlug, organisati
   }
 
   // Legacy org slug match and/or tenant parent org comms (spoc + outgoing).
-  let orgQ = supabase
-    .from("organisations")
-    .select("id, slug, spoc_email, outgoing_emails");
-  if (organisationId) {
-    orgQ = orgQ.eq("id", organisationId);
-  } else if (req.isSuperAdmin) {
-    orgQ = orgQ.eq("slug", slugKey);
-  } else {
-    orgQ = orgQ.eq("slug", slugKey);
-  }
+  const orgFilter = organisationId
+    ? { organisationId }
+    : req.isSuperAdmin
+      ? { slug: slugKey }
+      : { slug: slugKey };
 
-  const { data: orgRows, error: orgErr } = await orgQ;
+  const { data: orgRows, error: orgErr } = await listOrganisationsByFilter(orgFilter);
   if (orgErr) return { error: orgErr.message, status: 500 };
 
   for (const org of orgRows ?? []) {
@@ -127,11 +120,7 @@ export async function listClientNotificationEmails(req, { clientSlug, organisati
   }
 
   if (orgIdForUsers) {
-    const { data: users, error: usersErr } = await supabase
-      .from("users")
-      .select("email, client_slug, active")
-      .eq("organisation_id", orgIdForUsers)
-      .eq("role", "CLIENT");
+    const { data: users, error: usersErr } = await listClientUsersByOrganisation(orgIdForUsers);
 
     if (usersErr) return { error: usersErr.message, status: 500 };
 

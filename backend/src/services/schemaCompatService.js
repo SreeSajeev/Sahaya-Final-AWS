@@ -1,6 +1,25 @@
-import { supabase } from "../supabaseClient.js";
+import { prisma } from "../db/prisma.js";
 
 const columnCache = new Map();
+
+async function hasPublicColumnPrisma(tableName, columnName) {
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = $1
+         AND column_name = $2
+       LIMIT 1`,
+      tableName,
+      columnName
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn("[schema-compat] prisma column lookup failed:", tableName, columnName, err?.message || err);
+    return false;
+  }
+}
 
 /**
  * Returns true when public.<tableName> has <columnName>.
@@ -11,25 +30,7 @@ export async function hasPublicColumn(tableName, columnName) {
   if (columnCache.has(cacheKey)) return columnCache.get(cacheKey);
 
   try {
-    /**
-     * Important:
-     * Supabase JS uses PostgREST; `information_schema` is not an exposed schema by default.
-     * So we probe column existence by issuing a minimal select against the target table.
-     */
-    const { error } = await supabase.from(tableName).select(columnName).limit(1);
-    if (error) {
-      const msg = String(error.message || "");
-      // Postgres: undefined_column
-      if (error.code === "42703" || /column .* does not exist/i.test(msg)) {
-        columnCache.set(cacheKey, false);
-        return false;
-      }
-      console.warn("[schema-compat] column probe failed:", tableName, columnName, msg);
-      columnCache.set(cacheKey, false);
-      return false;
-    }
-
-    const exists = true;
+    const exists = await hasPublicColumnPrisma(tableName, columnName);
     columnCache.set(cacheKey, exists);
     return exists;
   } catch (err) {
@@ -43,4 +44,3 @@ export async function hasPublicColumn(tableName, columnName) {
     return false;
   }
 }
-

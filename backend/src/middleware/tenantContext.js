@@ -1,6 +1,6 @@
-import { supabase } from "../supabaseClient.js";
 import { ENFORCE_TENANT_GUARD } from "../config/appConfig.js";
 import { jsonRes } from "../utils/http.js";
+import { findTenantContextUserByAuthId } from "../repositories/userRepository.js";
 
 function getBearerToken(req) {
   const authHeader = req.headers.authorization;
@@ -24,11 +24,7 @@ async function resolveAppUserFromToken(token) {
   const authUser = await res.json().catch(() => null);
   if (!authUser?.id) return null;
 
-  const { data: appUser } = await supabase
-    .from("users")
-    .select("id, role, organisation_id, is_active, active")
-    .eq("auth_id", authUser.id)
-    .maybeSingle();
+  const appUser = await findTenantContextUserByAuthId(authUser.id);
   return appUser ?? null;
 }
 

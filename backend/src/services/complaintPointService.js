@@ -1,8 +1,13 @@
-import { supabase } from "../supabaseClient.js";
 import { APP_BASE_URL, TENANT_CLIENTS_ENABLED } from "../config/appConfig.js";
 import { safeTrim } from "../utils/http.js";
 import { generateUniqueComplaintPointPublicToken } from "../utils/publicToken.js";
 import { loadAllowedClientSlugsForTenant, normalizeClientSlug } from "./tenantClientService.js";
+import {
+  listComplaintPoints as listComplaintPointsRepo,
+  findComplaintPointById,
+  insertComplaintPoint,
+  updateComplaintPointById,
+} from "../repositories/tenantComplaintPointRepository.js";
 
 function resolveOrganisationIdForWrite(req, bodyOrganisationId) {
   if (req.isSuperAdmin && bodyOrganisationId) {
@@ -34,25 +39,23 @@ export async function listComplaintPoints(req, opts = {}) {
   const organisationIdFilter = safeTrim(opts.organisationId);
   const statusFilter = safeTrim(opts.status);
 
-  let q = supabase
-    .from("tenant_complaint_points")
-    .select("*")
-    .order("name", { ascending: true });
-
   if (!req.isSuperAdmin) {
     if (!req.tenantId) {
       return { data: [], error: null };
     }
-    q = q.eq("organisation_id", req.tenantId);
-  } else if (organisationIdFilter) {
-    q = q.eq("organisation_id", organisationIdFilter);
   }
 
-  if (statusFilter === "active" || statusFilter === "disabled") {
-    q = q.eq("status", statusFilter);
-  }
+  const organisationId = !req.isSuperAdmin
+    ? req.tenantId
+    : organisationIdFilter || undefined;
 
-  const { data, error } = await q;
+  const status =
+    statusFilter === "active" || statusFilter === "disabled" ? statusFilter : undefined;
+
+  const { data, error } = await listComplaintPointsRepo({
+    organisationId: organisationId ?? undefined,
+    status,
+  });
   if (error) return { data: [], error };
   return { data: (data ?? []).map(enrichComplaintPointRow), error: null };
 }
@@ -62,11 +65,7 @@ export async function listComplaintPoints(req, opts = {}) {
  * @param {string} id
  */
 export async function getComplaintPointById(req, id) {
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
+  const { data, error } = await findComplaintPointById(id);
 
   if (error) return { data: null, error };
   if (!data) return { data: null, error: null };
@@ -148,11 +147,7 @@ export async function createComplaintPoint(req, body) {
     created_by_user_id: req.appUser?.id ?? null,
   };
 
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .insert(insert)
-    .select("*")
-    .single();
+  const { data, error } = await insertComplaintPoint(insert);
 
   if (error) {
     const msg = String(error.message || "");
@@ -210,12 +205,7 @@ export async function updateComplaintPoint(req, id, body) {
     }
   }
 
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .update(patch)
-    .eq("id", id)
-    .select("*")
-    .single();
+  const { data, error } = await updateComplaintPointById(id, patch);
 
   if (error) {
     const msg = String(error.message || "");
@@ -241,12 +231,11 @@ export async function disableComplaintPoint(req, id) {
   }
 
   const nowIso = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .update({ status: "disabled", disabled_at: nowIso, updated_at: nowIso })
-    .eq("id", id)
-    .select("*")
-    .single();
+  const { data, error } = await updateComplaintPointById(id, {
+    status: "disabled",
+    disabled_at: nowIso,
+    updated_at: nowIso,
+  });
 
   if (error) return { error: { status: 400, message: error.message } };
   return { data: enrichComplaintPointRow(data) };
@@ -271,16 +260,11 @@ export async function regenerateComplaintPointToken(req, id) {
   const nextVersion = Number(existing.data.token_version ?? 1) + 1;
   const nowIso = new Date().toISOString();
 
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .update({
-      public_token: publicToken,
-      token_version: nextVersion,
-      updated_at: nowIso,
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
+  const { data, error } = await updateComplaintPointById(id, {
+    public_token: publicToken,
+    token_version: nextVersion,
+    updated_at: nowIso,
+  });
 
   if (error) return { error: { status: 400, message: error.message } };
   return {

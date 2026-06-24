@@ -1,16 +1,17 @@
 /**
  * Read-only helpers to add human-readable ticket fields without schema migrations.
  */
+import { findUsersByIds } from "../repositories/userRepository.js";
+import { listStaffAuthorCommentsByTicketIds } from "../repositories/commentRepository.js";
 
 /**
  * First STAFF comment per ticket (by created_at) approximates manual ticket creator
  * when the initial description comment is inserted with author_id.
  *
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Array<{ id: string; source?: string | null; opened_by_email?: string | null }>} tickets
  * @returns {Promise<Map<string, string>>} ticketId -> display line (includes "Created by:" / "Opened via email" prefix where applicable)
  */
-export async function buildCreatorDisplayByTicketId(supabase, tickets) {
+export async function buildCreatorDisplayByTicketId(tickets) {
   /** @type {Map<string, string>} */
   const out = new Map();
   if (!Array.isArray(tickets) || tickets.length === 0) return out;
@@ -18,14 +19,7 @@ export async function buildCreatorDisplayByTicketId(supabase, tickets) {
   const ticketIds = [...new Set(tickets.map((t) => t?.id).filter(Boolean))];
   if (ticketIds.length === 0) return out;
 
-  const { data: commentRows, error: cErr } = await supabase
-    .from("ticket_comments")
-    .select("ticket_id, author_id, created_at")
-    .in("ticket_id", ticketIds)
-    .eq("source", "STAFF")
-    .not("author_id", "is", null)
-    .order("created_at", { ascending: true })
-    .limit(8000);
+  const { data: commentRows, error: cErr } = await listStaffAuthorCommentsByTicketIds(ticketIds);
 
   if (cErr) {
     console.warn("[ticketDisplayEnrichment] staff comments lookup skipped:", cErr.message);
@@ -44,7 +38,7 @@ export async function buildCreatorDisplayByTicketId(supabase, tickets) {
   /** @type {Map<string, { name?: string | null; email?: string | null }>} */
   const userById = new Map();
   if (authorIds.length > 0) {
-    const { data: users, error: uErr } = await supabase.from("users").select("id, name, email").in("id", authorIds);
+    const { data: users, error: uErr } = await findUsersByIds(authorIds);
     if (uErr) {
       console.warn("[ticketDisplayEnrichment] users lookup skipped:", uErr.message);
     } else {

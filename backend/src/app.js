@@ -10,7 +10,18 @@ import { optionalPostmarkWebhookSecret } from "./middleware/postmarkWebhookAuth.
 import { requestIdMiddleware } from "./middleware/requestId.js";
 import { createRateLimitWithAuditLog } from "./utils/rateLimitWithAuditLog.js";
 
-import { supabase } from "./supabaseClient.js";
+import {
+  findResolutionNotificationByTicketId,
+  insertResolutionNotification,
+} from "./repositories/ticketResolutionNotificationRepository.js";
+import {
+  findRawEmailByMessageId,
+  insertInboundRawEmail,
+} from "./repositories/rawEmailsRepo.js";
+import { findUserOrganisationIdByEmail } from "./repositories/userRepository.js";
+import { getFieldExecutiveById } from "./repositories/fieldExecutiveRepository.js";
+import { getAssignmentByTicketId } from "./repositories/assignmentRepository.js";
+import { getTicketByIdUnscopedSingle } from "./repositories/ticketQueryRepository.js";
 import { runAutoTicketWorker } from "./workers/autoTicketWorker.js";
 import { processProofBackupQueue } from "./workers/proofBackupQueueProcessor.js";
 import { runAutoResolutionTokenWorker } from "./workers/autoResolutionTokenWorker.js";
@@ -153,12 +164,7 @@ async function resolveInboundOrganisationId(toEmail) {
     const hasUsersOrg = await hasPublicColumn("users", "organisation_id");
     if (!hasRawEmailsOrg || !hasUsersOrg) return null;
 
-    const { data: userRow } = await supabase
-      .from("users")
-      .select("organisation_id")
-      .eq("email", toEmail)
-      .not("organisation_id", "is", null)
-      .maybeSingle();
+    const { data: userRow } = await findUserOrganisationIdByEmail(toEmail);
     return userRow?.organisation_id ?? null;
   } catch (err) {
     console.warn("[POSTMARK] org resolution skipped", err?.message || err);
@@ -279,22 +285,17 @@ app.post(
       return jsonRes(res, 400, { error: "fe_id and ticket_id (UUIDs) required" });
     }
     const { fe_id: feId, ticket_id: ticketId } = parsed.data;
-    const { data: fe, error: feError } = await supabase
-      .from("field_executives")
-      .select("name, phone")
-      .eq("id", feId)
-      .single();
+    const { data: fe, error: feError } = await getFieldExecutiveById(feId, "name, phone");
     if (feError || !fe) {
       return jsonRes(res, 404, { error: "Field executive not found" });
     }
     if (!fe.phone || !String(fe.phone).trim()) {
       return jsonRes(res, 400, { error: "FE has no phone number" });
     }
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("ticket_number, vehicle_number, location, organisation_id")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "ticket_number, vehicle_number, location, organisation_id"
+    );
     if (!isTenantAllowed(req, ticket?.organisation_id)) {
       return jsonRes(res, 403, { error: "Forbidden" });
     }
@@ -339,11 +340,10 @@ app.post(
     }
     const { ticket_id: ticketId } = parsed.data;
 
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("ticket_number, vehicle_number, location, organisation_id")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "ticket_number, vehicle_number, location, organisation_id"
+    );
     if (!isTenantAllowed(req, ticket?.organisation_id)) {
       return jsonRes(res, 403, { error: "Forbidden" });
     }
@@ -358,20 +358,12 @@ app.post(
       return jsonRes(res, 404, { error: "Ticket not found" });
     }
 
-    const { data: assignment, error: assignmentError } = await supabase
-      .from("ticket_assignments")
-      .select("fe_id")
-      .eq("ticket_id", ticketId)
-      .single();
+    const { data: assignment, error: assignmentError } = await getAssignmentByTicketId(ticketId, "fe_id");
     if (assignmentError || !assignment) {
       return jsonRes(res, 400, { error: "FE not assigned" });
     }
 
-    const { data: fe, error: feError } = await supabase
-      .from("field_executives")
-      .select("name, phone")
-      .eq("id", assignment.fe_id)
-      .single();
+    const { data: fe, error: feError } = await getFieldExecutiveById(assignment.fe_id, "name, phone");
     if (feError || !fe) {
       return jsonRes(res, 404, { error: "Field executive not found" });
     }
@@ -449,11 +441,10 @@ app.post(
     }
     const { ticket_id } = bodyParsed.data;
 
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .select("id, ticket_number, status, opened_by_email, organisation_id")
-      .eq("id", ticket_id)
-      .single();
+    const { data: ticket, error } = await getTicketByIdUnscopedSingle(
+      ticket_id,
+      "id, ticket_number, status, opened_by_email, organisation_id"
+    );
     logJson("info", "internal_ticket_resolved", {
       requestId: req.requestId,
       ticketId: ticket?.id || ticket_id,
@@ -474,11 +465,7 @@ app.post(
       return jsonRes(res, 200, { ignored: "no opened_by_email" });
     }
 
-    const { data: alreadySent } = await supabase
-      .from("ticket_resolution_notifications")
-      .select("ticket_id")
-      .eq("ticket_id", ticket.id)
-      .single();
+    const { data: alreadySent } = await findResolutionNotificationByTicketId(ticket.id);
 
     if (alreadySent) {
       return jsonRes(res, 200, { ignored: "email already sent" });
@@ -507,9 +494,7 @@ app.post(
       console.error("[ticket-resolved-hook] Resolution email failed:", e?.message || e);
     }
 
-    await supabase
-      .from("ticket_resolution_notifications")
-      .insert({ ticket_id: ticket.id });
+    await insertResolutionNotification(ticket.id);
 
     return jsonRes(res, 200, { sent: true });
   } catch (err) {
@@ -601,11 +586,7 @@ app.post(
     });
 
     const messageId = String(email.MessageID).trim();
-    const { data: existingByMessageId } = await supabase
-      .from("raw_emails")
-      .select("id")
-      .eq("message_id", messageId)
-      .maybeSingle();
+    const { data: existingByMessageId } = await findRawEmailByMessageId(messageId);
 
     if (existingByMessageId?.id) {
       console.log("[POSTMARK] Duplicate MessageID — idempotent accept", {
@@ -616,11 +597,7 @@ app.post(
       return res.status(200).send("Email received");
     }
 
-    const { data, error } = await supabase
-      .from("raw_emails")
-      .insert(insertPayload)
-      .select("id")
-      .single();
+    const { data, error } = await insertInboundRawEmail(insertPayload);
 
     if (error) {
       if (error.code === "23505") {

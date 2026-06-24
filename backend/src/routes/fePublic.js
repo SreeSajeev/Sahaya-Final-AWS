@@ -1,8 +1,12 @@
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { TOKEN_STATES, isTokenExpired } from "../services/tokenService.js";
 import { SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
+import {
+  getFeActionTokenById,
+  markFeActionTokenExpired,
+} from "../repositories/feActionTokenRepository.js";
+import { getTicketByIdUnscoped } from "../repositories/ticketQueryRepository.js";
 import { jsonError, jsonOk } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
@@ -74,11 +78,7 @@ router.get("/action/:tokenId/context", async (req, res) => {
     const hasTokenStateColumn = await hasPublicColumn("fe_action_tokens", "token_state");
     const tokenSelect = await tokenContextSelectColumns();
 
-    const { data: actionToken, error: tokenError } = await supabase
-      .from("fe_action_tokens")
-      .select(tokenSelect)
-      .eq("id", tokenId)
-      .maybeSingle();
+    const { data: actionToken, error: tokenError } = await getFeActionTokenById(tokenId, tokenSelect);
 
     if (tokenError) return jsonError(res, 500, tokenError.message);
     if (!actionToken) return jsonError(res, 404, "Invalid token");
@@ -97,21 +97,16 @@ router.get("/action/:tokenId/context", async (req, res) => {
     if (effectiveTokenState === TOKEN_STATES.EXPIRED || isTokenExpired(actionToken.expires_at)) {
       // Best-effort mark expired when token_state exists; never block on it.
       if (hasTokenStateColumn) {
-        await supabase
-          .from("fe_action_tokens")
-          .update({ token_state: TOKEN_STATES.EXPIRED })
-          .eq("id", tokenId)
-          .eq("used", false);
+        await markFeActionTokenExpired(tokenId);
       }
       return jsonError(res, 410, "Token expired", { code: "TOKEN_EXPIRED" });
     }
 
     const ticketSelect = await ticketContextSelectColumns();
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select(ticketSelect)
-      .eq("id", actionToken.ticket_id)
-      .maybeSingle();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscoped(
+      actionToken.ticket_id,
+      ticketSelect
+    );
 
     if (ticketError) return jsonError(res, 500, ticketError.message);
     if (!ticket) return jsonError(res, 404, "Ticket not found");

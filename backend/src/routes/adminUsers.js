@@ -1,12 +1,12 @@
 import express from "express";
 import { z } from "zod";
-import { supabase } from "../supabaseClient.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { attachTenantContext } from "../middleware/tenantContext.js";
 import { validateUuidParam } from "../middleware/validateUuidParam.js";
 import { jsonRes, jsonOk, safeDbErrorForClient } from "../utils/http.js";
 import { insertAuditLog } from "../services/auditLogService.js";
+import { findUserById, updateUserById } from "../repositories/userRepository.js";
 
 const router = express.Router();
 
@@ -38,12 +38,11 @@ router.patch(
     }
     const { organisation_id } = parsed.data;
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .update({ organisation_id: String(organisation_id).trim() })
-        .eq("id", userId)
-        .select("id, organisation_id")
-        .single();
+      const { data, error } = await updateUserById(
+        userId,
+        { organisation_id: String(organisation_id).trim() },
+        "id, organisation_id"
+      );
       if (error) return jsonRes(res, 500, { error: safeDbErrorForClient(error, "Update failed") });
       if (!data) return jsonRes(res, 404, { error: "User not found" });
       return jsonOk(res, data);
@@ -64,11 +63,7 @@ router.patch(
     }
     const { approval_status } = parsed.data;
     try {
-      const { data: target, error: loadErr } = await supabase
-        .from("users")
-        .select("id, organisation_id")
-        .eq("id", userId)
-        .maybeSingle();
+      const { data: target, error: loadErr } = await findUserById(userId, "id, organisation_id");
       if (loadErr) return jsonRes(res, 500, { error: safeDbErrorForClient(loadErr, "Load failed") });
       if (!target) return jsonRes(res, 404, { error: "User not found" });
       if (!req.isSuperAdmin && req.tenantId && target.organisation_id !== req.tenantId) {
@@ -78,7 +73,7 @@ router.patch(
         approval_status === "approved"
           ? { approval_status: "approved", is_active: true, active: true }
           : { approval_status: "rejected" };
-      const { data, error } = await supabase.from("users").update(updates).eq("id", userId).select("*").single();
+      const { data, error } = await updateUserById(userId, updates);
       if (error) return jsonRes(res, 500, { error: safeDbErrorForClient(error, "Update failed") });
       return jsonOk(res, data);
     } catch (err) {
@@ -105,11 +100,7 @@ router.patch(
         isSuperAdmin: Boolean(req.isSuperAdmin),
         targetUserId: userId,
       });
-      const { data: targetUser, error: loadErr } = await supabase
-        .from("users")
-        .select("id, organisation_id")
-        .eq("id", userId)
-        .maybeSingle();
+      const { data: targetUser, error: loadErr } = await findUserById(userId, "id, organisation_id");
       if (loadErr) {
         return jsonRes(res, 500, { error: safeDbErrorForClient(loadErr, "Load failed") });
       }
@@ -117,15 +108,11 @@ router.patch(
         return jsonRes(res, 404, { error: "User not found" });
       }
 
-      const { data, error } = await supabase
-        .from("users")
-        .update({
-          is_active,
-          active: is_active,
-        })
-        .eq("id", userId)
-        .select("id, is_active, active")
-        .single();
+      const { data, error } = await updateUserById(
+        userId,
+        { is_active, active: is_active },
+        "id, is_active, active"
+      );
 
       if (error) {
         return jsonRes(res, 500, { error: safeDbErrorForClient(error, "Update failed") });

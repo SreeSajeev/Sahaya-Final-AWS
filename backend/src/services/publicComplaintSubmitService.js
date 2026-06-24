@@ -1,4 +1,3 @@
-import { supabase } from "../supabaseClient.js";
 import { TENANT_CLIENTS_ENABLED } from "../config/appConfig.js";
 import { parseVerificationToken } from "./otp/otpCrypto.js";
 import { hasRequiredFieldsForOpen } from "./ticketService.js";
@@ -10,9 +9,16 @@ import {
   resolveEffectiveCategoryAndIssue,
 } from "./publicComplaintSubmitValidation.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
+import { findOtpSessionById } from "../repositories/publicOtpSessionRepository.js";
+import { findComplaintPointByIdSelect } from "../repositories/tenantComplaintPointRepository.js";
+import { listTenantClientsQuery } from "../repositories/tenantClientRepository.js";
+import { submitPublicComplaintTransaction } from "../repositories/publicComplaintSubmitRepository.js";
 
 const SHORT_DESCRIPTION_MAX_LEN = 200;
 const PENDING_REPORTER_NAME = "Pending";
+
+const SESSION_SELECT =
+  "id, complaint_point_id, organisation_id, reporter_mobile, reporter_name, status, verified_at, ticket_id";
 
 /**
  * @param {string} organisationId
@@ -23,11 +29,13 @@ async function resolveClientSlugForPublicSubmit(organisationId, defaultClientSlu
   if (!normalized) return null;
   if (!TENANT_CLIENTS_ENABLED) return normalized;
 
-  const { data, error } = await supabase
-    .from("tenant_clients")
-    .select("slug")
-    .eq("organisation_id", organisationId)
-    .eq("status", "active");
+  const { data, error } = await listTenantClientsQuery({
+    isSuperAdmin: true,
+    tenantId: null,
+    organisationIdFilter: organisationId,
+    statusFilter: "active",
+    activeOnly: false,
+  });
 
   if (error) {
     console.warn("[public-submit] tenant_clients lookup failed:", error.message);
@@ -101,13 +109,7 @@ export async function submitPublicComplaint(req, body) {
     return { ok: false, status: 400, message: "Reporter name is required", code: "INVALID_PROFILE" };
   }
 
-  const { data: session, error: sessionErr } = await supabase
-    .from("public_otp_sessions")
-    .select(
-      "id, complaint_point_id, organisation_id, reporter_mobile, reporter_name, status, verified_at, ticket_id"
-    )
-    .eq("id", sid)
-    .maybeSingle();
+  const { data: session, error: sessionErr } = await findOtpSessionById(sid, SESSION_SELECT);
 
   if (sessionErr) {
     return { ok: false, status: 500, message: "Failed to load verification session" };
@@ -133,11 +135,10 @@ export async function submitPublicComplaint(req, body) {
     return { ok: false, status: 401, message: "OTP verification required", code: "SESSION_INVALID" };
   }
 
-  const { data: point, error: pointErr } = await supabase
-    .from("tenant_complaint_points")
-    .select("id, status, default_client_slug")
-    .eq("id", cpid)
-    .maybeSingle();
+  const { data: point, error: pointErr } = await findComplaintPointByIdSelect(
+    cpid,
+    "id, status, default_client_slug"
+  );
 
   if (pointErr) {
     return { ok: false, status: 500, message: "Failed to load complaint point" };
@@ -180,7 +181,7 @@ export async function submitPublicComplaint(req, body) {
     needs_review: status === "NEEDS_REVIEW",
     confidence_score: 100,
     priority: false,
-    priority_level: 'LOW',
+    priority_level: "LOW",
   };
 
   let ticketNumber;
@@ -191,19 +192,11 @@ export async function submitPublicComplaint(req, body) {
     return { ok: false, status: 500, message: "Failed to submit complaint" };
   }
 
-  const { data: rpcData, error: rpcError } = await supabase.rpc("submit_public_complaint", {
-    p_payload: {
-      ...rpcBase,
-      ticket_number: ticketNumber,
-    },
+  const result = await submitPublicComplaintTransaction({
+    ...rpcBase,
+    ticket_number: ticketNumber,
   });
 
-  if (rpcError) {
-    console.error("[public-submit] rpc error:", rpcError.message);
-    return { ok: false, status: 500, message: "Failed to submit complaint" };
-  }
-
-  const result = rpcData && typeof rpcData === "object" ? rpcData : null;
   if (!result) {
     return { ok: false, status: 500, message: "Failed to submit complaint" };
   }

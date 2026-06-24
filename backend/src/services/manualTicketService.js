@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { supabase } from "../supabaseClient.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { safeDbErrorForClient } from "../utils/http.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
@@ -12,6 +11,8 @@ import {
   validateNotifyEmailsAgainstAllowed,
 } from "./clientNotificationEmailResolver.js";
 import { generateTicketNumberForCreation } from "../utils/ticketNumber.js";
+import { insertTicket } from "../repositories/ticketQueryRepository.js";
+import { insertComment } from "../repositories/commentRepository.js";
 
 /** Shared with POST /tickets — behaviour must stay identical. */
 export const createTicketBodySchema = z.object({
@@ -126,13 +127,10 @@ export async function createManualTicketFromBody(req, body) {
     ...(organisationId ? { organisation_id: organisationId } : {}),
   };
 
-  const { data: ticket, error } = await supabase
-    .from("tickets")
-    .insert(insertPayload)
-    .select("*")
-    .single();
-
-  if (error) {
+  let ticket;
+  try {
+    ticket = await insertTicket(insertPayload);
+  } catch (error) {
     return {
       ok: false,
       status: 400,
@@ -141,7 +139,7 @@ export async function createManualTicketFromBody(req, body) {
   }
 
   if (data.description && String(data.description).trim() !== "") {
-    await supabase.from("ticket_comments").insert({
+    await insertComment({
       ticket_id: ticket.id,
       body: String(data.description).trim(),
       source: "STAFF",

@@ -2,7 +2,16 @@
 // SLA lifecycle: row creation, deadline calculation, breach detection.
 // Do not modify ticket state machine. Call from lifecycle transitions only.
 
-import { supabase } from "../supabaseClient.js";
+import {
+  fetchTicketOrganisationId,
+  findSlaRowByTicketId,
+  insertSlaRow,
+  listSlaRowsForEvaluate,
+  listTicketStatusesByIds,
+  updateSlaById,
+  updateSlaByTicketId,
+} from "../repositories/slaRepository.js";
+import { listSlaConfigurationKeys } from "../repositories/configurationRepository.js";
 
 const CONFIG_KEYS = [
   "assignment_sla_hours",
@@ -11,29 +20,12 @@ const CONFIG_KEYS = [
 ];
 const DEFAULTS = { assignment_sla_hours: 4, onsite_sla_hours: 24, resolution_sla_hours: 48 };
 
-async function fetchTicketOrgId(ticketId) {
-  if (!ticketId) return null;
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("organisation_id")
-    .eq("id", ticketId)
-    .maybeSingle();
-  if (error) {
-    console.warn("[SLA] fetchTicketOrgId failed:", ticketId, error.message);
-    return null;
-  }
-  return data?.organisation_id ?? null;
-}
-
 /**
  * Fetch SLA config from configurations table. Returns hours per phase.
  * @returns {{ assignment_sla_hours: number, onsite_sla_hours: number, resolution_sla_hours: number }}
  */
 export async function getSlaConfig() {
-  const { data: rows, error } = await supabase
-    .from("configurations")
-    .select("key, value")
-    .in("key", CONFIG_KEYS);
+  const { data: rows, error } = await listSlaConfigurationKeys(CONFIG_KEYS);
 
   if (error) {
     console.warn("[SLA] getSlaConfig failed, using defaults:", error.message);
@@ -57,17 +49,13 @@ export async function getSlaConfig() {
  */
 export async function createSlaRow(ticketId) {
   if (!ticketId) return;
-  const { data: existing } = await supabase
-    .from("sla_tracking")
-    .select("id")
-    .eq("ticket_id", ticketId)
-    .maybeSingle();
+  const { data: existing } = await findSlaRowByTicketId(ticketId);
 
   if (existing) {
     return;
   }
 
-  const organisationId = await fetchTicketOrgId(ticketId);
+  const organisationId = await fetchTicketOrganisationId(ticketId);
   const payload = {
     ticket_id: ticketId,
     assignment_breached: false,
@@ -77,7 +65,7 @@ export async function createSlaRow(ticketId) {
     ...(organisationId ? { organisation_id: organisationId } : {}),
   };
 
-  const { error } = await supabase.from("sla_tracking").insert(payload);
+  const { error } = await insertSlaRow(payload);
 
   if (error) {
     if (error.code === "23505") return; // unique violation, ignore
@@ -92,7 +80,6 @@ export async function createSlaRow(ticketId) {
  */
 export async function setAssignmentDeadline(ticketId, overrideDeadlineIso = null) {
   if (!ticketId) return;
-  // Ensure row exists. Some schemas require organisation_id NOT NULL; insert includes it when available.
   await createSlaRow(ticketId).catch(() => {});
 
   const config = await getSlaConfig();
@@ -105,13 +92,10 @@ export async function setAssignmentDeadline(ticketId, overrideDeadlineIso = null
     deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
   }
 
-  const { error } = await supabase
-    .from("sla_tracking")
-    .update({
-      assignment_deadline: deadline,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("ticket_id", ticketId);
+  const { error } = await updateSlaByTicketId(ticketId, {
+    assignment_deadline: deadline,
+    updated_at: new Date().toISOString(),
+  });
 
   if (error) {
     console.error("[SLA] setAssignmentDeadline failed:", ticketId, error.message);
@@ -130,13 +114,10 @@ export async function setOnsiteDeadline(ticketId) {
   const hours = config.onsite_sla_hours ?? DEFAULTS.onsite_sla_hours;
   const deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 
-  const { error } = await supabase
-    .from("sla_tracking")
-    .update({
-      onsite_deadline: deadline,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("ticket_id", ticketId);
+  const { error } = await updateSlaByTicketId(ticketId, {
+    onsite_deadline: deadline,
+    updated_at: new Date().toISOString(),
+  });
 
   if (error) {
     console.error("[SLA] setOnsiteDeadline failed:", ticketId, error.message);
@@ -155,13 +136,10 @@ export async function setResolutionDeadline(ticketId) {
   const hours = config.resolution_sla_hours ?? DEFAULTS.resolution_sla_hours;
   const deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 
-  const { error } = await supabase
-    .from("sla_tracking")
-    .update({
-      resolution_deadline: deadline,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("ticket_id", ticketId);
+  const { error } = await updateSlaByTicketId(ticketId, {
+    resolution_deadline: deadline,
+    updated_at: new Date().toISOString(),
+  });
 
   if (error) {
     console.error("[SLA] setResolutionDeadline failed:", ticketId, error.message);
@@ -176,14 +154,11 @@ export async function setResolutionDeadline(ticketId) {
  */
 export async function clearOnsiteAndResolutionDeadlines(ticketId) {
   if (!ticketId) return;
-  const { error } = await supabase
-    .from("sla_tracking")
-    .update({
-      onsite_deadline: null,
-      resolution_deadline: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("ticket_id", ticketId);
+  const { error } = await updateSlaByTicketId(ticketId, {
+    onsite_deadline: null,
+    resolution_deadline: null,
+    updated_at: new Date().toISOString(),
+  });
 
   if (error) {
     console.error("[SLA] clearOnsiteAndResolutionDeadlines failed:", ticketId, error.message);
@@ -194,16 +169,11 @@ export async function clearOnsiteAndResolutionDeadlines(ticketId) {
 
 /**
  * Evaluate breach flags for all sla_tracking rows. Do not block ticket lifecycle.
- * - assignment_breached: ticket still ASSIGNED and now() > assignment_deadline
- * - onsite_breached: ticket still ON_SITE and now() > onsite_deadline
- * - resolution_breached: ticket still RESOLVED_PENDING_VERIFICATION and now() > resolution_deadline
  */
 export async function evaluateBreaches() {
   const now = new Date().toISOString();
 
-  const { data: rows, error: fetchError } = await supabase
-    .from("sla_tracking")
-    .select("id, ticket_id, assignment_deadline, onsite_deadline, resolution_deadline, assignment_breached, onsite_breached, resolution_breached");
+  const { data: rows, error: fetchError } = await listSlaRowsForEvaluate();
 
   if (fetchError) {
     console.error("[SLA] evaluateBreaches fetch failed:", fetchError.message);
@@ -213,15 +183,11 @@ export async function evaluateBreaches() {
   if (!rows || rows.length === 0) return;
 
   const ticketIds = [...new Set(rows.map((r) => r.ticket_id))];
-  /** PostgREST `.in()` becomes a long query string; too many UUIDs → URL limits → `fetch failed`. */
   const TICKET_IN_CHUNK = 100;
   const tickets = [];
   for (let i = 0; i < ticketIds.length; i += TICKET_IN_CHUNK) {
     const chunk = ticketIds.slice(i, i + TICKET_IN_CHUNK);
-    const { data: chunkRows, error: ticketsError } = await supabase
-      .from("tickets")
-      .select("id, status")
-      .in("id", chunk);
+    const { data: chunkRows, error: ticketsError } = await listTicketStatusesByIds(chunk);
 
     if (ticketsError) {
       const detail = ticketsError?.cause?.message || ticketsError?.cause?.code || "";
@@ -240,7 +206,6 @@ export async function evaluateBreaches() {
   for (const row of rows) {
     const status = statusByTicket[row.ticket_id];
     if (status == null) continue;
-    // Terminal / non-operational: never evaluate deadlines or flip breach flags
     if (status === "REJECTED") continue;
 
     const updates = {};
@@ -272,10 +237,7 @@ export async function evaluateBreaches() {
     if (Object.keys(updates).length === 0) continue;
 
     updates.updated_at = now;
-    const { error: updateError } = await supabase
-      .from("sla_tracking")
-      .update(updates)
-      .eq("id", row.id);
+    const { error: updateError } = await updateSlaById(row.id, updates);
 
     if (updateError) {
       console.error("[SLA] evaluateBreaches update failed:", row.id, updateError.message);

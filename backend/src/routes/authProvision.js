@@ -1,11 +1,17 @@
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import { attachTenantContext } from "../middleware/tenantContext.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { jsonError, jsonOk, safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { authorizeAdminProvision, provisionAdminUser } from "../services/userProvisioningService.js";
+import {
+  findUserByAuthId,
+  findUserByEmail,
+  insertUser,
+  updateUserAuthIdById,
+  findMeProfileByAuthId,
+} from "../repositories/userRepository.js";
 
 const router = express.Router();
 
@@ -27,12 +33,7 @@ router.post("/provision-user", attachTenantContext({ requireAuthenticated: true 
     const authUser = req.user;
     if (!authUser?.id) return jsonError(res, 401, "Unauthorized");
 
-    const { data: existing, error: existingErr } = await supabase
-      .from("users")
-      .select("*")
-      .eq("auth_id", authUser.id)
-      .maybeSingle();
-
+    const { data: existing, error: existingErr } = await findUserByAuthId(authUser.id);
     if (existingErr) return jsonError(res, 500, existingErr.message);
     if (existing) {
       logEvent("authProvision.exists", { authUserId: authUser.id, userId: existing.id, ms: Date.now() - startedAt });
@@ -40,22 +41,11 @@ router.post("/provision-user", attachTenantContext({ requireAuthenticated: true 
     }
 
     const email = safeTrim(authUser.email);
-    // Migration compatibility: when switching Supabase projects, auth.users.id changes.
-    // If a public.users row already exists for the same email, backfill auth_id instead of creating a new row.
     if (email) {
-      const { data: byEmail, error: emailErr } = await supabase
-        .from("users")
-        .select("*")
-        .eq("email", email)
-        .maybeSingle();
+      const { data: byEmail, error: emailErr } = await findUserByEmail(email);
       if (emailErr) return jsonError(res, 500, emailErr.message);
       if (byEmail) {
-        const { data: updated, error: updErr } = await supabase
-          .from("users")
-          .update({ auth_id: authUser.id })
-          .eq("id", byEmail.id)
-          .select("*")
-          .single();
+        const { data: updated, error: updErr } = await updateUserAuthIdById(byEmail.id, authUser.id);
         if (updErr) return jsonError(res, 500, updErr.message);
         logEvent("authProvision.backfilledAuthId", {
           authUserId: authUser.id,
@@ -70,7 +60,6 @@ router.post("/provision-user", attachTenantContext({ requireAuthenticated: true 
       safeTrim(authUser.user_metadata?.name) ||
       (email ? email : `user_${String(authUser.id).slice(0, 8)}`);
 
-    // Keep this conservative: default STAFF; allow role if explicitly present.
     const role = safeTrim(authUser.user_metadata?.role) || "STAFF";
     const organisationId = safeTrim(authUser.user_metadata?.organisation_id);
     const clientSlug = safeTrim(authUser.user_metadata?.client_slug);
@@ -81,7 +70,6 @@ router.post("/provision-user", attachTenantContext({ requireAuthenticated: true 
       email: email,
       name: name,
       role,
-      // Default to active unless explicitly pending/rejected in metadata.
       active: approvalStatus === "pending" || approvalStatus === "rejected" ? false : true,
       is_active: approvalStatus === "pending" || approvalStatus === "rejected" ? false : true,
       ...(approvalStatus ? { approval_status: approvalStatus } : {}),
@@ -89,20 +77,10 @@ router.post("/provision-user", attachTenantContext({ requireAuthenticated: true 
       ...(clientSlug ? { client_slug: clientSlug } : {}),
     };
 
-    const { data: created, error: insertErr } = await supabase
-      .from("users")
-      .insert(payload)
-      .select("*")
-      .single();
-
+    const { data: created, error: insertErr } = await insertUser(payload);
     if (insertErr) {
-      // Idempotency under race: if another request created row, read it back.
       if (insertErr.code === "23505") {
-        const { data: retry } = await supabase
-          .from("users")
-          .select("*")
-          .eq("auth_id", authUser.id)
-          .maybeSingle();
+        const { data: retry } = await findUserByAuthId(authUser.id);
         if (retry) {
           logEvent("authProvision.raceRecovered", { authUserId: authUser.id, userId: retry.id, ms: Date.now() - startedAt });
           return jsonOk(res, { profile: retry, created: false });
@@ -129,33 +107,21 @@ router.get("/me", attachTenantContext({ requireAuthenticated: true }), requireAu
     const authUser = req.user;
     if (!authUser?.id) return jsonError(res, 401, "Unauthorized");
 
-    const { data, error } = await supabase
-      .from("users")
-      .select("id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at")
-      .eq("auth_id", authUser.id)
-      .maybeSingle();
-
+    const { data, error } = await findMeProfileByAuthId(authUser.id);
     if (error) return jsonError(res, 500, error.message);
     if (!data) {
-      // Migration compatibility: auth_id mismatch after switching Supabase projects.
       const email = safeTrim(authUser.email);
       if (!email) return jsonOk(res, { profile: null });
 
-      const { data: byEmail, error: emailErr } = await supabase
-        .from("users")
-        .select("id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at")
-        .eq("email", email)
-        .maybeSingle();
+      const { data: byEmail, error: emailErr } = await findUserByEmail(email, "id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at");
       if (emailErr) return jsonError(res, 500, emailErr.message);
       if (!byEmail) return jsonOk(res, { profile: null });
 
-      // Backfill auth_id so future requests are fast and unambiguous.
-      const { data: updated, error: updErr } = await supabase
-        .from("users")
-        .update({ auth_id: authUser.id })
-        .eq("id", byEmail.id)
-        .select("id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at")
-        .single();
+      const { data: updated, error: updErr } = await updateUserAuthIdById(
+        byEmail.id,
+        authUser.id,
+        "id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at"
+      );
       if (updErr) return jsonError(res, 500, updErr.message);
 
       logEvent("authProvision.meBackfilledAuthId", {
@@ -207,4 +173,3 @@ router.post(
 );
 
 export default router;
-

@@ -1,4 +1,31 @@
-import { supabase } from "../supabaseClient.js";
+import {
+  findReportRunByOrgAndDate,
+  insertDailyTenantReportRun,
+  isDailyTenantReportRunsTableReady,
+  reclaimFailedReportRun,
+  upsertDailyTenantReportRun,
+} from "../repositories/dailyTenantReportRunRepository.js";
+import {
+  listAssignmentFeIdsByIds,
+  listAssignmentsByIdsForDailyReport,
+  listAssignmentsInAssignedAtWindow,
+  listAssignmentStatsByTicketIdsForDailyReport,
+} from "../repositories/assignmentRepository.js";
+import { listFeProofCommentsByTicketIds } from "../repositories/commentRepository.js";
+import { listFieldExecutivesByOrganisationId } from "../repositories/fieldExecutiveRepository.js";
+import { listOrganisations } from "../repositories/organisationRepository.js";
+import { listPublicSubmissionsByTicketIds } from "../repositories/publicComplaintSubmissionRepository.js";
+import { listSlaByTicketIdsForOrg } from "../repositories/slaRepository.js";
+import { listTenantClientsByOrganisationId } from "../repositories/tenantClientRepository.js";
+import {
+  listResolvedTicketsForFeStats,
+  listTicketIdsByOrgAndIds,
+  listTicketsByIdsForDailyReport,
+  listTicketsCreatedInWindowForOrg,
+  listTicketsResolvedInWindowForOrg,
+  listTicketsUpdatedInWindowForOrg,
+} from "../repositories/ticketQueryRepository.js";
+import { listTenantAdminUsers } from "../repositories/userRepository.js";
 import { logEvent } from "../utils/structuredLog.js";
 import {
   getPreviousIstReportDay,
@@ -10,9 +37,6 @@ import {
 } from "./dailyTicketReportCsvService.js";
 import { sendDailyTenantReportEmail } from "./emailService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
-
-const TICKET_SELECT_BASE =
-  "id, ticket_number, complaint_id, vehicle_number, category, issue_type, priority, priority_level, status, location, opened_by_email, opened_at, created_at, updated_at, verification_remarks, client_slug, source, needs_review, current_assignment_id, organisation_id";
 
 const CHUNK = 200;
 
@@ -29,14 +53,6 @@ function isUserApproved(row) {
   return status === "approved";
 }
 
-function buildTicketSelect({ hasResolvedAt, hasReviewNotes, hasResolutionCategory }) {
-  let select = TICKET_SELECT_BASE;
-  if (hasResolvedAt) select += ", resolved_at";
-  if (hasReviewNotes) select += ", review_notes";
-  if (hasResolutionCategory) select += ", resolution_category";
-  return select;
-}
-
 /**
  * Abort all report work when migration has not been applied.
  * @returns {Promise<boolean>}
@@ -44,29 +60,20 @@ function buildTicketSelect({ hasResolvedAt, hasReviewNotes, hasResolutionCategor
 export async function isReportRunsTableReady() {
   if (reportRunsTableReadyCache !== null) return reportRunsTableReadyCache;
 
-  const { error } = await supabase.from("daily_tenant_report_runs").select("id").limit(1);
+  const { ready, error } = await isDailyTenantReportRunsTableReady();
   if (error) {
-    const msg = String(error.message || "");
-    if (error.code === "42P01" || /does not exist/i.test(msg)) {
-      reportRunsTableReadyCache = false;
-      return false;
-    }
     throw new Error(`Failed to verify daily_tenant_report_runs: ${error.message}`);
   }
 
-  reportRunsTableReadyCache = true;
-  return true;
+  reportRunsTableReadyCache = ready;
+  return ready;
 }
 
 /**
  * @param {string} organisationId
  */
 export async function loadTenantAdminRecipients(organisationId) {
-  const { data, error } = await supabase
-    .from("users")
-    .select("id, email, name, role, organisation_id, active, is_active, approval_status")
-    .eq("organisation_id", organisationId)
-    .eq("role", "ADMIN");
+  const { data, error } = await listTenantAdminUsers(organisationId);
 
   if (error) throw new Error(`Failed to load tenant admins: ${error.message}`);
 
@@ -86,12 +93,7 @@ export async function loadTenantAdminRecipients(organisationId) {
  * @param {string} reportDate — YYYY-MM-DD
  */
 async function getExistingReportRun(organisationId, reportDate) {
-  const { data, error } = await supabase
-    .from("daily_tenant_report_runs")
-    .select("id, status")
-    .eq("organisation_id", organisationId)
-    .eq("report_date", reportDate)
-    .maybeSingle();
+  const { data, error } = await findReportRunByOrgAndDate(organisationId, reportDate);
 
   if (error) {
     throw new Error(`Failed to check report run: ${error.message}`);
@@ -103,9 +105,7 @@ async function getExistingReportRun(organisationId, reportDate) {
  * @param {object} row
  */
 async function upsertReportRun(row) {
-  const { error } = await supabase.from("daily_tenant_report_runs").upsert(row, {
-    onConflict: "organisation_id,report_date",
-  });
+  const { error } = await upsertDailyTenantReportRun(row);
   if (error) {
     throw new Error(`Failed to record report run: ${error.message}`);
   }
@@ -121,7 +121,7 @@ async function tryClaimReportRun(organisationId, reportDate, recipientCount) {
     return { claimed: false, reason: "already_completed", status: existing.status };
   }
 
-  const { error: insertError } = await supabase.from("daily_tenant_report_runs").insert({
+  const { error: insertError } = await insertDailyTenantReportRun({
     organisation_id: organisationId,
     report_date: reportDate,
     status: "pending",
@@ -136,18 +136,11 @@ async function tryClaimReportRun(organisationId, reportDate, recipientCount) {
     throw new Error(`Failed to claim report run: ${insertError.message}`);
   }
 
-  const { data: reclaimed, error: reclaimError } = await supabase
-    .from("daily_tenant_report_runs")
-    .update({
-      status: "pending",
-      error: null,
-      recipient_count: recipientCount,
-    })
-    .eq("organisation_id", organisationId)
-    .eq("report_date", reportDate)
-    .eq("status", "failed")
-    .select("id")
-    .maybeSingle();
+  const { data: reclaimed, error: reclaimError } = await reclaimFailedReportRun(
+    organisationId,
+    reportDate,
+    recipientCount
+  );
 
   if (reclaimError) {
     throw new Error(`Failed to reclaim report run: ${reclaimError.message}`);
@@ -180,17 +173,15 @@ async function loadAssignmentsInWindowForOrg(
   windowEnd,
   hasAssignmentOrgId
 ) {
-  const startIso = windowStart.toISOString();
-  const endIso = windowEnd.toISOString();
+  const { data, error } = await listAssignmentsInAssignedAtWindow(
+    organisationId,
+    windowStart,
+    windowEnd,
+    hasAssignmentOrgId
+  );
+  if (error) throw new Error(`Assignment query failed: ${error.message}`);
 
   if (hasAssignmentOrgId) {
-    const { data, error } = await supabase
-      .from("ticket_assignments")
-      .select("ticket_id, assigned_at, fe_id, organisation_id")
-      .eq("organisation_id", organisationId)
-      .gte("assigned_at", startIso)
-      .lte("assigned_at", endIso);
-    if (error) throw new Error(`Assignment query failed: ${error.message}`);
     return (data || []).filter(
       (row) =>
         (!row.organisation_id || row.organisation_id === organisationId) &&
@@ -198,28 +189,22 @@ async function loadAssignmentsInWindowForOrg(
     );
   }
 
-  const { data: assignmentRows, error: assignErr } = await supabase
-    .from("ticket_assignments")
-    .select("ticket_id, assigned_at, fe_id")
-    .gte("assigned_at", startIso)
-    .lte("assigned_at", endIso);
-  if (assignErr) throw new Error(`Assignment query failed: ${assignErr.message}`);
-
+  const assignmentRows = data || [];
   const candidateTicketIds = [
-    ...new Set((assignmentRows || []).map((a) => a.ticket_id).filter(Boolean)),
+    ...new Set(assignmentRows.map((a) => a.ticket_id).filter(Boolean)),
   ];
   const allowedTicketIds = new Set();
   for (let i = 0; i < candidateTicketIds.length; i += CHUNK) {
     const chunk = candidateTicketIds.slice(i, i + CHUNK);
-    const { data: scopedTickets } = await supabase
-      .from("tickets")
-      .select("id")
-      .eq("organisation_id", organisationId)
-      .in("id", chunk);
+    const { data: scopedTickets, error: ticketErr } = await listTicketIdsByOrgAndIds(
+      organisationId,
+      chunk
+    );
+    if (ticketErr) throw new Error(`Assignment ticket scope failed: ${ticketErr.message}`);
     for (const t of scopedTickets || []) allowedTicketIds.add(String(t.id));
   }
 
-  return (assignmentRows || []).filter(
+  return assignmentRows.filter(
     (row) =>
       allowedTicketIds.has(String(row.ticket_id)) &&
       isInstantInWindow(row.assigned_at, windowStart, windowEnd)
@@ -254,15 +239,11 @@ async function collectActivityTicketIds(
     activityTypesByTicketId.get(id).add(type);
   };
 
-  const startIso = windowStart.toISOString();
-  const endIso = windowEnd.toISOString();
-
-  const { data: createdRows, error: createdErr } = await supabase
-    .from("tickets")
-    .select("id, created_at, opened_at")
-    .eq("organisation_id", organisationId)
-    .gte("created_at", startIso)
-    .lte("created_at", endIso);
+  const { data: createdRows, error: createdErr } = await listTicketsCreatedInWindowForOrg(
+    organisationId,
+    windowStart,
+    windowEnd
+  );
   if (createdErr) throw new Error(`Created ticket query failed: ${createdErr.message}`);
   for (const row of createdRows || []) {
     if (isInstantInWindow(row.created_at ?? row.opened_at, windowStart, windowEnd)) {
@@ -270,12 +251,11 @@ async function collectActivityTicketIds(
     }
   }
 
-  const { data: updatedRows, error: updatedErr } = await supabase
-    .from("tickets")
-    .select("id, updated_at, created_at, status")
-    .eq("organisation_id", organisationId)
-    .gte("updated_at", startIso)
-    .lte("updated_at", endIso);
+  const { data: updatedRows, error: updatedErr } = await listTicketsUpdatedInWindowForOrg(
+    organisationId,
+    windowStart,
+    windowEnd
+  );
   if (updatedErr) throw new Error(`Updated ticket query failed: ${updatedErr.message}`);
   for (const row of updatedRows || []) {
     if (!isInstantInWindow(row.updated_at, windowStart, windowEnd)) continue;
@@ -295,12 +275,11 @@ async function collectActivityTicketIds(
   }
 
   if (hasResolvedAt) {
-    const { data: resolvedRows, error: resolvedErr } = await supabase
-      .from("tickets")
-      .select("id, resolved_at")
-      .eq("organisation_id", organisationId)
-      .gte("resolved_at", startIso)
-      .lte("resolved_at", endIso);
+    const { data: resolvedRows, error: resolvedErr } = await listTicketsResolvedInWindowForOrg(
+      organisationId,
+      windowStart,
+      windowEnd
+    );
     if (resolvedErr) throw new Error(`Resolved ticket query failed: ${resolvedErr.message}`);
     for (const row of resolvedRows || []) {
       if (isInstantInWindow(row.resolved_at, windowStart, windowEnd)) {
@@ -339,15 +318,10 @@ async function collectActivityTicketIds(
  */
 async function loadTicketsByIds(organisationId, ticketIds, schemaFlags) {
   if (ticketIds.length === 0) return [];
-  const select = buildTicketSelect(schemaFlags);
   const rows = [];
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const chunk = ticketIds.slice(i, i + CHUNK);
-    const { data, error } = await supabase
-      .from("tickets")
-      .select(select)
-      .eq("organisation_id", organisationId)
-      .in("id", chunk);
+    const { data, error } = await listTicketsByIdsForDailyReport(organisationId, chunk, schemaFlags);
     if (error) throw new Error(`Failed to load tickets: ${error.message}`);
     rows.push(...(data || []));
   }
@@ -366,10 +340,7 @@ async function loadAssignmentsForTickets(tickets) {
   if (currentIds.length > 0) {
     for (let i = 0; i < currentIds.length; i += CHUNK) {
       const chunk = currentIds.slice(i, i + CHUNK);
-      const { data } = await supabase
-        .from("ticket_assignments")
-        .select("id, ticket_id, fe_id, assigned_at")
-        .in("id", chunk);
+      const { data } = await listAssignmentsByIdsForDailyReport(chunk);
       for (const row of data || []) {
         currentAssignmentByTicketId.set(String(row.ticket_id), row);
       }
@@ -390,14 +361,11 @@ async function loadAssignmentStatsByTicketId(ticketIds, organisationId, hasAssig
 
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const chunk = ticketIds.slice(i, i + CHUNK);
-    let q = supabase
-      .from("ticket_assignments")
-      .select("ticket_id, assigned_at, outcome, organisation_id")
-      .in("ticket_id", chunk);
-    if (hasAssignmentOrgId) {
-      q = q.eq("organisation_id", organisationId);
-    }
-    const { data, error } = await q;
+    const { data, error } = await listAssignmentStatsByTicketIdsForDailyReport(
+      chunk,
+      organisationId,
+      hasAssignmentOrgId
+    );
     if (error) {
       console.error("[dailyReport] assignment stats load failed", error.message);
       continue;
@@ -427,12 +395,7 @@ async function loadProofStatsByTicketId(ticketIds) {
 
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const chunk = ticketIds.slice(i, i + CHUNK);
-    const { data, error } = await supabase
-      .from("ticket_comments")
-      .select("ticket_id, source, attachments, created_at")
-      .in("ticket_id", chunk)
-      .eq("source", "FE")
-      .order("created_at", { ascending: false });
+    const { data, error } = await listFeProofCommentsByTicketIds(chunk);
     if (error) {
       console.error("[dailyReport] proof stats load failed", error.message);
       continue;
@@ -462,10 +425,7 @@ async function loadProofStatsByTicketId(ticketIds) {
  * @param {string} organisationId
  */
 async function loadFieldExecutives(organisationId) {
-  const { data, error } = await supabase
-    .from("field_executives")
-    .select("id, name, email, active")
-    .eq("organisation_id", organisationId);
+  const { data, error } = await listFieldExecutivesByOrganisationId(organisationId);
   if (error) throw new Error(`Failed to load FEs: ${error.message}`);
   const map = new Map();
   for (const fe of data || []) map.set(String(fe.id), fe);
@@ -481,11 +441,7 @@ async function loadPublicSubmissions(organisationId, ticketIds) {
   if (ticketIds.length === 0) return map;
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const chunk = ticketIds.slice(i, i + CHUNK);
-    const { data } = await supabase
-      .from("public_complaint_submissions")
-      .select("ticket_id, reporter_name, reporter_mobile, organisation_id")
-      .eq("organisation_id", organisationId)
-      .in("ticket_id", chunk);
+    const { data } = await listPublicSubmissionsByTicketIds(organisationId, chunk);
     for (const row of data || []) {
       if (row.organisation_id !== organisationId) continue;
       map.set(String(row.ticket_id), row);
@@ -498,10 +454,7 @@ async function loadPublicSubmissions(organisationId, ticketIds) {
  * @param {string} organisationId
  */
 async function loadTenantClientsBySlug(organisationId) {
-  const { data } = await supabase
-    .from("tenant_clients")
-    .select("slug, contact_name, contact_email, contact_phone, organisation_id")
-    .eq("organisation_id", organisationId);
+  const { data } = await listTenantClientsByOrganisationId(organisationId);
   const map = new Map();
   for (const row of data || []) {
     map.set(String(row.slug).toLowerCase(), row);
@@ -518,17 +471,9 @@ async function loadSlaByTicketId(organisationId, ticketIds, hasSlaOrgId) {
   const map = new Map();
   if (ticketIds.length === 0) return map;
 
-  const selectCols = hasSlaOrgId
-    ? "ticket_id, assignment_breached, onsite_breached, resolution_breached, assignment_deadline, resolution_deadline, organisation_id"
-    : "ticket_id, assignment_breached, onsite_breached, resolution_breached, assignment_deadline, resolution_deadline";
-
   for (let i = 0; i < ticketIds.length; i += CHUNK) {
     const chunk = ticketIds.slice(i, i + CHUNK);
-    let q = supabase.from("sla_tracking").select(selectCols).in("ticket_id", chunk);
-    if (hasSlaOrgId) {
-      q = q.eq("organisation_id", organisationId);
-    }
-    const { data, error } = await q;
+    const { data, error } = await listSlaByTicketIdsForOrg(organisationId, chunk, hasSlaOrgId);
     if (error) {
       console.warn("[DAILY_REPORT] sla_tracking chunk skipped:", error.message);
       continue;
@@ -558,8 +503,6 @@ async function computeFePerformance(
   hasResolvedAt
 ) {
   const feMap = await loadFieldExecutives(organisationId);
-  const startIso = windowStart.toISOString();
-  const endIso = windowEnd.toISOString();
 
   /** @type {Map<string, { feId: string, name: string, assigned: number, closed: number }>} */
   const stats = new Map();
@@ -589,41 +532,28 @@ async function computeFePerformance(
   }
 
   let resolvedTickets = [];
-  if (hasResolvedAt) {
-    const { data, error } = await supabase
-      .from("tickets")
-      .select("id, resolved_at, current_assignment_id, organisation_id")
-      .eq("organisation_id", organisationId)
-      .gte("resolved_at", startIso)
-      .lte("resolved_at", endIso);
-    if (error) {
-      console.warn("[DAILY_REPORT] resolved FE stats skipped:", error.message);
-    } else {
-      resolvedTickets = data || [];
-    }
+  const { data: resolvedData, error: resolvedError } = await listResolvedTicketsForFeStats(
+    organisationId,
+    windowStart,
+    windowEnd,
+    hasResolvedAt
+  );
+  if (resolvedError) {
+    console.warn(
+      `[DAILY_REPORT] resolved FE stats${hasResolvedAt ? "" : " (fallback)"} skipped:`,
+      resolvedError.message
+    );
   } else {
-    const { data, error } = await supabase
-      .from("tickets")
-      .select("id, updated_at, current_assignment_id, organisation_id, status")
-      .eq("organisation_id", organisationId)
-      .eq("status", "RESOLVED")
-      .gte("updated_at", startIso)
-      .lte("updated_at", endIso);
-    if (error) {
-      console.warn("[DAILY_REPORT] resolved FE stats (fallback) skipped:", error.message);
-    } else {
-      resolvedTickets = (data || []).map((t) => ({ ...t, resolved_at: t.updated_at }));
-    }
+    resolvedTickets = hasResolvedAt
+      ? resolvedData || []
+      : (resolvedData || []).map((t) => ({ ...t, resolved_at: t.updated_at }));
   }
 
   const assignmentIds = resolvedTickets.map((t) => t.current_assignment_id).filter(Boolean);
   const assignmentFeById = new Map();
   for (let i = 0; i < assignmentIds.length; i += CHUNK) {
     const chunk = assignmentIds.slice(i, i + CHUNK);
-    const { data: rows } = await supabase
-      .from("ticket_assignments")
-      .select("id, fe_id")
-      .in("id", chunk);
+    const { data: rows } = await listAssignmentFeIdsByIds(chunk);
     for (const row of rows || []) assignmentFeById.set(String(row.id), row.fe_id);
   }
 
@@ -928,15 +858,12 @@ export async function runDailyReportsForAllTenants(options = {}) {
     console.warn("[DAILY_REPORT] tickets.resolved_at missing — using updated_at fallbacks for close metrics");
   }
 
-  const { data: orgs, error } = await supabase
-    .from("organisations")
-    .select("id, name, status")
-    .eq("status", "active");
+  const { data: orgs, error } = await listOrganisations();
 
   if (error) throw new Error(`Failed to load organisations: ${error.message}`);
 
   const results = [];
-  for (const org of orgs || []) {
+  for (const org of (orgs || []).filter((o) => o.status === "active")) {
     try {
       const result = await generateAndSendDailyReportForOrganisation({
         organisation: org,

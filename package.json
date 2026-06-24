@@ -1,0 +1,14 @@
+{
+  "name": "sahaya-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sahaya monorepo test orchestration",
+  "scripts": {
+    "test:repo": "npm run test:repo --prefix backend",
+    "test:integration": "npm run test:integration --prefix backend",
+    "test:e2e": "npm run test:e2e --prefix e2e",
+    "test:all": "npm run test:repo && npm run test:integration && npm run test:e2e",
+    "seed:test": "npm run seed:test --prefix backend",
+    "prisma:generate": "npm run prisma:generate --prefix backend"
+  }
+}

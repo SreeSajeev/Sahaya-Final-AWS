@@ -1,4 +1,4 @@
-import { supabase } from "../supabaseClient.js";
+import { listFeCommentsForTicketProofCheck } from "../repositories/commentRepository.js";
 
 /** Matches CloseTicketDialog CLOSEABLE_STATUSES in field-ops-assist. */
 export const CLOSEABLE_PRE_CLOSE_STATUSES = ["ON_SITE", "RESOLVED_PENDING_VERIFICATION"];
@@ -31,13 +31,7 @@ function countProofImages(attachments) {
  * Returns true when at least one FE-sourced comment carries proof attachments.
  */
 async function ticketHasFeProof(ticketId) {
-  const { data: comments, error } = await supabase
-    .from("ticket_comments")
-    .select("id, source, attachments, body")
-    .eq("ticket_id", ticketId)
-    .eq("source", "FE")
-    .order("created_at", { ascending: false })
-    .limit(50);
+  const { data: comments, error } = await listFeCommentsForTicketProofCheck(ticketId, { limit: 50 });
 
   if (error) {
     console.error("[CLOSE_VALIDATION] proof lookup failed", ticketId, error.message);

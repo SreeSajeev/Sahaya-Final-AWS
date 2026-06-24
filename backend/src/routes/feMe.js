@@ -1,5 +1,4 @@
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import { attachTenantContext, isTenantAllowed, requireTenantOrSuperAdmin } from "../middleware/tenantContext.js";
 import { insertAuditLog } from "../services/auditLogService.js";
@@ -7,6 +6,19 @@ import { hasPublicColumn } from "../services/schemaCompatService.js";
 import { jsonError, jsonOk } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { buildCreatorDisplayByTicketId } from "../utils/ticketDisplayEnrichment.js";
+import { findOrganisationsBySlugs } from "../repositories/organisationRepository.js";
+import { findUsersByEmails } from "../repositories/userRepository.js";
+import {
+  findFieldExecutiveByUserId,
+  findFieldExecutiveByName,
+} from "../repositories/fieldExecutiveRepository.js";
+import { listFeActionTokensByFeAndTicketIds } from "../repositories/feActionTokenRepository.js";
+import { listSlaRowsByTicketIds } from "../repositories/slaRepository.js";
+import {
+  listAssignmentsByFeId,
+  getAssignmentWithTicketByFeAndTicket,
+} from "../repositories/assignmentRepository.js";
+import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
 
 const router = express.Router();
 
@@ -18,22 +30,13 @@ router.use(requireTenantOrSuperAdmin);
 async function resolveFeIdFromAppUser(req) {
   const appUserId = req.appUser?.id ? String(req.appUser.id) : null;
   if (appUserId && (await hasPublicColumn("field_executives", "user_id"))) {
-    let byUser = supabase
-      .from("field_executives")
-      .select("id, organisation_id")
-      .eq("user_id", appUserId)
-      .maybeSingle();
-    if (req.tenantId) byUser = byUser.eq("organisation_id", req.tenantId);
-    const { data: byUserRow } = await byUser;
+    const { data: byUserRow } = await findFieldExecutiveByUserId(appUserId, req.tenantId ?? null);
     if (byUserRow?.id) return byUserRow.id;
   }
 
-  // Fallback: legacy name-based matching (unchanged behaviour when user_id unset).
   const name = req.appUser?.name ? String(req.appUser.name).trim() : "";
   if (!name) return null;
-  let q = supabase.from("field_executives").select("id, organisation_id").eq("name", name).maybeSingle();
-  if (req.tenantId) q = q.eq("organisation_id", req.tenantId);
-  const { data } = await q;
+  const { data } = await findFieldExecutiveByName(name, req.tenantId ?? null);
   return data?.id ?? null;
 }
 
@@ -50,12 +53,10 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
 
   const slaByTicketId = new Map();
   if (ticketIds.length > 0) {
-    const { data: slaRows, error: slaErr } = await supabase
-      .from("sla_tracking")
-      .select(
-        "ticket_id, assignment_deadline, onsite_deadline, resolution_deadline, assignment_breached, onsite_breached, resolution_breached"
-      )
-      .in("ticket_id", ticketIds);
+    const { data: slaRows, error: slaErr } = await listSlaRowsByTicketIds(
+      ticketIds,
+      "ticket_id, assignment_deadline, onsite_deadline, resolution_deadline, assignment_breached, onsite_breached, resolution_breached"
+    );
     if (!slaErr && Array.isArray(slaRows)) {
       for (const r of slaRows) {
         if (r?.ticket_id) slaByTicketId.set(r.ticket_id, r);
@@ -70,7 +71,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   );
   const orgNameBySlug = new Map();
   if (clientSlugs.length > 0) {
-    const { data: orgRows, error: orgErr } = await supabase.from("organisations").select("slug, name").in("slug", clientSlugs);
+    const { data: orgRows, error: orgErr } = await findOrganisationsBySlugs(clientSlugs);
     if (!orgErr && Array.isArray(orgRows)) {
       for (const o of orgRows) {
         const slug = o?.slug != null ? String(o.slug).trim() : "";
@@ -97,10 +98,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   );
   const reporterNameByEmail = new Map();
   if (reporterEmails.length > 0) {
-    const { data: userRows, error: userErr } = await supabase
-      .from("users")
-      .select("email, name")
-      .in("email", reporterEmails);
+    const { data: userRows, error: userErr } = await findUsersByEmails(reporterEmails);
     if (!userErr && Array.isArray(userRows)) {
       for (const u of userRows) {
         const em = u?.email != null ? String(u.email).trim() : "";
@@ -124,12 +122,11 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       ? "id, ticket_id, fe_id, action_type, expires_at, used, token_state, created_at"
       : "id, ticket_id, fe_id, action_type, expires_at, used, created_at";
 
-    const { data: tokRows, error: tokErr } = await supabase
-      .from("fe_action_tokens")
-      .select(cols)
-      .eq("fe_id", feId)
-      .in("ticket_id", ticketIds)
-      .order("created_at", { ascending: false });
+    const { data: tokRows, error: tokErr } = await listFeActionTokensByFeAndTicketIds(
+      feId,
+      ticketIds,
+      cols
+    );
 
     token_query_rows = !tokErr && Array.isArray(tokRows) ? tokRows.length : 0;
     if (tokErr) {
@@ -192,7 +189,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   let attachMissingResolution = 0;
   const missingSamples = [];
 
-  const creatorByTicketId = await buildCreatorDisplayByTicketId(supabase, tickets);
+  const creatorByTicketId = await buildCreatorDisplayByTicketId(tickets);
 
   const enriched = tickets.map((t) => {
     const slug = t?.client_slug != null ? String(t.client_slug).trim() : "";
@@ -302,11 +299,8 @@ router.get("/me/tickets", async (req, res) => {
     if (!feId) return jsonOk(res, { items: [] });
 
     const hasAssignDue = await hasPublicColumn("ticket_assignments", "assignment_due_at");
-    const selectCols = hasAssignDue
-      ? "id, fe_id, ticket_id, assignment_due_at, tickets!ticket_assignments_ticket_id_fkey (*)"
-      : "id, fe_id, ticket_id, tickets!ticket_assignments_ticket_id_fkey (*)";
 
-    const { data: assignments, error } = await supabase.from("ticket_assignments").select(selectCols).eq("fe_id", feId);
+    const { data: assignments, error } = await listAssignmentsByFeId(feId);
     if (error) return jsonError(res, 500, error.message);
 
     const pairs = (assignments || [])
@@ -345,18 +339,8 @@ router.get("/me/tickets/:ticketId", async (req, res) => {
     if (!feId) return jsonOk(res, { item: null });
 
     const hasAssignDue = await hasPublicColumn("ticket_assignments", "assignment_due_at");
-    const selectCols = hasAssignDue
-      ? "id, fe_id, ticket_id, assignment_due_at, tickets!ticket_assignments_ticket_id_fkey (*)"
-      : "id, fe_id, ticket_id, tickets!ticket_assignments_ticket_id_fkey (*)";
 
-    const { data: row, error } = await supabase
-      .from("ticket_assignments")
-      .select(selectCols)
-      .eq("fe_id", feId)
-      .eq("ticket_id", ticketId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data: row, error } = await getAssignmentWithTicketByFeAndTicket(feId, ticketId);
 
     if (error) return jsonError(res, 500, error.message);
     if (!row?.tickets) return jsonOk(res, { item: null });
@@ -400,11 +384,10 @@ router.post("/tickets/:id/status-action", async (req, res) => {
   }
 
   try {
-    const { data: ticket, error: ticketErr } = await supabase
-      .from("tickets")
-      .select("id, status, organisation_id, client_slug")
-      .eq("id", ticketId)
-      .maybeSingle();
+    const { data: ticket, error: ticketErr } = await getTicketByIdUnscoped(
+      ticketId,
+      "id, status, organisation_id, client_slug"
+    );
     if (ticketErr) return jsonError(res, 500, ticketErr.message);
     if (!ticket) return jsonError(res, 404, "Ticket not found");
     if (!isTenantAllowed(req, ticket.organisation_id)) return jsonError(res, 403, "Forbidden");
@@ -421,12 +404,10 @@ router.post("/tickets/:id/status-action", async (req, res) => {
       nextStatus = "RESOLVED_PENDING_VERIFICATION";
     }
 
-    const { data: updated, error: updErr } = await supabase
-      .from("tickets")
-      .update({ status: nextStatus, updated_at: nowIso })
-      .eq("id", ticketId)
-      .select("*")
-      .single();
+    const { data: updated, error: updErr } = await updateTicketById(ticketId, {
+      status: nextStatus,
+      updated_at: nowIso,
+    });
     if (updErr) return jsonError(res, 500, updErr.message);
 
     const feId = await resolveFeIdFromAppUser(req);
