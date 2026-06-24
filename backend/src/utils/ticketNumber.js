@@ -1,4 +1,4 @@
-import { supabase } from "../supabaseClient.js";
+import { allocateTicketSequence } from "../repositories/ticketNumberSequenceRepository.js";
 import { getIstCalendarParts, istDayStartUtc } from "./reportDateWindow.js";
 
 /** @type {Record<string, 'S' | 'E' | 'C'>} */
@@ -126,20 +126,7 @@ async function allocateSourceAwareTicketNumber(source) {
   const sourceCode = SOURCE_CODE_MAP[source];
   const prefix = PREFIX_BY_SOURCE_CODE[sourceCode];
 
-  const { data, error } = await supabase.rpc("allocate_ticket_sequence", {
-    p_source_code: sourceCode,
-  });
-
-  if (error) {
-    const err = new Error(`Ticket number allocation failed: ${error.message}`);
-    err.code = "TICKET_NUMBER_ALLOCATION_FAILED";
-    throw err;
-  }
-
-  const payload =
-    data && typeof data === "object" && !Array.isArray(data) ? data : null;
-  const seq = Number(payload?.last_number);
-  const sequenceDate = payload?.sequence_date;
+  const { last_number: seq, sequence_date: sequenceDate } = await allocateTicketSequence(sourceCode);
   if (!Number.isInteger(seq) || seq < 1 || seq > 9999 || sequenceDate == null) {
     const err = new Error("Ticket number allocation returned invalid payload");
     err.code = "TICKET_NUMBER_ALLOCATION_FAILED";

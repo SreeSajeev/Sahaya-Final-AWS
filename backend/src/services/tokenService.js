@@ -6,6 +6,7 @@ import { hasPublicColumn } from "./schemaCompatService.js"
 import { FE_ACTION_TOKEN_EXPIRY_HOURS, SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js"
 import {
   findReusableFeActionToken,
+  getFeActionTokenById,
   insertFeActionToken,
   markFeActionTokenUsedAtomic,
   findResolutionFallbackToken,
@@ -250,4 +251,36 @@ export async function revokeTokensForTicket({ ticketId, reason = null }) {
 export function isTokenExpired(expiresAt) {
   if (!expiresAt) return true
   return new Date(expiresAt).getTime() <= Date.now()
+}
+
+/**
+ * Authoritative validation for FE proof submission tokens.
+ */
+export async function validateActionToken({ token, ticketId, feId, actionType }) {
+  const nowIso = new Date().toISOString()
+  const hasTokenState = await hasPublicColumn("fe_action_tokens", "token_state")
+  const allowedStates =
+    actionType === "RESOLUTION"
+      ? [TOKEN_STATES.LOCKED, TOKEN_STATES.ACTIVE]
+      : [TOKEN_STATES.ACTIVE]
+
+  const reusableId = await findReusableFeActionToken({
+    ticketId,
+    feId,
+    actionType,
+    allowedStates,
+    nowIso,
+    hasTokenState,
+  })
+
+  if (!reusableId) {
+    throw new Error("Invalid or expired token")
+  }
+
+  if (token) {
+    const { data: row } = await getFeActionTokenById(reusableId, "token_hash")
+    if (row?.token_hash && row.token_hash !== token) {
+      throw new Error("Invalid or expired token")
+    }
+  }
 }

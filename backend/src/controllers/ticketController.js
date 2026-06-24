@@ -2,7 +2,6 @@
 // src/controllers/ticketController.js
 // Backend-authoritative, demo-safe lifecycle controller
 
-import { supabase } from "../supabaseClient.js";
 import { assertValidTransition } from "../services/ticketStateMachine.js";
 import { createActionToken } from "../services/tokenService.js";
 import { sendFETokenEmail } from "../services/emailService.js";
@@ -11,6 +10,15 @@ import { setAssignmentDeadline } from "../services/slaService.js";
 import { sendFESms, buildFEActionURL } from "../services/smsService.js";
 import { redactFeActionUrls, redactPhone } from "../utils/redact.js";
 import { consumeOnSiteTokenForTicket } from "../repositories/feActionTokenRepository.js";
+import { insertAssignment, getAssignmentByTicketId } from "../repositories/assignmentRepository.js";
+import { findFeCommentByTicketBodyPattern } from "../repositories/commentRepository.js";
+import { getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.js";
+import {
+  getTicketByIdUnscopedSingle,
+  getTicketStatusById,
+  updateTicketStatus,
+  updateTicketFields,
+} from "../repositories/ticketQueryRepository.js";
 
 /* =====================================================
    ASSIGN FE TO TICKET
@@ -20,11 +28,7 @@ export async function assignFieldExecutive(req, res) {
     const ticketId = req.params.id;
     const { feId } = req.body;
 
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .select("status")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error } = await getTicketStatusById(ticketId);
 
     if (error || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
@@ -32,19 +36,14 @@ export async function assignFieldExecutive(req, res) {
 
     assertValidTransition(ticket.status, "ASSIGNED");
 
-    const { error: insertError } = await supabase
-      .from("ticket_assignments")
-      .insert({
-        ticket_id: ticketId,
-        fe_id: feId,
-      });
+    const { error: insertError } = await insertAssignment({
+      ticket_id: ticketId,
+      fe_id: feId,
+    });
 
     if (insertError) throw insertError;
 
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({ status: "ASSIGNED" })
-      .eq("id", ticketId);
+    const { error: updateError } = await updateTicketStatus(ticketId, "ASSIGNED");
 
     if (updateError) throw updateError;
 
@@ -65,21 +64,16 @@ export async function generateOnSiteToken(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: assignment, error: assignmentError } = await supabase
-      .from("ticket_assignments")
-      .select("fe_id")
-      .eq("ticket_id", ticketId)
-      .single();
+    const { data: assignment, error: assignmentError } = await getAssignmentByTicketId(ticketId, "fe_id");
 
     if (assignmentError || !assignment) {
       return res.status(400).json({ error: "FE not assigned" });
     }
 
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("status, ticket_number")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "status, ticket_number"
+    );
 
     if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
@@ -93,10 +87,7 @@ export async function generateOnSiteToken(req, res) {
       actionType: "ON_SITE",
     });
 
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({ status: "EN_ROUTE" })
-      .eq("id", ticketId);
+    const { error: updateError } = await updateTicketStatus(ticketId, "EN_ROUTE");
 
     if (updateError) throw updateError;
 
@@ -120,11 +111,10 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("status, ticket_number")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "status, ticket_number"
+    );
 
     if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
@@ -133,13 +123,10 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
     assertValidTransition(ticket.status, "ON_SITE");
 
     /* 🔒 Ensure ON_SITE proof exists */
-    const { data: onsiteProof } = await supabase
-      .from("ticket_comments")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("source", "FE")
-      .ilike("body", "%ON_SITE proof uploaded%")
-      .maybeSingle();
+    const { data: onsiteProof } = await findFeCommentByTicketBodyPattern(
+      ticketId,
+      "%ON_SITE proof uploaded%"
+    );
 
     if (!onsiteProof) {
       return res.status(400).json({
@@ -147,11 +134,7 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       });
     }
 
-    const { data: assignment } = await supabase
-      .from("ticket_assignments")
-      .select("fe_id")
-      .eq("ticket_id", ticketId)
-      .single();
+    const { data: assignment } = await getAssignmentByTicketId(ticketId, "fe_id");
 
     if (!assignment) {
       return res.status(400).json({ error: "FE not assigned" });
@@ -184,11 +167,7 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
 
     // Optional: Resolution SMS to FE (does not block flow)
     try {
-      const { data: fe } = await supabase
-        .from("field_executives")
-        .select("name, phone")
-        .eq("id", assignment.fe_id)
-        .maybeSingle();
+      const { data: fe } = await getFieldExecutiveById(assignment.fe_id, "name, phone");
 
       if (fe?.phone && String(fe.phone).trim()) {
         const resolutionUrl = buildFEActionURL(token);
@@ -225,11 +204,10 @@ export async function verifyAndCloseTicket(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("status, opened_by_email, ticket_number")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "status, opened_by_email, ticket_number"
+    );
 
     if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
@@ -238,13 +216,10 @@ export async function verifyAndCloseTicket(req, res) {
     assertValidTransition(ticket.status, "RESOLVED");
 
     /* 🔒 Ensure RESOLUTION proof exists */
-    const { data: resolutionProof } = await supabase
-      .from("ticket_comments")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("source", "FE")
-      .ilike("body", "%RESOLUTION proof uploaded%")
-      .maybeSingle();
+    const { data: resolutionProof } = await findFeCommentByTicketBodyPattern(
+      ticketId,
+      "%RESOLUTION proof uploaded%"
+    );
 
     if (!resolutionProof) {
       return res.status(400).json({
@@ -252,13 +227,10 @@ export async function verifyAndCloseTicket(req, res) {
       });
     }
 
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({
-        status: "RESOLVED",
-        resolved_at: new Date().toISOString(),
-      })
-      .eq("id", ticketId);
+    const { error: updateError } = await updateTicketFields(ticketId, {
+      status: "RESOLVED",
+      resolved_at: new Date().toISOString(),
+    });
 
     if (updateError) throw updateError;
 

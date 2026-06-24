@@ -1,7 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { scopeQueryByTenant } from "../middleware/tenantContext.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 import { buildPrismaOrgWhere } from "./db/tenantScope.js";
@@ -30,7 +27,7 @@ function slaPatchToPrisma(patch) {
 }
 
 export async function fetchTicketOrganisationId(ticketId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findUnique({
         where: { id: ticketId },
@@ -41,21 +38,10 @@ export async function fetchTicketOrganisationId(ticketId) {
       console.warn("[SLA] fetchTicketOrgId failed:", ticketId, err?.message || err);
       return null;
     }
-  }
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("organisation_id")
-    .eq("id", ticketId)
-    .maybeSingle();
-  if (error) {
-    console.warn("[SLA] fetchTicketOrgId failed:", ticketId, error.message);
-    return null;
-  }
-  return data?.organisation_id ?? null;
 }
 
 export async function findSlaRowByTicketId(ticketId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.slaTracking.findFirst({
         where: { ticketId },
@@ -65,12 +51,10 @@ export async function findSlaRowByTicketId(ticketId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("sla_tracking").select("id").eq("ticket_id", ticketId).maybeSingle();
 }
 
 export async function insertSlaRow(payload) {
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.slaTracking.create({ data: slaPatchToPrisma(payload) });
       return { error: null };
@@ -79,12 +63,10 @@ export async function insertSlaRow(payload) {
       if (styled.code === "23505") return { error: styled };
       return { error: styled };
     }
-  }
-  return supabase.from("sla_tracking").insert(payload);
 }
 
 export async function updateSlaByTicketId(ticketId, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.slaTracking.updateMany({
         where: { ticketId },
@@ -94,12 +76,10 @@ export async function updateSlaByTicketId(ticketId, patch) {
     } catch (err) {
       return { error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("sla_tracking").update(patch).eq("ticket_id", ticketId);
 }
 
 export async function updateSlaById(slaId, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.slaTracking.update({
         where: { id: slaId },
@@ -109,12 +89,10 @@ export async function updateSlaById(slaId, patch) {
     } catch (err) {
       return { error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("sla_tracking").update(patch).eq("id", slaId);
 }
 
 export async function listSlaRowsForEvaluate() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({
         select: {
@@ -132,16 +110,10 @@ export async function listSlaRowsForEvaluate() {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase
-    .from("sla_tracking")
-    .select(
-      "id, ticket_id, assignment_deadline, onsite_deadline, resolution_deadline, assignment_breached, onsite_breached, resolution_breached"
-    );
 }
 
 export async function listTicketStatusesByIds(ticketIds) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { id: { in: ticketIds } },
@@ -151,12 +123,11 @@ export async function listTicketStatusesByIds(ticketIds) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").select("id, status").in("id", ticketIds);
 }
 
-export async function listSlaRowsScoped(req, { limit, offset, orderDesc = true }) {
-  if (isPrismaDbMode()) {
+export async function listSlaRowsScoped(req, { limit, offset, orderDesc = true
+}) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({
         where: buildPrismaOrgWhere(req),
@@ -168,18 +139,10 @@ export async function listSlaRowsScoped(req, { limit, offset, orderDesc = true }
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase
-    .from("sla_tracking")
-    .select("*")
-    .order("created_at", { ascending: !orderDesc })
-    .range(offset, offset + limit - 1);
-  q = scopeQueryByTenant(q, req);
-  return q;
 }
 
 export async function listSlaBreachesByTicketIdsScoped(req, ticketIds, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({
         where: { ticketId: { in: ticketIds }, ...buildPrismaOrgWhere(req) },
@@ -197,14 +160,35 @@ export async function listSlaBreachesByTicketIdsScoped(req, ticketIds, selectCol
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listSlaRowsByTicketIds(ticketIds, selectCols = "*") {
+  try {
+    const rows = await prisma.slaTracking.findMany({
+      where: { ticketId: { in: ticketIds } },
+    });
+    const data = mapPrismaRowsToSnake(rows);
+    if (selectCols === "*") return { data, error: null };
+    const cols = String(selectCols)
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const filtered = data.map((row) => {
+      /** @type {Record<string, unknown>} */
+      const out = {};
+      for (const col of cols) {
+        if (Object.prototype.hasOwnProperty.call(row, col)) out[col] = row[col];
+      }
+      return out;
+    });
+    return { data: filtered, error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  let q = supabase.from("sla_tracking").select(selectCols).in("ticket_id", ticketIds);
-  q = scopeQueryByTenant(q, req);
-  return q;
 }
 
 export async function listSlaAssignmentDeadlinesByTicketIds(ticketIds) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({
         where: { ticketId: { in: ticketIds } },
@@ -214,38 +198,30 @@ export async function listSlaAssignmentDeadlinesByTicketIds(ticketIds) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("sla_tracking").select("ticket_id, assignment_deadline").in("ticket_id", ticketIds);
 }
 
 export async function listAllSlaTicketIds() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({ select: { ticketId: true } });
       return { data: rows.map((r) => ({ ticket_id: r.ticketId })), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("sla_tracking").select("ticket_id");
 }
 
 export async function listAllSlaRowsScoped(req) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({ where: buildPrismaOrgWhere(req) });
       return { data: mapPrismaRowsToSnake(rows), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("sla_tracking").select("*");
-  q = scopeQueryByTenant(q, req);
-  return q;
 }
 
 export async function listSlaBreachRowsGlobal(limit) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.slaTracking.findMany({
         select: {
@@ -260,9 +236,27 @@ export async function listSlaBreachRowsGlobal(limit) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listSlaByTicketIdsForOrg(organisationId, ticketIds, hasSlaOrgId) {
+  try {
+    const rows = await prisma.slaTracking.findMany({
+      where: {
+        ticketId: { in: ticketIds },
+        ...(hasSlaOrgId ? { organisationId } : {}),
+      },
+      select: {
+        ticketId: true,
+        assignmentBreached: true,
+        onsiteBreached: true,
+        resolutionBreached: true,
+        assignmentDeadline: true,
+        resolutionDeadline: true,
+        ...(hasSlaOrgId ? { organisationId: true } : {}),
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase
-    .from("sla_tracking")
-    .select("ticket_id, assignment_breached, onsite_breached, resolution_breached")
-    .limit(limit + 1);
 }

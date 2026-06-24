@@ -1,8 +1,5 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { scopeQueryByTenant } from "../middleware/tenantContext.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError, toErrorWithCode } from "./db/prismaErrors.js";
 import { buildPrismaOrgWhere } from "./db/tenantScope.js";
@@ -61,10 +58,6 @@ function ticketInsertToPrisma(ticket) {
   return data;
 }
 
-function applySupabaseTenantScope(q, req) {
-  return scopeQueryByTenant(q, req);
-}
-
 function buildListWhere(req, filters = {}) {
   const where = { ...buildPrismaOrgWhere(req) };
   if (req?.isSuperAdmin && filters.organisationIdFilter && !filters.scopeAllOrganisations) {
@@ -80,7 +73,7 @@ function buildListWhere(req, filters = {}) {
 }
 
 export async function findTicketByComplaintId(complaintId, organisationId = null) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findFirst({
         where: {
@@ -93,16 +86,10 @@ export async function findTicketByComplaintId(complaintId, organisationId = null
     } catch (err) {
       throw new Error(`ticketsRepo error: ${err?.message || err}`);
     }
-  }
-  let query = supabase.from("tickets").select("id").eq("complaint_id", complaintId).limit(1);
-  if (organisationId) query = query.eq("organisation_id", organisationId);
-  const { data, error } = await query.single();
-  if (error && error.code !== "PGRST116") throw new Error(`ticketsRepo error: ${error.message}`);
-  return data ?? null;
 }
 
 export async function findTicketByTicketNumber(ticketNumber, organisationId = null) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findFirst({
         where: {
@@ -124,23 +111,13 @@ export async function findTicketByTicketNumber(ticketNumber, organisationId = nu
     } catch {
       return null;
     }
-  }
   const trimmed = String(ticketNumber).trim();
   if (!trimmed) return null;
-  let query = supabase
-    .from("tickets")
-    .select("id, status, complaint_id, vehicle_number, category, issue_type, location, short_description")
-    .eq("ticket_number", trimmed)
-    .limit(1);
-  if (organisationId) query = query.eq("organisation_id", organisationId);
-  const { data, error } = await query.maybeSingle();
-  if (error) return null;
-  return data ?? null;
 }
 
 export async function updateTicketStatus(ticketId, status, organisationId = null) {
   if (!ticketId || !status) return { error: new Error("Missing ticketId or status") };
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.ticket.updateMany({
         where: { id: ticketId, ...(organisationId ? { organisationId } : {}) },
@@ -150,10 +127,6 @@ export async function updateTicketStatus(ticketId, status, organisationId = null
     } catch (err) {
       return { error: toErrorWithCode(err) };
     }
-  }
-  let query = supabase.from("tickets").update({ status }).eq("id", ticketId);
-  if (organisationId) query = query.eq("organisation_id", organisationId);
-  return query;
 }
 
 export async function updateTicketFields(ticketId, fields, organisationId = null) {
@@ -173,7 +146,7 @@ export async function updateTicketFields(ticketId, fields, organisationId = null
     });
     if (!result.ok) return { error: new Error(result.error) };
   }
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.ticket.updateMany({
         where: { id: ticketId, ...(organisationId ? { organisationId } : {}) },
@@ -183,28 +156,21 @@ export async function updateTicketFields(ticketId, fields, organisationId = null
     } catch (err) {
       return { error: toErrorWithCode(err) };
     }
-  }
-  let query = supabase.from("tickets").update(patch).eq("id", ticketId);
-  if (organisationId) query = query.eq("organisation_id", organisationId);
-  return query;
 }
 
 export async function insertTicket(ticket) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.create({ data: ticketInsertToPrisma(ticket) });
       return mapPrismaRowToSnake(row);
     } catch (err) {
       throw new Error(`Ticket insert failed: ${err?.message || err}`);
     }
-  }
-  const { data, error } = await supabase.from("tickets").insert(ticket).select().single();
-  if (error) throw new Error(`Ticket insert failed: ${error.message}`);
-  return data;
 }
 
-export async function listTicketsScoped(req, { limit, offset, filters = {} }) {
-  if (isPrismaDbMode()) {
+export async function listTicketsScoped(req, { limit, offset, filters = {}
+}) {
+  
     try {
       const where = buildListWhere(req, filters);
       let rows = await prisma.ticket.findMany({
@@ -233,37 +199,10 @@ export async function listTicketsScoped(req, { limit, offset, filters = {} }) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("*").order("created_at", { ascending: false });
-  if (!req.isSuperAdmin) {
-    q = applySupabaseTenantScope(q, req);
-  } else if (!filters.scopeAllOrganisations && filters.organisationIdFilter) {
-    q = q.eq("organisation_id", filters.organisationIdFilter);
-  }
-  if (filters.status && filters.status !== "all") q = q.eq("status", filters.status);
-  if (filters.clientSlug) q = q.eq("client_slug", filters.clientSlug);
-  if (filters.stateFilter) q = q.eq("state", filters.stateFilter);
-  if (filters.startDate) q = q.gte("opened_at", filters.startDate);
-  if (filters.endDate) q = q.lte("opened_at", filters.endDate);
-  if (filters.unassignedOnly) q = q.is("current_assignment_id", null);
-  if (filters.search) {
-    const s = String(filters.search).replace(/%/g, "\\%").replace(/_/g, "\\_");
-    q = q.or(
-      [
-        `ticket_number.ilike.%${s}%`,
-        `vehicle_number.ilike.%${s}%`,
-        `location.ilike.%${s}%`,
-        `state.ilike.%${s}%`,
-        `complaint_id.ilike.%${s}%`,
-      ].join(",")
-    );
-  }
-  q = q.range(offset, offset + limit - 1);
-  return q;
 }
 
 export async function getTicketByIdScoped(req, id, select = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findFirst({
         where: { id, ...buildPrismaOrgWhere(req) },
@@ -272,22 +211,16 @@ export async function getTicketByIdScoped(req, id, select = "*") {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select(select).eq("id", id);
-  q = applySupabaseTenantScope(q, req);
-  return q.maybeSingle();
 }
 
 export async function getTicketByIdScopedSingle(req, id, select) {
-  const res = await getTicketByIdScoped(req, id, select);
-  if (isPrismaDbMode()) return res;
-  return res;
+  return getTicketByIdScoped(req, id, select);
 }
 
 export async function getTicketByIdForAssign(req, ticketId) {
   const select =
     "id, ticket_number, vehicle_number, location, status, organisation_id, client_slug, state, current_assignment_id";
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findFirst({
         where: { id: ticketId, ...buildPrismaOrgWhere(req) },
@@ -297,15 +230,10 @@ export async function getTicketByIdForAssign(req, ticketId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return applySupabaseTenantScope(
-    supabase.from("tickets").select(select).eq("id", ticketId),
-    req
-  ).single();
 }
 
 export async function getTicketsByIdsScoped(req, ids, select = "id, ticket_number, status, organisation_id") {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { id: { in: ids }, ...buildPrismaOrgWhere(req) },
@@ -314,12 +242,10 @@ export async function getTicketsByIdsScoped(req, ids, select = "id, ticket_numbe
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return applySupabaseTenantScope(supabase.from("tickets").select(select).in("id", ids), req);
 }
 
 export async function updateTicketById(id, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.update({
         where: { id },
@@ -329,8 +255,6 @@ export async function updateTicketById(id, patch) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").update(patch).eq("id", id).select("*").single();
 }
 
 export async function updateTicketAssignState(id, patch) {
@@ -346,7 +270,7 @@ export async function setTicketAssigned(id, assignmentId) {
 }
 
 export async function listTicketsByIds(ids, req) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { id: { in: ids }, ...buildPrismaOrgWhere(req) },
@@ -355,14 +279,10 @@ export async function listTicketsByIds(ids, req) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("*").in("id", ids);
-  q = applySupabaseTenantScope(q, req);
-  return q;
 }
 
 export async function listClientSlugsScoped(req, organisationIdFilter) {
-  if (isPrismaDbMode()) {
+  
     try {
       const where = { clientSlug: { not: null }, ...buildPrismaOrgWhere(req) };
       if (req?.isSuperAdmin && organisationIdFilter) where.organisationId = organisationIdFilter;
@@ -374,15 +294,10 @@ export async function listClientSlugsScoped(req, organisationIdFilter) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("client_slug").not("client_slug", "is", null);
-  if (!req.isSuperAdmin) q = applySupabaseTenantScope(q, req);
-  else if (organisationIdFilter) q = q.eq("organisation_id", organisationIdFilter);
-  return q;
 }
 
 export async function listTenantInsightsTickets(organisationId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { organisationId },
@@ -392,12 +307,10 @@ export async function listTenantInsightsTickets(organisationId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").select("client_slug, status").eq("organisation_id", organisationId);
 }
 
 export async function countResolvedTicketsScoped(req) {
-  if (isPrismaDbMode()) {
+  
     try {
       const count = await prisma.ticket.count({
         where: { status: "RESOLVED", ...buildPrismaOrgWhere(req) },
@@ -406,15 +319,10 @@ export async function countResolvedTicketsScoped(req) {
     } catch (err) {
       return { count: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return applySupabaseTenantScope(
-    supabase.from("tickets").select("id", { count: "exact", head: true }).eq("status", "RESOLVED"),
-    req
-  );
 }
 
 export async function listTicketOrgStatsRows(limit, req) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: buildPrismaOrgWhere(req),
@@ -425,14 +333,11 @@ export async function listTicketOrgStatsRows(limit, req) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("id, organisation_id, status, client_slug").limit(limit + 1);
-  q = applySupabaseTenantScope(q, req);
-  return q;
 }
 
-export async function listAllTicketsScoped(req, { orderDesc = true, limit } = {}) {
-  if (isPrismaDbMode()) {
+export async function listAllTicketsScoped(req, { orderDesc = true, limit
+} = {}) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: buildPrismaOrgWhere(req),
@@ -443,15 +348,10 @@ export async function listAllTicketsScoped(req, { orderDesc = true, limit } = {}
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("*").order("created_at", { ascending: !orderDesc });
-  if (limit) q = q.limit(limit);
-  q = applySupabaseTenantScope(q, req);
-  return q;
 }
 
 export async function listDistinctClientSlugsGlobal(limit) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { clientSlug: { not: null } },
@@ -462,8 +362,6 @@ export async function listDistinctClientSlugsGlobal(limit) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").select("client_slug").limit(limit);
 }
 
 export async function getTicketOrgCheckScoped(req, id) {
@@ -471,19 +369,85 @@ export async function getTicketOrgCheckScoped(req, id) {
 }
 
 export async function getTicketByIdUnscoped(id, select = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findUnique({ where: { id } });
-      return { data: mapPrismaRowToSnake(row), error: null };
+      if (!row) return { data: null, error: null };
+      const mapped = mapPrismaRowToSnake(row);
+      if (select === "*") return { data: mapped, error: null };
+      const cols = String(select)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      /** @type {Record<string, unknown>} */
+      const filtered = {};
+      for (const col of cols) {
+        if (Object.prototype.hasOwnProperty.call(mapped, col)) filtered[col] = mapped[col];
+      }
+      return { data: filtered, error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function getTicketByIdUnscopedSingle(id, select = "*") {
+  return getTicketByIdUnscoped(id, select);
+}
+
+export async function searchTicketIdsByNumberIlike(req, pattern, limit = 200) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        ticketNumber: { contains: String(pattern).replace(/%/g, ""), mode: "insensitive" },
+        ...buildPrismaOrgWhere(req),
+      },
+      select: { id: true },
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("tickets").select(select).eq("id", id).maybeSingle();
+}
+
+export async function getTicketsMetaByIds(ids) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, ticketNumber: true, status: true, organisationId: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listOnSiteTicketsForWorker({ limit = 50, tenantId = null } = {}) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        status: "ON_SITE",
+        ...(tenantId ? { organisationId: tenantId } : {}),
+      },
+      select: {
+        id: true,
+        ticketNumber: true,
+        currentAssignmentId: true,
+        location: true,
+        vehicleNumber: true,
+        organisationId: true,
+      },
+      orderBy: { updatedAt: "asc" },
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }
 
 export async function getTicketStatusById(ticketId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.ticket.findUnique({
         where: { id: ticketId },
@@ -493,12 +457,10 @@ export async function getTicketStatusById(ticketId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").select("status").eq("id", ticketId).single();
 }
 
 export async function getTicketsMetaByIdsScoped(req, ids) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { id: { in: ids }, ...buildPrismaOrgWhere(req) },
@@ -508,13 +470,6 @@ export async function getTicketsMetaByIdsScoped(req, ids) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase
-    .from("tickets")
-    .select("id, organisation_id, opened_at, created_at")
-    .in("id", ids);
-  q = applySupabaseTenantScope(q, req);
-  return q;
 }
 
 function isCloseColumnError(error) {
@@ -535,7 +490,7 @@ export async function updateTicketCloseWithFallback(ticketId, fullPayload, fallb
 }
 
 export async function reviewCompleteTicketScoped(req, ticketId, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       const existing = await prisma.ticket.findFirst({
         where: { id: ticketId, ...buildPrismaOrgWhere(req) },
@@ -551,11 +506,6 @@ export async function reviewCompleteTicketScoped(req, ticketId, patch) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return applySupabaseTenantScope(
-    supabase.from("tickets").update(patch).eq("id", ticketId).select("*, organisation_id"),
-    req
-  ).single();
 }
 
 function buildDashboardTicketWhere(req, filters) {
@@ -574,7 +524,7 @@ function buildDashboardTicketWhere(req, filters) {
 }
 
 export async function listTicketsForDashboardStats(req, filters, maxScan) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: buildDashboardTicketWhere(req, filters),
@@ -594,26 +544,10 @@ export async function listTicketsForDashboardStats(req, filters, maxScan) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase
-    .from("tickets")
-    .select(
-      "id, status, confidence_score, created_at, opened_at, updated_at, resolved_at, current_assignment_id"
-    );
-  if (!req.isSuperAdmin) {
-    q = applySupabaseTenantScope(q, req);
-  } else if (filters.organisationIdOverride) {
-    q = q.eq("organisation_id", filters.organisationIdOverride);
-  }
-  if (filters.clientSlug) q = q.eq("client_slug", filters.clientSlug);
-  if (filters.stateFilter) q = q.eq("state", filters.stateFilter);
-  if (filters.startDate) q = q.gte("opened_at", filters.startDate);
-  if (filters.endDate) q = q.lte("opened_at", filters.endDate);
-  return q.limit(maxScan + 1);
 }
 
 export async function countResolvedTicketsWithDateFilter(req, filters) {
-  if (isPrismaDbMode()) {
+  
     try {
       const where = {
         status: "RESOLVED",
@@ -630,22 +564,10 @@ export async function countResolvedTicketsWithDateFilter(req, filters) {
     } catch (err) {
       return { count: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("tickets").select("id", { count: "exact", head: true }).eq("status", "RESOLVED");
-  if (!req.isSuperAdmin) {
-    q = applySupabaseTenantScope(q, req);
-  } else if (filters.organisationIdOverride) {
-    q = q.eq("organisation_id", filters.organisationIdOverride);
-  }
-  if (filters.clientSlug) q = q.eq("client_slug", filters.clientSlug);
-  if (filters.stateFilter) q = q.eq("state", filters.stateFilter);
-  if (filters.startDate) q = q.gte("resolved_at", filters.startDate);
-  if (filters.endDate) q = q.lte("resolved_at", filters.endDate);
-  return q;
 }
 
 export async function listTicketClientSlugsGlobal() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.ticket.findMany({
         where: { clientSlug: { not: null } },
@@ -655,12 +577,10 @@ export async function listTicketClientSlugsGlobal() {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tickets").select("client_slug");
 }
 
 export async function listTicketsForAnalyticsSummary(req, filters) {
-  if (isPrismaDbMode()) {
+  
     try {
       const where = buildDashboardTicketWhere(req, filters);
       const rows = await prisma.ticket.findMany({
@@ -671,12 +591,144 @@ export async function listTicketsForAnalyticsSummary(req, filters) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listTicketsCreatedInWindowForOrg(organisationId, windowStart, windowEnd) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        organisationId,
+        createdAt: { gte: windowStart, lte: windowEnd },
+      },
+      select: { id: true, createdAt: true, openedAt: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  let q = supabase.from("tickets").select("*").order("created_at", { ascending: false });
-  q = applySupabaseTenantScope(q, req);
-  if (filters.clientSlug) q = q.eq("client_slug", filters.clientSlug);
-  if (filters.stateFilter) q = q.eq("state", filters.stateFilter);
-  if (filters.startDate) q = q.gte("opened_at", filters.startDate);
-  if (filters.endDate) q = q.lte("opened_at", filters.endDate);
-  return q;
+}
+
+export async function listTicketsUpdatedInWindowForOrg(organisationId, windowStart, windowEnd) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        organisationId,
+        updatedAt: { gte: windowStart, lte: windowEnd },
+      },
+      select: { id: true, updatedAt: true, createdAt: true, status: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listTicketsResolvedInWindowForOrg(organisationId, windowStart, windowEnd) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        organisationId,
+        resolvedAt: { gte: windowStart, lte: windowEnd },
+      },
+      select: { id: true, resolvedAt: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listResolvedTicketsForFeStats(
+  organisationId,
+  windowStart,
+  windowEnd,
+  hasResolvedAt
+) {
+  try {
+    if (hasResolvedAt) {
+      const rows = await prisma.ticket.findMany({
+        where: {
+          organisationId,
+          resolvedAt: { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true,
+          resolvedAt: true,
+          currentAssignmentId: true,
+          organisationId: true,
+        },
+      });
+      return { data: mapPrismaRowsToSnake(rows), error: null };
+    }
+    const rows = await prisma.ticket.findMany({
+      where: {
+        organisationId,
+        status: "RESOLVED",
+        updatedAt: { gte: windowStart, lte: windowEnd },
+      },
+      select: {
+        id: true,
+        updatedAt: true,
+        currentAssignmentId: true,
+        organisationId: true,
+        status: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listTicketIdsByOrgAndIds(organisationId, ids) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: { organisationId, id: { in: ids } },
+      select: { id: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+function buildDailyReportTicketSelect(schemaFlags) {
+  const select = {
+    id: true,
+    ticketNumber: true,
+    complaintId: true,
+    vehicleNumber: true,
+    category: true,
+    issueType: true,
+    priority: true,
+    priorityLevel: true,
+    status: true,
+    location: true,
+    openedByEmail: true,
+    openedAt: true,
+    createdAt: true,
+    updatedAt: true,
+    verificationRemarks: true,
+    clientSlug: true,
+    source: true,
+    needsReview: true,
+    currentAssignmentId: true,
+    organisationId: true,
+  };
+  if (schemaFlags.hasResolvedAt) select.resolvedAt = true;
+  if (schemaFlags.hasReviewNotes) select.reviewNotes = true;
+  if (schemaFlags.hasResolutionCategory) select.resolutionCategory = true;
+  return select;
+}
+
+export async function listTicketsByIdsForDailyReport(organisationId, ticketIds, schemaFlags) {
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: { organisationId, id: { in: ticketIds } },
+      select: buildDailyReportTicketSelect(schemaFlags),
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }

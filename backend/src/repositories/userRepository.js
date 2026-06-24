@@ -1,7 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { scopeQueryByTenant } from "../middleware/tenantContext.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 import { buildPrismaOrgWhere } from "./db/tenantScope.js";
@@ -30,7 +27,7 @@ function userPatchToPrisma(patch) {
 
 export async function findAppUserByAuthId(authId) {
   const select = "id, role, is_active, active, organisation_id, name, email";
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findFirst({
         where: { authId },
@@ -48,13 +45,11 @@ export async function findAppUserByAuthId(authId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(select).eq("auth_id", authId).maybeSingle();
 }
 
 export async function findTenantContextUserByAuthId(authId) {
   const select = "id, role, organisation_id, is_active, active";
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findFirst({
         where: { authId },
@@ -70,49 +65,40 @@ export async function findTenantContextUserByAuthId(authId) {
     } catch {
       return null;
     }
-  }
-  const { data } = await supabase.from("users").select(select).eq("auth_id", authId).maybeSingle();
-  return data ?? null;
 }
 
 export async function findUserByAuthId(authId, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findFirst({ where: { authId } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(selectCols).eq("auth_id", authId).maybeSingle();
 }
 
 export async function findUserByEmail(email, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findUnique({ where: { email: String(email) } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(selectCols).eq("email", email).maybeSingle();
 }
 
 export async function findUserById(userId, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findUnique({ where: { id: userId } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(selectCols).eq("id", userId).maybeSingle();
 }
 
 export async function findUserNameById(userId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findUnique({
         where: { id: userId },
@@ -122,24 +108,20 @@ export async function findUserNameById(userId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select("name").eq("id", userId).maybeSingle();
 }
 
 export async function insertUser(payload) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.create({ data: userPatchToPrisma(payload) });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").insert(payload).select("*").single();
 }
 
 export async function updateUserById(userId, patch, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.update({
         where: { id: userId },
@@ -149,8 +131,6 @@ export async function updateUserById(userId, patch, selectCols = "*") {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").update(patch).eq("id", userId).select(selectCols).single();
 }
 
 export async function updateUserAuthIdById(userId, authId, selectCols = "*") {
@@ -158,37 +138,25 @@ export async function updateUserAuthIdById(userId, authId, selectCols = "*") {
 }
 
 export async function listUsersScoped(req, { limit, offset, organisationId, approvalStatus, role }) {
-  if (isPrismaDbMode()) {
-    try {
-      const where = { ...buildPrismaOrgWhere(req) };
-      if (req?.isSuperAdmin && organisationId) where.organisationId = organisationId;
-      if (approvalStatus) where.approvalStatus = approvalStatus;
-      if (role) where.role = role;
-      const rows = await prisma.user.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        skip: offset,
-        take: limit,
-      });
-      return { data: mapPrismaRowsToSnake(rows), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const where = { ...buildPrismaOrgWhere(req) };
+    if (req?.isSuperAdmin && organisationId) where.organisationId = organisationId;
+    if (approvalStatus) where.approvalStatus = approvalStatus;
+    if (role) where.role = role;
+    const rows = await prisma.user.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: offset,
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  let q = supabase.from("users").select("*").order("created_at", { ascending: false });
-  if (!req.isSuperAdmin) {
-    q = scopeQueryByTenant(q, req);
-  } else if (organisationId) {
-    q = q.eq("organisation_id", organisationId);
-  }
-  if (approvalStatus) q = q.eq("approval_status", approvalStatus);
-  if (role) q = q.eq("role", role);
-  q = q.range(offset, offset + limit - 1);
-  return q;
 }
 
 export async function listUsersOrganisationIds(limit) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.user.findMany({
         select: { organisationId: true },
@@ -198,24 +166,20 @@ export async function listUsersOrganisationIds(limit) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select("organisation_id").limit(limit + 1);
 }
 
 export async function countUsersGlobal() {
-  if (isPrismaDbMode()) {
+  
     try {
       const count = await prisma.user.count();
       return { count, error: null };
     } catch (err) {
       return { count: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select("id", { count: "exact", head: true });
 }
 
 export async function findUsersByEmails(emails, selectCols = "email, name") {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.user.findMany({
         where: { email: { in: emails } },
@@ -225,12 +189,10 @@ export async function findUsersByEmails(emails, selectCols = "email, name") {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(selectCols).in("email", emails);
 }
 
 export async function findUsersByIds(ids, selectCols = "id, name, email") {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.user.findMany({
         where: { id: { in: ids } },
@@ -240,14 +202,12 @@ export async function findUsersByIds(ids, selectCols = "id, name, email") {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(selectCols).in("id", ids);
 }
 
 export async function findMeProfileByAuthId(authId) {
   const select =
     "id, name, email, role, active, is_active, client_slug, organisation_id, approval_status, created_at";
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findFirst({
         where: { authId },
@@ -268,18 +228,97 @@ export async function findMeProfileByAuthId(authId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("users").select(select).eq("auth_id", authId).maybeSingle();
 }
 
 export async function findUserByEmailForLookup(email) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.user.findUnique({ where: { email: String(email) } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listTenantAdminUsers(organisationId) {
+  try {
+    const rows = await prisma.user.findMany({
+      where: { organisationId, role: "ADMIN" },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        organisationId: true,
+        active: true,
+        isActive: true,
+        approvalStatus: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("users").select("name, email").eq("email", email).maybeSingle();
+}
+
+export async function findUserOrganisationIdByEmail(email) {
+  try {
+    const row = await prisma.user.findFirst({
+      where: { email: String(email), organisationId: { not: null } },
+      select: { organisationId: true },
+    });
+    return { data: row ? { organisation_id: row.organisationId } : null, error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listClientUsersByOrganisation(organisationId) {
+  try {
+    const rows = await prisma.user.findMany({
+      where: { organisationId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        active: true,
+        clientSlug: true,
+        organisationId: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listUsersByRole(role, selectCols = "id, email, organisation_id, role") {
+  try {
+    const rows = await prisma.user.findMany({
+      where: { role },
+      select: {
+        id: true,
+        email: true,
+        organisationId: true,
+        role: true,
+      },
+    });
+    if (selectCols === "*") return { data: mapPrismaRowsToSnake(rows), error: null };
+    const cols = String(selectCols)
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const data = mapPrismaRowsToSnake(rows).map((row) => {
+      /** @type {Record<string, unknown>} */
+      const filtered = {};
+      for (const col of cols) {
+        if (Object.prototype.hasOwnProperty.call(row, col)) filtered[col] = row[col];
+      }
+      return filtered;
+    });
+    return { data, error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }

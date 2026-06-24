@@ -1,6 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 
@@ -26,19 +24,17 @@ function configPatchToPrisma(patch) {
 }
 
 export async function getConfigurationByKey(key) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.configuration.findUnique({ where: { key } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").select("key, value, updated_at").eq("key", key).maybeSingle();
 }
 
 export async function configurationKeyExists(key) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.configuration.findUnique({
         where: { key },
@@ -48,12 +44,10 @@ export async function configurationKeyExists(key) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").select("key").eq("key", key).maybeSingle();
 }
 
 export async function listConfigurationsByKeys(keys) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.configuration.findMany({
         where: { key: { in: keys } },
@@ -63,12 +57,10 @@ export async function listConfigurationsByKeys(keys) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").select("key, value").in("key", keys);
 }
 
 export async function listAllConfigurations(limit = 500) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.configuration.findMany({
         orderBy: { key: "asc" },
@@ -78,8 +70,6 @@ export async function listAllConfigurations(limit = 500) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").select("*").order("key", { ascending: true }).limit(limit);
 }
 
 export async function listSlaConfigurationKeys(keys) {
@@ -87,7 +77,7 @@ export async function listSlaConfigurationKeys(keys) {
 }
 
 export async function updateConfigurationByKey(key, value, updatedAt) {
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.configuration.update({
         where: { key },
@@ -97,12 +87,10 @@ export async function updateConfigurationByKey(key, value, updatedAt) {
     } catch (err) {
       return { error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").update({ value, updated_at: updatedAt }).eq("key", key);
 }
 
 export async function insertConfiguration(key, value, updatedAt) {
-  if (isPrismaDbMode()) {
+  
     try {
       await prisma.configuration.create({
         data: { key, value, updatedAt: new Date(String(updatedAt)) },
@@ -111,8 +99,6 @@ export async function insertConfiguration(key, value, updatedAt) {
     } catch (err) {
       return { error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("configurations").insert({ key, value, updated_at: updatedAt });
 }
 
 export async function upsertConfiguration(key, value, updatedAt) {

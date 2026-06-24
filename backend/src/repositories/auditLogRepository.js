@@ -1,8 +1,117 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { isPrismaDbMode } from "./db/mode.js";
+import { hasPublicColumn } from "../services/schemaCompatService.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
+import { buildPrismaOrgWhere } from "./db/tenantScope.js";
+import { searchTicketIdsByNumberIlike } from "./ticketQueryRepository.js";
+import { findOrganisationIdBySlug as findOrgIdBySlugRepo } from "./organisationRepository.js";
+
+const AUDIT_SORT_SNAKE_TO_CAMEL = {
+  created_at: "createdAt",
+  action: "action",
+  entity_type: "entityType",
+};
+
+let auditOrgColumnCache = null;
+
+async function auditLogsHaveOrganisationId() {
+  if (auditOrgColumnCache == null) {
+    auditOrgColumnCache = await hasPublicColumn("audit_logs", "organisation_id");
+  }
+  return auditOrgColumnCache;
+}
+
+function buildAuditTicketNumberWhere(ticketIds) {
+  if (!ticketIds?.length) {
+    return { entityType: "__no_match__" };
+  }
+  return {
+    OR: [
+      { entityType: "ticket", entityId: { in: ticketIds } },
+      ...ticketIds.map((id) => ({
+        metadata: { path: ["ticket_id"], equals: id },
+      })),
+    ],
+  };
+}
+
+async function buildAuditLogsPrismaWhere(req, filters) {
+  /** @type {import('@prisma/client').Prisma.AuditLogWhereInput} */
+  const where = {};
+
+  if (req?.isSuperAdmin && filters.organisationId) {
+    where.organisationId = filters.organisationId;
+  } else if (!req?.isSuperAdmin) {
+    const hasOrgCol = await auditLogsHaveOrganisationId();
+    if (hasOrgCol) {
+      Object.assign(where, buildPrismaOrgWhere(req));
+    } else if (req?.tenantId) {
+      const { data: tickets } = await listTicketIdsByOrganisation(req.tenantId, 5000);
+      const ticketIds = (tickets || []).map((t) => t.id).filter(Boolean);
+      if (!ticketIds.length) {
+        where.entityType = "__no_tickets__";
+      } else {
+        const { data: assignments } = await listAssignmentIdsByTicketIds(ticketIds, 5000);
+        const assignmentIds = (assignments || []).map((a) => a.id).filter(Boolean);
+        where.OR = [
+          { entityType: "ticket", entityId: { in: ticketIds } },
+          ...(assignmentIds.length
+            ? [{ entityType: "assignment", entityId: { in: assignmentIds } }]
+            : []),
+        ];
+      }
+    } else {
+      where.entityType = "__no_tenant__";
+    }
+  }
+
+  if (filters.entityType && filters.entityType !== "all") where.entityType = filters.entityType;
+  if (filters.action && filters.action !== "all") where.action = filters.action;
+  if (filters.dateFrom || filters.dateTo) {
+    where.createdAt = {};
+    if (filters.dateFrom) where.createdAt.gte = new Date(filters.dateFrom);
+    if (filters.dateTo) where.createdAt.lte = new Date(filters.dateTo);
+  }
+  if (filters.actorUserId) where.actorUserId = filters.actorUserId;
+  if (filters.actorFeId) where.actorFeId = filters.actorFeId;
+
+  if (filters.ticketNumber) {
+    const pattern = `%${String(filters.ticketNumber).trim()}%`;
+    const { data: ticketRows, error } = await searchTicketIdsByNumberIlike(req, pattern, 200);
+    if (error) throw error;
+    const ticketIds = (ticketRows || []).map((t) => t.id).filter(Boolean);
+    const ticketFilter = buildAuditTicketNumberWhere(ticketIds);
+    where.AND = [...(where.AND ? /** @type {unknown[]} */ (where.AND) : []), ticketFilter];
+  }
+
+  return where;
+}
+
+/**
+ * Paginated audit log list with tenant scope and filters.
+ */
+export async function listAuditLogsPaginated(
+  req,
+  filters,
+  { limit, offset, sortColumn = "created_at", ascending = false }
+) {
+  const column = AUDIT_SORT_SNAKE_TO_CAMEL[sortColumn] ? sortColumn : "created_at";
+  const orderAsc = Boolean(ascending);
+
+  try {
+    const where = await buildAuditLogsPrismaWhere(req, filters);
+    const orderField = AUDIT_SORT_SNAKE_TO_CAMEL[column] || "createdAt";
+    const rows = await prisma.auditLog.findMany({
+      where,
+      orderBy: { [orderField]: orderAsc ? "asc" : "desc" },
+      skip: offset,
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
 
 function auditRowToPrismaCreate(row) {
   return {
@@ -21,18 +130,13 @@ function auditRowToPrismaCreate(row) {
 }
 
 export async function insertAuditLogRow(row) {
-  if (isPrismaDbMode()) {
-    try {
-      await prisma.auditLog.create({ data: auditRowToPrismaCreate(row) });
-      return { error: null };
-    } catch (err) {
-      return { error: toSupabaseStyleError(err) };
-    }
+  try {
+    await prisma.auditLog.create({ data: auditRowToPrismaCreate(row) });
+    return { error: null };
+  } catch (err) {
+    return { error: toSupabaseStyleError(err) };
   }
-  return supabase.from("audit_logs").insert(row);
 }
-
-import { findOrganisationIdBySlug as findOrgIdBySlugRepo } from "./organisationRepository.js";
 
 export async function findOrganisationIdBySlug(slug) {
   const { data, error } = await findOrgIdBySlugRepo(slug);
@@ -41,91 +145,70 @@ export async function findOrganisationIdBySlug(slug) {
 }
 
 export async function listTicketIdsByOrganisation(organisationId, limit = 5000) {
-  if (isPrismaDbMode()) {
-    try {
-      const rows = await prisma.ticket.findMany({
-        where: { organisationId },
-        select: { id: true },
-        take: limit,
-      });
-      return { data: rows.map((r) => ({ id: r.id })), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const rows = await prisma.ticket.findMany({
+      where: { organisationId },
+      select: { id: true },
+      take: limit,
+    });
+    return { data: rows.map((r) => ({ id: r.id })), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("tickets").select("id").eq("organisation_id", organisationId).limit(limit);
 }
 
 export async function listAssignmentIdsByTicketIds(ticketIds, limit = 5000) {
-  if (isPrismaDbMode()) {
-    try {
-      const rows = await prisma.ticketAssignment.findMany({
-        where: { ticketId: { in: ticketIds } },
-        select: { id: true },
-        take: limit,
-      });
-      return { data: rows.map((r) => ({ id: r.id })), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const rows = await prisma.ticketAssignment.findMany({
+      where: { ticketId: { in: ticketIds } },
+      select: { id: true },
+      take: limit,
+    });
+    return { data: rows.map((r) => ({ id: r.id })), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("ticket_assignments").select("id").in("ticket_id", ticketIds).limit(limit);
 }
 
 export async function listTicketsForAuditBackfill(limit) {
-  if (isPrismaDbMode()) {
-    try {
-      const rows = await prisma.ticket.findMany({
-        select: {
-          id: true,
-          ticketNumber: true,
-          status: true,
-          organisationId: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-        orderBy: { createdAt: "desc" },
-        take: limit,
-      });
-      return {
-        data: mapPrismaRowsToSnake(rows),
-        error: null,
-      };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const rows = await prisma.ticket.findMany({
+      select: {
+        id: true,
+        ticketNumber: true,
+        status: true,
+        organisationId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return {
+      data: mapPrismaRowsToSnake(rows),
+      error: null,
+    };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase
-    .from("tickets")
-    .select("id, ticket_number, status, organisation_id, created_at, updated_at")
-    .order("created_at", { ascending: false })
-    .limit(limit);
 }
 
 export async function listAssignmentsForAuditBackfill(ticketIds, limit) {
-  if (isPrismaDbMode()) {
-    try {
-      const rows = await prisma.ticketAssignment.findMany({
-        where: { ticketId: { in: ticketIds } },
-        select: {
-          id: true,
-          ticketId: true,
-          feId: true,
-          assignedAt: true,
-          organisationId: true,
-        },
-        orderBy: { assignedAt: "desc" },
-        take: limit,
-      });
-      return { data: mapPrismaRowsToSnake(rows), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const rows = await prisma.ticketAssignment.findMany({
+      where: { ticketId: { in: ticketIds } },
+      select: {
+        id: true,
+        ticketId: true,
+        feId: true,
+        assignedAt: true,
+        organisationId: true,
+      },
+      orderBy: { assignedAt: "desc" },
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase
-    .from("ticket_assignments")
-    .select("id, ticket_id, fe_id, assigned_at, organisation_id")
-    .in("ticket_id", ticketIds)
-    .order("assigned_at", { ascending: false })
-    .limit(limit);
 }

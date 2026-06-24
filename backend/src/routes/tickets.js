@@ -1,5 +1,4 @@
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { TOKEN_STATES, revokeTokensForTicket } from "../services/tokenService.js";
 import { sendResolutionEmail } from "../services/emailService.js";
 import { setOnsiteDeadline } from "../services/slaService.js";

@@ -1,6 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 
@@ -34,8 +32,9 @@ function tenantClientPatchToPrisma(patch) {
   return data;
 }
 
-export async function listTenantClientsQuery({ isSuperAdmin, tenantId, organisationIdFilter, statusFilter, activeOnly }) {
-  if (isPrismaDbMode()) {
+export async function listTenantClientsQuery({ isSuperAdmin, tenantId, organisationIdFilter, statusFilter, activeOnly
+}) {
+  
     try {
       /** @type {import('@prisma/client').Prisma.TenantClientWhereInput} */
       const where = {};
@@ -58,38 +57,20 @@ export async function listTenantClientsQuery({ isSuperAdmin, tenantId, organisat
     } catch (err) {
       return { data: [], error: toSupabaseStyleError(err) };
     }
-  }
-
-  let q = supabase.from("tenant_clients").select("*").order("name", { ascending: true });
-  if (!isSuperAdmin) {
-    if (!tenantId) return { data: [], error: null };
-    q = q.eq("organisation_id", tenantId);
-  } else if (organisationIdFilter) {
-    q = q.eq("organisation_id", organisationIdFilter);
-  }
-  if (statusFilter) {
-    q = q.eq("status", statusFilter);
-  } else if (activeOnly) {
-    q = q.eq("status", "active");
-  }
-  const { data, error } = await q;
-  return { data: data ?? [], error };
 }
 
 export async function getTenantClientByIdRow(id) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.tenantClient.findUnique({ where: { id } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tenant_clients").select("*").eq("id", id).maybeSingle();
 }
 
 export async function insertTenantClientRow(insert) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.tenantClient.create({
         data: tenantClientInsertToPrisma(insert),
@@ -98,12 +79,10 @@ export async function insertTenantClientRow(insert) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tenant_clients").insert(insert).select("*").single();
 }
 
 export async function updateTenantClientRow(id, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.tenantClient.update({
         where: { id },
@@ -113,11 +92,10 @@ export async function updateTenantClientRow(id, patch) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("tenant_clients").update(patch).eq("id", id).select("*").single();
 }
 
-export async function loadActiveTenantClientSlugs({ isSuperAdmin, tenantId }) {
+export async function loadActiveTenantClientSlugs({ isSuperAdmin, tenantId
+}) {
   const { data, error } = await listTenantClientsQuery({
     isSuperAdmin,
     tenantId,
@@ -127,4 +105,37 @@ export async function loadActiveTenantClientSlugs({ isSuperAdmin, tenantId }) {
   });
   if (error) throw new Error(error.message);
   return data ?? [];
+}
+
+export async function listTenantClientsByOrganisationId(organisationId) {
+  try {
+    const rows = await prisma.tenantClient.findMany({
+      where: { organisationId },
+      select: {
+        slug: true,
+        contactName: true,
+        contactEmail: true,
+        contactPhone: true,
+        organisationId: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function findActiveTenantClientBySlug(slug, organisationId = null) {
+  try {
+    const row = await prisma.tenantClient.findFirst({
+      where: {
+        slug,
+        status: "active",
+        ...(organisationId ? { organisationId } : {}),
+      },
+    });
+    return { data: mapPrismaRowToSnake(row), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }

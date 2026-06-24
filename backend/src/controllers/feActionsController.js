@@ -1,7 +1,7 @@
-import { supabase } from "../supabaseClient.js";
 import { jsonRes, jsonOk, safeDbErrorForClient } from "../utils/http.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
 import { getFeActionTokenByIdSingle } from "../repositories/feActionTokenRepository.js";
+import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
 
 export async function validateFeActionToken(req, res) {
   try {
@@ -28,11 +28,10 @@ export async function validateFeActionToken(req, res) {
     }
 
     // 🔥 FOR DEMO: fetch ticket separately without lifecycle enforcement
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("id, ticket_number, status, organisation_id")
-      .eq("id", actionToken.ticket_id)
-      .single();
+    const { data: ticket } = await getTicketByIdUnscopedSingle(
+      actionToken.ticket_id,
+      "id, ticket_number, status, organisation_id"
+    );
 
     if (ticket?.status === "REJECTED") {
       return jsonRes(res, 403, { error: "Ticket has been rejected" });

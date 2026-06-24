@@ -1,7 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { scopeQueryByTenant } from "../middleware/tenantContext.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 import { buildPrismaOrgWhere } from "./db/tenantScope.js";
@@ -28,19 +25,17 @@ function fePatchToPrisma(patch) {
 }
 
 export async function insertFieldExecutive(payload) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.create({ data: fePatchToPrisma(payload) });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").insert(payload).select("*").single();
 }
 
 export async function getFieldExecutiveOrgByIdScoped(req, id) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findFirst({
         where: { id, ...buildPrismaOrgWhere(req) },
@@ -50,14 +45,10 @@ export async function getFieldExecutiveOrgByIdScoped(req, id) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select("id, organisation_id").eq("id", id);
-  q = scopeQueryByTenant(q, req);
-  return q.maybeSingle();
 }
 
 export async function updateFieldExecutiveById(id, patch) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.update({
         where: { id },
@@ -67,12 +58,10 @@ export async function updateFieldExecutiveById(id, patch) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").update(patch).eq("id", id).select("*").single();
 }
 
 export async function getFieldExecutiveByIdScoped(req, id, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findFirst({
         where: { id, ...buildPrismaOrgWhere(req) },
@@ -81,14 +70,11 @@ export async function getFieldExecutiveByIdScoped(req, id, selectCols = "*") {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select(selectCols).eq("id", id);
-  q = scopeQueryByTenant(q, req);
-  return q.maybeSingle();
 }
 
-export async function listFieldExecutivesScoped(req, { limit, offset, organisationIdOverride, activeOnly }) {
-  if (isPrismaDbMode()) {
+export async function listFieldExecutivesScoped(req, { limit, offset, organisationIdOverride, activeOnly
+}) {
+  
     try {
       const where = { ...buildPrismaOrgWhere(req) };
       if (req?.isSuperAdmin && organisationIdOverride) {
@@ -105,20 +91,10 @@ export async function listFieldExecutivesScoped(req, { limit, offset, organisati
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select("*").order("name", { ascending: true });
-  if (!req.isSuperAdmin) {
-    q = scopeQueryByTenant(q, req);
-  } else if (organisationIdOverride) {
-    q = q.eq("organisation_id", organisationIdOverride);
-  }
-  if (activeOnly) q = q.eq("active", true);
-  q = q.range(offset, offset + limit - 1);
-  return q;
 }
 
 export async function listAllFieldExecutivesScoped(req) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.fieldExecutive.findMany({
         where: buildPrismaOrgWhere(req),
@@ -127,14 +103,10 @@ export async function listAllFieldExecutivesScoped(req) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select("*");
-  q = scopeQueryByTenant(q, req);
-  return q;
 }
 
 export async function listFieldExecutivesOrganisationIds(limit) {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.fieldExecutive.findMany({
         select: { organisationId: true },
@@ -144,24 +116,20 @@ export async function listFieldExecutivesOrganisationIds(limit) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").select("organisation_id").limit(limit + 1);
 }
 
 export async function countFieldExecutivesGlobal() {
-  if (isPrismaDbMode()) {
+  
     try {
       const count = await prisma.fieldExecutive.count();
       return { count, error: null };
     } catch (err) {
       return { count: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").select("id", { count: "exact", head: true });
 }
 
 export async function getFieldExecutiveContactById(feId) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findUnique({
         where: { id: feId },
@@ -171,12 +139,10 @@ export async function getFieldExecutiveContactById(feId) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").select("email, phone").eq("id", feId).maybeSingle();
 }
 
 export async function findFieldExecutiveByUserId(userId, tenantId = null) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findFirst({
         where: {
@@ -189,14 +155,10 @@ export async function findFieldExecutiveByUserId(userId, tenantId = null) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select("id, organisation_id").eq("user_id", userId);
-  if (tenantId) q = q.eq("organisation_id", tenantId);
-  return q.maybeSingle();
 }
 
 export async function findFieldExecutiveByName(name, tenantId = null) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findFirst({
         where: {
@@ -209,32 +171,100 @@ export async function findFieldExecutiveByName(name, tenantId = null) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  let q = supabase.from("field_executives").select("id, organisation_id").eq("name", name);
-  if (tenantId) q = q.eq("organisation_id", tenantId);
-  return q.maybeSingle();
 }
 
 export async function getFieldExecutiveById(feId, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findUnique({ where: { id: feId } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("field_executives").select(selectCols).eq("id", feId).maybeSingle();
 }
 
 export async function findFieldExecutiveByUserIdFull(userId, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.fieldExecutive.findFirst({ where: { userId } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listFieldExecutivesByOrganisationId(organisationId) {
+  try {
+    const rows = await prisma.fieldExecutive.findMany({
+      where: { organisationId },
+      select: { id: true, name: true, email: true, active: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("field_executives").select(selectCols).eq("user_id", userId).maybeSingle();
+}
+
+export async function findFieldExecutivesByIds(ids, selectCols = "id, name, email") {
+  try {
+    const rows = await prisma.fieldExecutive.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, email: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listUnlinkedFieldExecutivesByOrganisation(organisationId) {
+  try {
+    const rows = await prisma.fieldExecutive.findMany({
+      where: { organisationId, userId: null },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function updateFieldExecutiveIfUserIdNull(feId, patch) {
+  try {
+    const existing = await prisma.fieldExecutive.findFirst({
+      where: { id: feId, userId: null },
+    });
+    if (!existing) return { data: null, error: null };
+    const row = await prisma.fieldExecutive.update({
+      where: { id: feId },
+      data: fePatchToPrisma(patch),
+    });
+    return { data: mapPrismaRowToSnake(row), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listAllFieldExecutivesOrdered(selectCols = "*") {
+  try {
+    const rows = await prisma.fieldExecutive.findMany({
+      orderBy: { name: "asc" },
+    });
+    const data = mapPrismaRowsToSnake(rows);
+    if (selectCols === "*") return { data, error: null };
+    const cols = String(selectCols)
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const filtered = data.map((row) => {
+      /** @type {Record<string, unknown>} */
+      const out = {};
+      for (const col of cols) {
+        if (Object.prototype.hasOwnProperty.call(row, col)) out[col] = row[col];
+      }
+      return out;
+    });
+    return { data: filtered, error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }

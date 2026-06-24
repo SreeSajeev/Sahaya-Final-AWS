@@ -1,5 +1,13 @@
-import { supabase } from "../supabaseClient.js";
 import { parseVerificationToken } from "./otp/otpCrypto.js";
+import {
+  findOtpSessionById,
+  updateOtpSessionById,
+} from "../repositories/publicOtpSessionRepository.js";
+import { findComplaintPointByIdSelect } from "../repositories/tenantComplaintPointRepository.js";
+
+const SESSION_SELECT =
+  "id, complaint_point_id, organisation_id, reporter_mobile, reporter_name, status, verified_at, expires_at";
+const POINT_SELECT = "name, building, floor, site_name, status";
 
 /**
  * Resolve verification token and load OTP session with tenant checks.
@@ -18,13 +26,7 @@ export async function resolveVerifiedPublicSession(verificationToken) {
 
   const { sid, oid, cpid, m, exp } = parsed.payload;
 
-  const { data: session, error } = await supabase
-    .from("public_otp_sessions")
-    .select(
-      "id, complaint_point_id, organisation_id, reporter_mobile, reporter_name, status, verified_at, expires_at"
-    )
-    .eq("id", sid)
-    .maybeSingle();
+  const { data: session, error } = await findOtpSessionById(sid, SESSION_SELECT);
 
   if (error) {
     return { ok: false, status: 500, message: "Failed to load verification session" };
@@ -56,11 +58,7 @@ export async function resolveVerifiedPublicSession(verificationToken) {
     return { ok: false, status: 401, message: "OTP verification required" };
   }
 
-  const { data: point, error: pointErr } = await supabase
-    .from("tenant_complaint_points")
-    .select("name, building, floor, site_name, status")
-    .eq("id", cpid)
-    .maybeSingle();
+  const { data: point, error: pointErr } = await findComplaintPointByIdSelect(cpid, POINT_SELECT);
 
   if (pointErr) {
     return { ok: false, status: 500, message: "Failed to load complaint point" };
@@ -132,14 +130,14 @@ export async function patchPublicSessionProfile(verificationToken, reporterName)
 
   const { session } = resolved;
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from("public_otp_sessions")
-    .update({
+  const { error } = await updateOtpSessionById(
+    session.id,
+    {
       reporter_name: reporterName,
       updated_at: now,
-    })
-    .eq("id", session.id)
-    .eq("status", "verified");
+    },
+    { statusEq: "verified" }
+  );
 
   if (error) {
     return { ok: false, status: 500, message: "Failed to update profile" };

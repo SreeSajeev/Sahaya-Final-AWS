@@ -1,6 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { isPrismaDbMode } from "../repositories/db/mode.js";
 
 const columnCache = new Map();
 
@@ -23,19 +21,6 @@ async function hasPublicColumnPrisma(tableName, columnName) {
   }
 }
 
-async function hasPublicColumnSupabase(tableName, columnName) {
-  const { error } = await supabase.from(tableName).select(columnName).limit(1);
-  if (error) {
-    const msg = String(error.message || "");
-    if (error.code === "42703" || /column .* does not exist/i.test(msg)) {
-      return false;
-    }
-    console.warn("[schema-compat] column probe failed:", tableName, columnName, msg);
-    return false;
-  }
-  return true;
-}
-
 /**
  * Returns true when public.<tableName> has <columnName>.
  * Cached for process lifetime to avoid repeated metadata lookups.
@@ -45,10 +30,7 @@ export async function hasPublicColumn(tableName, columnName) {
   if (columnCache.has(cacheKey)) return columnCache.get(cacheKey);
 
   try {
-    const exists = isPrismaDbMode()
-      ? await hasPublicColumnPrisma(tableName, columnName)
-      : await hasPublicColumnSupabase(tableName, columnName);
-
+    const exists = await hasPublicColumnPrisma(tableName, columnName);
     columnCache.set(cacheKey, exists);
     return exists;
   } catch (err) {

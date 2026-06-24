@@ -44,6 +44,9 @@ model Ticket {
   verificationRemarks   String?   @map("verification_remarks")
   organisationId        String?   @map("organisation_id") @db.Uuid
   shortDescription      String?   @map("short_description")
+  reviewNotes           String?   @map("review_notes")
+  resolutionCategory    String?   @map("resolution_category")
+  assignments           TicketAssignment[]
 
   @@map("tickets")
 }
@@ -98,6 +101,9 @@ model RawEmail {
   organisationId      String?       @map("organisation_id") @db.Uuid
   rawText             String?       @map("raw_text")
   rawHtml             String?       @map("raw_html")
+  processingError     String?       @map("processing_error")
+  linkedTicketId      String?       @map("linked_ticket_id") @db.Uuid
+  missingFields       Json?         @map("missing_fields")
   parsedEmails        ParsedEmail[]
 
   @@map("raw_emails")
@@ -198,7 +204,11 @@ model TicketAssignment {
   assignmentNotificationId     String?         @map("assignment_notification_id")
   proofStoragePath             String?         @map("proof_storage_path")
   createdAt                    DateTime?       @default(now()) @map("created_at") @db.Timestamp(6)
+  outcome                      String?
+  endedAt                      DateTime?       @map("ended_at") @db.Timestamp(6)
+  failureReason                String?         @map("failure_reason")
   fe                           FieldExecutive  @relation(fields: [feId], references: [id])
+  ticket                       Ticket          @relation(fields: [ticketId], references: [id])
 
   @@map("ticket_assignments")
 }
@@ -242,4 +252,117 @@ model Configuration {
   updatedAt DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
 
   @@map("configurations")
+}
+
+model AccessToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feId      String    @map("fe_id") @db.Uuid
+  ticketId  String    @map("ticket_id") @db.Uuid
+  tokenHash String    @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamp(6)
+  revoked   Boolean?  @default(false)
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@map("access_tokens")
+}
+
+model TenantComplaintPoint {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId    String    @map("organisation_id") @db.Uuid
+  name              String
+  description       String?
+  building          String?
+  floor             String?
+  siteName          String?   @map("site_name")
+  assetReference    String?   @map("asset_reference")
+  defaultClientSlug String?   @map("default_client_slug")
+  defaultCategory   String?   @map("default_category")
+  defaultIssueType  String?   @map("default_issue_type")
+  publicToken       String    @unique @map("public_token")
+  status            String    @default("active")
+  tokenVersion      Int       @default(1) @map("token_version")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  disabledAt        DateTime? @map("disabled_at") @db.Timestamptz(6)
+  createdByUserId   String?   @map("created_by_user_id") @db.Uuid
+
+  @@unique([organisationId, name], map: "tenant_complaint_points_org_name_unique")
+  @@map("tenant_complaint_points")
+}
+
+model PublicOtpSession {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintPointId String    @map("complaint_point_id") @db.Uuid
+  organisationId   String    @map("organisation_id") @db.Uuid
+  reporterName     String    @map("reporter_name")
+  reporterMobile   String    @map("reporter_mobile")
+  otpHash          String    @map("otp_hash")
+  status           String    @default("pending")
+  attemptCount     Int       @default(0) @map("attempt_count")
+  resendCount      Int       @default(0) @map("resend_count")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  verifiedAt       DateTime? @map("verified_at") @db.Timestamptz(6)
+  consumedAt       DateTime? @map("consumed_at") @db.Timestamptz(6)
+  ticketId         String?   @map("ticket_id") @db.Uuid
+  ipHash           String?   @map("ip_hash")
+  userAgentHash    String?   @map("user_agent_hash")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("public_otp_sessions")
+}
+
+model PublicComplaintSubmission {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId         String   @unique @map("ticket_id") @db.Uuid
+  complaintPointId String   @map("complaint_point_id") @db.Uuid
+  organisationId   String   @map("organisation_id") @db.Uuid
+  otpSessionId     String   @map("otp_session_id") @db.Uuid
+  reporterName     String   @map("reporter_name")
+  reporterMobile   String   @map("reporter_mobile")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("public_complaint_submissions")
+}
+
+model TicketNumberSequence {
+  sequenceDate DateTime @map("sequence_date") @db.Date
+  sourceCode   String   @map("source_code") @db.Char(1)
+  lastNumber   Int      @default(0) @map("last_number")
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([sequenceDate, sourceCode])
+  @@map("ticket_number_sequences")
+}
+
+model DailyTenantReportRun {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String    @map("organisation_id") @db.Uuid
+  reportDate     DateTime  @map("report_date") @db.Date
+  status         String
+  recipientCount Int?      @map("recipient_count")
+  ticketCount    Int?      @map("ticket_count")
+  error          String?
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([organisationId, reportDate], map: "daily_tenant_report_runs_org_date_unique")
+  @@map("daily_tenant_report_runs")
+}
+
+model FeProofBackupQueue {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketCommentId String   @map("ticket_comment_id") @db.Uuid
+  ticketId        String   @map("ticket_id") @db.Uuid
+  actionType      String   @map("action_type")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  organisationId  String?  @map("organisation_id") @db.Uuid
+
+  @@map("fe_proof_backup_queue")
+}
+
+model TicketResolutionNotification {
+  ticketId String @id @map("ticket_id") @db.Uuid
+
+  @@map("ticket_resolution_notifications")
 }

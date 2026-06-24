@@ -1,5 +1,4 @@
 import express from "express"
-import { supabase } from "../supabaseClient.js"
 import { validateActionToken } from "../services/tokenService.js"
 import { assertValidTransition } from "../services/ticketStateMachine.js"
 import { isTenantAllowed } from "../middleware/tenantContext.js"
@@ -7,6 +6,8 @@ import {
   getUnusedFeActionTokenById,
   markFeActionTokenUsedSimple,
 } from "../repositories/feActionTokenRepository.js"
+import { insertComment } from "../repositories/commentRepository.js"
+import { getTicketByIdUnscopedSingle, updateTicketStatus } from "../repositories/ticketQueryRepository.js"
 
 const router = express.Router()
 
@@ -44,11 +45,10 @@ async function handleProofSubmission({
   })
 
   /* 3️⃣ Load ticket */
-  const { data: ticket } = await supabase
-    .from("tickets")
-    .select("status, organisation_id")
-    .eq("id", token.ticket_id)
-    .single()
+  const { data: ticket } = await getTicketByIdUnscopedSingle(
+    token.ticket_id,
+    "status, organisation_id"
+  )
 
   if (!ticket) {
     throw new Error("Ticket not found")
@@ -70,7 +70,7 @@ async function handleProofSubmission({
   assertValidTransition(ticket.status, nextState)
 
   /* 5️⃣ Save proof (Activity Timeline) */
-  await supabase.from("ticket_comments").insert({
+  await insertComment({
     ticket_id: token.ticket_id,
     author_role: "FE",
     comment_type: "PROOF",
@@ -82,10 +82,8 @@ async function handleProofSubmission({
   })
 
   /* 6️⃣ Advance ticket */
-  await supabase
-    .from("tickets")
-    .update({ status: nextState })
-    .eq("id", token.ticket_id)
+  const { error: updateErr } = await updateTicketStatus(token.ticket_id, nextState)
+  if (updateErr) throw updateErr
 
   /* 7️⃣ Invalidate token */
   await markFeActionTokenUsedSimple(token.id)

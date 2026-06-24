@@ -1,9 +1,11 @@
 // src/services/emailService.js
-import { supabase } from "../supabaseClient.js";
 import { APP_BASE_URL } from "../config/appConfig.js";
 import { redactEmail } from "../utils/redact.js";
 import { priorityDisplayLabel } from "../utils/normalizeTicketPriority.js";
 import { findUserByEmailForLookup } from "../repositories/userRepository.js";
+import { getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.js";
+import { findTicketByTicketNumber, getTicketByIdUnscoped } from "../repositories/ticketQueryRepository.js";
+import { listSlaRowsByTicketIds } from "../repositories/slaRepository.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
@@ -189,13 +191,13 @@ function formatAssignmentDueEmailIntro(iso) {
 
 async function fetchTicketByNumber(ticketNumber) {
   if (!ticketNumber) return null;
-  const { data: ticket, error } = await supabase
-    .from("tickets")
-    .select(
-      "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, priority, priority_level, short_description, complaint_id"
-    )
-    .eq("ticket_number", ticketNumber)
-    .single();
+  const row = await findTicketByTicketNumber(ticketNumber);
+  if (!row?.id) return null;
+
+  const { data: ticket, error } = await getTicketByIdUnscoped(
+    row.id,
+    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, priority, priority_level, short_description, complaint_id"
+  );
 
   if (error) {
     console.error("[EMAIL] Ticket fetch failed:", error.message);
@@ -207,18 +209,17 @@ async function fetchTicketByNumber(ticketNumber) {
 
 async function fetchSlaDeadlines(ticketId) {
   if (!ticketId) return null;
-  const { data: sla, error } = await supabase
-    .from("sla_tracking")
-    .select("assignment_deadline, onsite_deadline, resolution_deadline")
-    .eq("ticket_id", ticketId)
-    .maybeSingle();
+  const { data: slaRows, error } = await listSlaRowsByTicketIds(
+    [ticketId],
+    "assignment_deadline, onsite_deadline, resolution_deadline"
+  );
 
   if (error) {
     console.error("[EMAIL] SLA fetch failed:", error.message);
     return null;
   }
 
-  return sla ?? null;
+  return slaRows?.[0] ?? null;
 }
 
 function buildTicketDetailsTable({
@@ -478,11 +479,7 @@ export async function sendFEAssignmentEmail({
       return;
     }
 
-    const { data: fe, error } = await supabase
-      .from("field_executives")
-      .select("email, name")
-      .eq("id", feId)
-      .single();
+    const { data: fe, error } = await getFieldExecutiveById(feId, "email, name");
 
     if (error || !fe?.email) {
       console.error("[FE ASSIGN EMAIL] FE email not found:", feId, error?.message || "no email");
@@ -534,11 +531,7 @@ export async function sendFEAssignmentWorkflowEmail({
       return { sent: false, error: "missing_params" };
     }
 
-    const { data: fe, error } = await supabase
-      .from("field_executives")
-      .select("email, name")
-      .eq("id", feId)
-      .single();
+    const { data: fe, error } = await getFieldExecutiveById(feId, "email, name");
 
     if (error || !fe?.email) {
       console.error("[FE WORKFLOW EMAIL] FE email not found:", feId, error?.message || "no email");
@@ -601,11 +594,7 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
       return;
     }
 
-    const { data: fe, error } = await supabase
-      .from("field_executives")
-      .select("email, name")
-      .eq("id", feId)
-      .single();
+    const { data: fe, error } = await getFieldExecutiveById(feId, "email, name");
 
     if (error || !fe?.email) {
       console.error("[FE TOKEN EMAIL] FE not found or no email:", feId, error?.message || "no email");

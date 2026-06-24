@@ -1,8 +1,8 @@
 // src/controllers/feTokenController.js
 
-import { supabase } from "../supabaseClient.js";
 import { sendFETokenEmail } from "../services/emailService.js";
 import { insertFeActionTokenReturning } from "../repositories/feActionTokenRepository.js";
+import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
 
 /**
  * Generate FE Action Token + Send Email
@@ -41,11 +41,7 @@ export async function generateAndSendFEToken(req, res) {
     }
 
     // 3️⃣ Get ticket number
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("ticket_number")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket } = await getTicketByIdUnscopedSingle(ticketId, "ticket_number");
 
     // 4️⃣ Send email
     await sendFETokenEmail({

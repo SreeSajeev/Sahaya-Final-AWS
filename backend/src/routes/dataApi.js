@@ -3,9 +3,11 @@ import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import {
   attachTenantContext,
   requireTenantOrSuperAdmin,
-  scopeQueryByTenant,
 } from "../middleware/tenantContext.js";
-import { supabase } from "../supabaseClient.js";
+import { findAccessTokenByHash } from "../repositories/accessTokenRepository.js";
+import { listRawEmailsPaged } from "../repositories/rawEmailsRepo.js";
+import { listParsedEmailsByRawEmailIds } from "../repositories/parsedEmailsRepo.js";
+import { TENANT_DENY_SENTINEL } from "../repositories/db/tenantScope.js";
 import { toInt, safeTrim, jsonError, jsonOk } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { validateUuidParam } from "../middleware/validateUuidParam.js";
@@ -105,10 +107,6 @@ router.use(requireTenantOrSuperAdmin);
 
 /** UUID path params (tickets, field executives, organisations). */
 router.param("id", validateUuidParam);
-
-function withTenantScope(query, req, orgColumn = "organisation_id") {
-  return scopeQueryByTenant(query, req, orgColumn);
-}
 
 /* ======================================================
    Dashboard stats (read)
@@ -618,7 +616,7 @@ router.get("/tickets/:id", async (req, res) => {
     });
     let creator_display = null;
     try {
-      const creatorMap = await buildCreatorDisplayByTicketId(supabase, [data]);
+      const creatorMap = await buildCreatorDisplayByTicketId([data]);
       creator_display = creatorMap.get(data.id) ?? null;
     } catch (e) {
       console.warn("[dataApi.tickets.get] creator_display skipped:", e?.message || e);
@@ -1108,22 +1106,21 @@ router.get("/raw-emails", requireRole(RAW_EMAIL_READ_ROLES), async (req, res) =>
   const limit = toInt(req.query.limit, { defaultValue: 100, min: 1, max: 200 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
   try {
-    // raw_emails may or may not be tenant-scoped depending on migrations; use tenant scope when possible by column name.
-    let q = supabase
-      .from("raw_emails")
-      .select("*")
-      .order("received_at", { ascending: false })
-      .range(offset, offset + limit - 1);
-    q = withTenantScope(q, req);
-    const { data: raw, error } = await q;
+    const organisationId = req.isSuperAdmin ? null : (req.tenantId ?? TENANT_DENY_SENTINEL);
+    const { data: raw, error } = await listRawEmailsPaged({
+      limit,
+      offset,
+      organisationId: organisationId ?? undefined,
+    });
     if (error) return jsonError(res, 500, error.message);
 
     const rawIds = (raw || []).map((r) => r.id).filter(Boolean);
     let parsedMap = new Map();
     if (rawIds.length > 0) {
-      let pq = supabase.from("parsed_emails").select("*").in("raw_email_id", rawIds);
-      pq = withTenantScope(pq, req);
-      const { data: parsed, error: parsedErr } = await pq;
+      const { data: parsed, error: parsedErr } = await listParsedEmailsByRawEmailIds(
+        rawIds,
+        organisationId ?? undefined
+      );
       if (!parsedErr && Array.isArray(parsed)) {
         parsedMap = new Map(parsed.map((p) => [p.raw_email_id, p]));
       }
@@ -1461,7 +1458,7 @@ router.get("/access-tokens/by-hash", async (req, res) => {
   const tokenHash = safeTrim(req.query.tokenHash);
   if (!tokenHash) return jsonError(res, 400, "tokenHash required");
   try {
-    const { data, error } = await supabase.from("access_tokens").select("*").eq("token_hash", tokenHash).maybeSingle();
+    const { data, error } = await findAccessTokenByHash(tokenHash);
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Invalid token");
     if (data.revoked) return jsonError(res, 410, "Token revoked");

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { supabase } from "../supabaseClient.js";
+import { supabaseAuth } from "../supabaseAuthClient.js";
 import { PROVISION_SERVER_SIDE_ENABLED } from "../config/appConfig.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
@@ -52,7 +52,7 @@ async function findAuthUserByEmail(email) {
   const normalized = String(email).trim().toLowerCase();
   let page = 1;
   for (let i = 0; i < 10; i++) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
+    const { data, error } = await supabaseAuth.auth.admin.listUsers({ page, perPage: 200 });
     if (error) throw error;
     const users = data?.users ?? [];
     const found = users.find((u) => (u.email || "").trim().toLowerCase() === normalized);
@@ -66,7 +66,7 @@ async function findAuthUserByEmail(email) {
 async function deleteAuthUser(authUserId) {
   if (!authUserId) return;
   try {
-    await supabase.auth.admin.deleteUser(authUserId);
+    await supabaseAuth.auth.admin.deleteUser(authUserId);
   } catch (err) {
     logEvent("userProvisioning.compensateAuthDeleteFailed", {
       authUserId,
@@ -186,7 +186,7 @@ export async function provisionAdminUser({ req, body }) {
       if (authUser?.id) {
         authUserId = authUser.id;
       } else {
-        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
           email,
           password: body.password,
           email_confirm: true,
@@ -217,7 +217,7 @@ export async function provisionAdminUser({ req, body }) {
         }
       }
     } else if (!existingUser) {
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
         email,
         password: body.password,
         email_confirm: true,

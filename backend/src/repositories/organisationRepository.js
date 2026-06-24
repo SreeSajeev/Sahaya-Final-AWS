@@ -1,6 +1,4 @@
-import { supabase } from "../supabaseClient.js";
 import { prisma } from "../db/prisma.js";
-import { isPrismaDbMode } from "./db/mode.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 
@@ -29,7 +27,7 @@ function orgPatchToPrisma(patch) {
 }
 
 export async function listOrganisations() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.organisation.findMany({
         select: { id: true, name: true, slug: true, createdAt: true, status: true },
@@ -39,39 +37,30 @@ export async function listOrganisations() {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase
-    .from("organisations")
-    .select("id, name, slug, created_at, status")
-    .order("name", { ascending: true });
 }
 
 export async function getOrganisationById(id, selectCols = "*") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.organisation.findUnique({ where: { id } });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("organisations").select(selectCols).eq("id", id).maybeSingle();
 }
 
 export async function insertOrganisation(payload, selectCols = "id, name, slug, created_at, status") {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.organisation.create({ data: orgPatchToPrisma(payload) });
       return { data: mapPrismaRowToSnake(row), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("organisations").insert(payload).select(selectCols).single();
 }
 
 export async function findOrganisationIdBySlug(slug) {
-  if (isPrismaDbMode()) {
+  
     try {
       const row = await prisma.organisation.findFirst({
         where: { slug },
@@ -81,12 +70,10 @@ export async function findOrganisationIdBySlug(slug) {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("organisations").select("id").eq("slug", slug).maybeSingle();
 }
 
 export async function findOrganisationsBySlugs(slugs, selectCols = "slug, name") {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.organisation.findMany({
         where: { slug: { in: slugs } },
@@ -96,24 +83,20 @@ export async function findOrganisationsBySlugs(slugs, selectCols = "slug, name")
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("organisations").select(selectCols).in("slug", slugs);
 }
 
 export async function listOrganisationIds() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.organisation.findMany({ select: { id: true } });
       return { data: mapPrismaRowsToSnake(rows), error: null };
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
-  }
-  return supabase.from("organisations").select("id");
 }
 
 export async function listOrganisationSlugsAndStatus() {
-  if (isPrismaDbMode()) {
+  
     try {
       const rows = await prisma.organisation.findMany({
         select: { slug: true, status: true },
@@ -122,6 +105,50 @@ export async function listOrganisationSlugsAndStatus() {
     } catch (err) {
       return { data: null, error: toSupabaseStyleError(err) };
     }
+}
+
+export async function listActiveOrganisationsPublic() {
+  try {
+    const rows = await prisma.organisation.findMany({
+      where: { status: "active" },
+      select: { id: true, name: true, slug: true },
+      orderBy: { name: "asc" },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
   }
-  return supabase.from("organisations").select("slug, status");
+}
+
+export async function findOrganisationsByIds(ids, selectCols = "id, name") {
+  try {
+    const rows = await prisma.organisation.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function listOrganisationsByFilter(filter = {}) {
+  try {
+    /** @type {import('@prisma/client').Prisma.OrganisationWhereInput} */
+    const where = {};
+    if (filter.organisationId) where.id = filter.organisationId;
+    if (filter.slug) where.slug = filter.slug;
+    const rows = await prisma.organisation.findMany({
+      where,
+      select: {
+        id: true,
+        slug: true,
+        spocEmail: true,
+        outgoingEmails: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }
