@@ -7,7 +7,14 @@
     "start": "node src/app.js",
     "dev": "node src/app.js",
     "prisma:generate": "prisma generate",
-    "prisma:pull": "prisma db pull"
+    "prisma:pull": "prisma db pull",
+    "seed:test": "node prisma/seed-test.js",
+    "test": "vitest run",
+    "test:repo": "vitest run --config vitest.repo.config.js",
+    "test:integration": "vitest run --config vitest.integration.config.js",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:repo": "vitest run --config vitest.repo.config.js --coverage",
+    "test:coverage:integration": "vitest run --config vitest.integration.config.js --coverage"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +34,9 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "prisma": "^6.19.0"
+    "@vitest/coverage-v8": "^3.0.9",
+    "prisma": "^6.19.0",
+    "supertest": "^7.1.0",
+    "vitest": "^3.0.9"
   }
 }

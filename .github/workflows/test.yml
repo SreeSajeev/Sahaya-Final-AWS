@@ -1,0 +1,80 @@
+name: Test
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sahaya
+          POSTGRES_PASSWORD: sahaya_test
+          POSTGRES_DB: sahaya_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sahaya -d sahaya_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://sahaya:sahaya_test@localhost:5432/sahaya_test
+      DB_MODE: prisma
+      NODE_ENV: test
+      SUPABASE_URL: http://localhost:54321
+      SUPABASE_SERVICE_ROLE_KEY: ci-test-service-role-key
+      PUBLIC_COMPLAINTS_ENABLED: "true"
+      PUBLIC_OTP_ALLOW_SMS_SKIP: "true"
+      PUBLIC_OTP_HMAC_SECRET: ci-test-otp-hmac-secret
+      TENANT_CLIENTS_ENABLED: "true"
+      SMS_TEST_MODE: "true"
+      SMS_ENABLED: "false"
+      PROCESS_ROLE: api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Prisma generate
+        working-directory: backend
+        run: npx prisma generate
+
+      - name: Apply schema to test database
+        working-directory: backend
+        run: npx prisma db push --skip-generate
+
+      - name: Seed test data
+        working-directory: backend
+        run: npm run seed:test
+
+      - name: Repository tests
+        working-directory: backend
+        run: npm run test:repo
+
+      - name: Integration tests
+        working-directory: backend
+        run: npm run test:integration
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage/
+          if-no-files-found: ignore
