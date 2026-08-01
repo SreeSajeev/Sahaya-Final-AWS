@@ -20,6 +20,7 @@ on:
           - rollback
           - smoke
           - schema_probe
+          - prove_marker
       rds_identifier:
         description: "RDS instance id (TEST only)"
         required: false
@@ -183,6 +184,17 @@ jobs:
               exit 0
             fi
 
+
+
+            if [ "$MODE" = "prove_marker" ]; then
+              echo "===== latest PHASE_A markers in audit_logs ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -c "SELECT id, action, created_at FROM audit_logs WHERE action LIKE 'PHASE_A_VALIDATION_%' ORDER BY created_at DESC LIMIT 5;"
+              echo "===== S3 flag / freeze / db_mode ====="
+              grep -E '^(S3_FE_PROOFS_ENABLED|SHARED_SUPABASE_MUTATIONS_DISABLED|DB_MODE|PHASE_A_DB_PROBE_ENABLED|DATABASE_URL)=' /var/www/apps/sahaya-final-aws-monorepo/backend/.env | sed -E 's/(DATABASE_URL=).+/\1***localhost***/'
+              echo "===== backend supabase.from count in deployed tree ====="
+              grep -R "supabase\.from\|supabaseAuth\.from\|\.rpc(" /var/www/apps/sahaya-final-aws-monorepo/backend/src --include='*.js' | wc -l
+              exit 0
+            fi
 
             if [ "$MODE" = "schema_probe" ]; then
               echo "===== audit_logs columns ====="
