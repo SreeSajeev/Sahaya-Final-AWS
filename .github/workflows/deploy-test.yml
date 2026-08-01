@@ -34,6 +34,28 @@ jobs:
 
             git reset --hard origin/develop
 
+            # TEST-only shared-Supabase mutation freeze (app flags; does not touch Supabase dashboard).
+            # Exact string "true" required. Safe to re-run: upserts if present, appends if missing.
+            ensure_env_flag() {
+              local file="$1"
+              local key="$2"
+              local value="$3"
+              if [ ! -f "$file" ]; then
+                echo "Missing env file: $file" >&2
+                exit 1
+              fi
+              if grep -q "^${key}=" "$file"; then
+                sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file"
+                rm -f "${file}.bak"
+              else
+                printf '\n%s=%s\n' "$key" "$value" >> "$file"
+              fi
+              echo "Set ${key}=${value} in ${file}"
+            }
+
+            ensure_env_flag frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED true
+            ensure_env_flag backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED true
+
             echo "===== FRONTEND ====="
 
             cd frontend

@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Json } from "@/integrations/supabase/types";
 import { Organisation } from "@/lib/types";
 import { supabase } from "@/integrations/supabase/client";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 
 /** Map DB row → app Organisation (email arrays may be absent on older schemas). */
 function mapOrgRow(row: {
@@ -100,6 +101,8 @@ export function useCreateOrganisation() {
         outgoing = normalizeEmailArray([legacy, ...outgoing]);
       }
 
+      guardSharedSupabaseMutation("postgrest.organisations.insert");
+
       const { data, error } = await supabase
         .from("organisations")
         .insert({
@@ -142,6 +145,8 @@ export function useUpdateOrganisation() {
     }) => {
       const incoming = normalizeEmailArray(payload.incoming_emails);
       const outgoing = normalizeEmailArray(payload.outgoing_emails);
+
+      guardSharedSupabaseMutation("postgrest.organisations.update");
 
       const { data, error } = await supabase
         .from("organisations")

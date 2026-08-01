@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { ArrowLeft, Lock, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 
 /**
  * Change password (logged-in users).
@@ -58,6 +59,17 @@ export default function ChangePassword() {
       setSubmitting(false);
       toast({
         title: "Current password is incorrect",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      guardSharedSupabaseMutation("auth.updateUser.password");
+    } catch (err) {
+      setSubmitting(false);
+      toast({
+        title: "Password change disabled",
+        description: err instanceof Error ? err.message : "Temporarily unavailable",
         variant: "destructive",
       });
       return;

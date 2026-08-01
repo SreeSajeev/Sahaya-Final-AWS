@@ -5,6 +5,8 @@
  * development:  APP_BASE_URL=http://localhost:3000
  * production:   APP_BASE_URL=https://sahaya.pariskq.in
  */
+import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
+
 const APP_BASE_URL = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 const FE_GATED_RESOLUTION_TOKEN = String(process.env.FE_GATED_RESOLUTION_TOKEN || "").toLowerCase() === "true";
 const SAFE_TOKEN_LIFECYCLE = String(process.env.SAFE_TOKEN_LIFECYCLE || "true").toLowerCase() !== "false";
@@ -25,6 +27,8 @@ const TENANT_CLIENTS_ENABLED =
 /** When false, POST /auth/provision/admin returns 404; admin UIs keep browser signUp. */
 const PROVISION_SERVER_SIDE_ENABLED =
   String(process.env.PROVISION_SERVER_SIDE_ENABLED || "false").toLowerCase() === "true";
+/** TEST-only freeze mirror — see sharedSupabaseMutationFreeze.js (default OFF). */
+const SHARED_SUPABASE_MUTATIONS_DISABLED = areSharedSupabaseMutationsDisabled();
 /** When false, /complaint-points/* and /public/* OTP routes return 404. */
 const PUBLIC_COMPLAINTS_ENABLED =
   String(process.env.PUBLIC_COMPLAINTS_ENABLED || "false").toLowerCase() === "true";
@@ -97,6 +101,7 @@ export {
   BULK_IMPORT_MAX_ROWS,
   TENANT_CLIENTS_ENABLED,
   PROVISION_SERVER_SIDE_ENABLED,
+  SHARED_SUPABASE_MUTATIONS_DISABLED,
   PUBLIC_COMPLAINTS_ENABLED,
   DAILY_TENANT_REPORT_ENABLED,
   DAILY_REPORT_DRY_RUN,

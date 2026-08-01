@@ -11,6 +11,7 @@ import { UserRole } from "@/lib/types";
 import { SignUpSchema, formatZodError } from "@/lib/validation";
 import { z } from "zod";
 import { fetchJson } from "@/lib/backendDataApi";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 
 /* ================= TYPES ================= */
 
@@ -246,6 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     organisationId?: string | null
   ): Promise<{ data?: { user: { id: string }; userId?: string }; error: Error | null }> => {
     try {
+      guardSharedSupabaseMutation("auth.signUp");
       SignUpSchema.parse({ email, password, name, role });
 
       const metadata: Record<string, unknown> = { name, role };
@@ -280,6 +282,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     organisationId: string
   ): Promise<{ error: Error | null }> => {
     try {
+      guardSharedSupabaseMutation("auth.signUpPublic");
       const trimmedEmail = email.trim();
       const trimmedName = (name || "").trim() || trimmedEmail;
       if (!organisationId || !trimmedEmail || !password) {

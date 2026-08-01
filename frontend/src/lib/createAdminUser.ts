@@ -1,5 +1,6 @@
 import { fetchJson } from "@/lib/backendDataApi";
 import { isProvisionServerSideEnabled } from "@/lib/provisionServerSideFeature";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 import type { UserRole } from "@/hooks/useAuth";
 
 export type AdminProvisionFieldExecutive = {
@@ -40,6 +41,12 @@ export async function createAdminUser(
   signUp: SignUpFn,
   input: CreateAdminUserInput
 ): Promise<{ error: Error | null }> {
+  try {
+    guardSharedSupabaseMutation("admin.provisionUser");
+  } catch (err) {
+    return { error: err instanceof Error ? err : new Error("Provisioning disabled") };
+  }
+
   if (isProvisionServerSideEnabled()) {
     try {
       await fetchJson("/auth/provision/admin", {

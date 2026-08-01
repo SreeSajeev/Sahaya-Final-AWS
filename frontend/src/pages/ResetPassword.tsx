@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Lock, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 
 /**
  * Reset password page: user lands here after clicking the email link.
@@ -63,6 +64,17 @@ export default function ResetPassword() {
       return;
     }
     setLoading(true);
+    try {
+      guardSharedSupabaseMutation("auth.updateUser.password");
+    } catch (err) {
+      setLoading(false);
+      toast({
+        title: "Password reset disabled",
+        description: err instanceof Error ? err.message : "Temporarily unavailable",
+        variant: "destructive",
+      });
+      return;
+    }
     const { error } = await supabase.auth.updateUser({ password });
     setLoading(false);
     if (error) {

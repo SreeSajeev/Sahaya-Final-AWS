@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_APP_BASE_URL?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
+  /** TEST-only: set to "true" to block browser Supabase mutations (build-time). */
+  readonly VITE_SHARED_SUPABASE_MUTATIONS_DISABLED?: string;
 }
 
 interface ImportMeta {

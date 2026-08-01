@@ -1,5 +1,6 @@
 // src/controllers/proofController.js
 import { supabase } from "../supabaseClient.js";
+import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
 import {
   setOnsiteDeadline,
   setResolutionDeadline,
@@ -408,24 +409,30 @@ export async function uploadFeProof(req, res) {
           : resolutionAttachments.image_base64);
       if (imageBase64 && typeof imageBase64 === "string") {
         try {
-          const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-          const buffer = Buffer.from(base64Data, "base64");
-          const actionType = actionToken.action_type || "RESOLUTION";
-          const filePath = `${ticketId}/${actionType}/${Date.now()}.jpg`;
-          const { error: uploadError } = await supabase.storage
-            .from("fe-proofs")
-            .upload(filePath, buffer, {
-              contentType: "image/jpeg",
-              upsert: false,
-            });
-          if (uploadError) {
-            console.error("[Proof Storage] Upload failed:", uploadError.message);
+          if (areSharedSupabaseMutationsDisabled()) {
+            console.warn(
+              "[Proof Storage] Supabase upload skipped — SHARED_SUPABASE_MUTATIONS_DISABLED (proof remains in DB)"
+            );
           } else {
-            await supabase
-              .from("ticket_assignments")
-              .update({ proof_storage_path: filePath })
-              .eq("id", assignmentId);
-            console.log("📦 Proof uploaded to Supabase:", redactStoragePath(filePath));
+            const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+            const buffer = Buffer.from(base64Data, "base64");
+            const actionType = actionToken.action_type || "RESOLUTION";
+            const filePath = `${ticketId}/${actionType}/${Date.now()}.jpg`;
+            const { error: uploadError } = await supabase.storage
+              .from("fe-proofs")
+              .upload(filePath, buffer, {
+                contentType: "image/jpeg",
+                upsert: false,
+              });
+            if (uploadError) {
+              console.error("[Proof Storage] Upload failed:", uploadError.message);
+            } else {
+              await supabase
+                .from("ticket_assignments")
+                .update({ proof_storage_path: filePath })
+                .eq("id", assignmentId);
+              console.log("📦 Proof uploaded to Supabase:", redactStoragePath(filePath));
+            }
           }
         } catch (err) {
           console.error("[Proof Storage] Failed:", err?.message || err);

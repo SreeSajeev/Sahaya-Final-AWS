@@ -4,6 +4,7 @@
  */
 
 import { supabase } from "../supabaseClient.js";
+import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
 import { replicateProofToS3 } from "../services/s3ProofReplication.js";
 import { WORKER_TENANT_ISOLATION_ENABLED } from "../config/appConfig.js";
@@ -89,22 +90,30 @@ async function processProofBackupQueueForScope(tenantId = null) {
         const buffer = Buffer.from(base64Data, "base64");
         const filePath = `${basePath}/${idx}.jpg`;
 
-        const { error: uploadError } = await supabase.storage
-          .from("fe-proofs")
-          .upload(filePath, buffer, {
-            contentType: "image/jpeg",
-            upsert: false,
-          });
+        if (areSharedSupabaseMutationsDisabled()) {
+          console.warn(
+            "[Proof Backup Queue] Supabase upload skipped — SHARED_SUPABASE_MUTATIONS_DISABLED",
+            "path:",
+            redactStoragePath(filePath)
+          );
+        } else {
+          const { error: uploadError } = await supabase.storage
+            .from("fe-proofs")
+            .upload(filePath, buffer, {
+              contentType: "image/jpeg",
+              upsert: false,
+            });
 
-        if (uploadError) {
-          // Idempotency: if the object already exists, treat as success.
-          const statusCode = uploadError?.statusCode ?? uploadError?.status;
-          const msg = String(uploadError?.message ?? "");
-          const isConflict = statusCode === 409 || /already exists/i.test(msg);
-          if (!isConflict) {
-            console.warn("[Proof Backup Queue] Upload failed:", msg, "path:", redactStoragePath(filePath));
-            allOk = false;
-            break;
+          if (uploadError) {
+            // Idempotency: if the object already exists, treat as success.
+            const statusCode = uploadError?.statusCode ?? uploadError?.status;
+            const msg = String(uploadError?.message ?? "");
+            const isConflict = statusCode === 409 || /already exists/i.test(msg);
+            if (!isConflict) {
+              console.warn("[Proof Backup Queue] Upload failed:", msg, "path:", redactStoragePath(filePath));
+              allOk = false;
+              break;
+            }
           }
         }
 

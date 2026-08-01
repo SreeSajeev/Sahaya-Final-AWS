@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { supabase } from "../supabaseClient.js";
 import { PROVISION_SERVER_SIDE_ENABLED } from "../config/appConfig.js";
+import { sharedSupabaseMutationBlock } from "../security/sharedSupabaseMutationFreeze.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
 import { safeTrim } from "../utils/http.js";
@@ -56,6 +57,14 @@ async function findAuthUserByEmail(email) {
 
 async function deleteAuthUser(authUserId) {
   if (!authUserId) return;
+  const freeze = sharedSupabaseMutationBlock();
+  if (freeze) {
+    logEvent("userProvisioning.compensateAuthDeleteFrozen", {
+      authUserId,
+      code: freeze.code,
+    });
+    return;
+  }
   try {
     await supabase.auth.admin.deleteUser(authUserId);
   } catch (err) {
@@ -136,6 +145,11 @@ export function authorizeAdminProvision(req, rawBody) {
 export async function provisionAdminUser({ req, body }) {
   if (!PROVISION_SERVER_SIDE_ENABLED) {
     return { ok: false, status: 404, message: "Server-side provisioning is not enabled" };
+  }
+
+  const freeze = sharedSupabaseMutationBlock();
+  if (freeze) {
+    return { ok: false, status: 403, message: freeze.message, code: freeze.code };
   }
 
   const email = body.email;

@@ -16,6 +16,7 @@ import { fetchJson } from "@/lib/backendDataApi";
 import { isTenantConfigurationEnabled } from "@/lib/tenantConfigurationFeature";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchOrganisationById } from "@/lib/tenantTicketsSupabase";
+import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 import {
   getOrgTicketConfigKey,
   DEFAULT_FIELD_EXECUTIVE_LABEL,
@@ -203,6 +204,7 @@ export default function TicketSettings() {
   const saveReviewFieldMutation = useMutation({
     mutationFn: async () => {
       if (!effectiveOrgId) throw new Error("No tenant");
+      guardSharedSupabaseMutation("postgrest.organisations.update.reviewFields");
       const label = reviewFieldLabel.trim();
       const helper = reviewFieldHelperText.trim();
       const { error } = await supabase

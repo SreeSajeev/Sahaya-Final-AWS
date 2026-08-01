@@ -12,6 +12,7 @@ import {
 import { jsonError, jsonOk, safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
+import { sharedSupabaseMutationBlock } from "../security/sharedSupabaseMutationFreeze.js";
 
 const router = express.Router();
 
@@ -45,6 +46,14 @@ router.get("/organisations", async (_req, res) => {
  */
 router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   const startedAt = Date.now();
+  const freeze = sharedSupabaseMutationBlock();
+  if (freeze) {
+    logEvent("auth.forgotPassword.frozen", {
+      code: freeze.code,
+      ms: Date.now() - startedAt,
+    });
+    return jsonError(res, 403, freeze.message, { code: freeze.code });
+  }
   const email = safeTrim(req.body?.email);
   if (!email || !SIMPLE_EMAIL_RE.test(email)) {
     return jsonError(res, 400, "Valid email required");
