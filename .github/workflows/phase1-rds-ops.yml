@@ -96,6 +96,38 @@ jobs:
             echo "Host=$(hostname) User=$(whoami) Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
             if [ "$MODE" = "inspect" ]; then
+              echo "===== Self EC2 metadata (no AWS CLI required) ====="
+              TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
+              IID=""; MAC=""; VPC=""; SUBNET=""; SGS=""; AZ=""; IAM_INFO=""; DOC=""
+              if [ -n "$TOKEN" ]; then
+                IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || true)
+                MAC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d '/')
+                VPC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/vpc-id" || true)
+                SUBNET=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/subnet-id" || true)
+                SGS=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/security-group-ids" || true)
+                AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone || true)
+                IAM_INFO=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/info || true)
+                echo "instance_id=$IID az=$AZ vpc=$VPC subnet=$SUBNET sgs=$SGS"
+                echo "iam_info=$IAM_INFO"
+              else
+                echo "IMDSv2 token unavailable"
+              fi
+
+              echo "===== Ensure AWS CLI on TEST EC2 (install if missing) ====="
+              if ! command -v aws >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                  sudo apt-get update -y >/tmp/awscli-apt.log 2>&1 || true
+                  sudo apt-get install -y awscli >/tmp/awscli-install.log 2>&1 || true
+                fi
+                if ! command -v aws >/dev/null 2>&1; then
+                  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+                  sudo apt-get install -y unzip >/dev/null 2>&1 || true
+                  unzip -qo /tmp/awscliv2.zip -d /tmp
+                  sudo /tmp/aws/install -i /usr/local/aws-cli -b /usr/local/bin 2>&1 | tail -5 || true
+                fi
+              fi
+              command -v aws || echo "aws CLI still missing"
+
               echo "===== AWS identity (instance/role/credentials on EC2) ====="
               if command -v aws >/dev/null 2>&1; then
                 aws sts get-caller-identity --output json || echo "sts FAILED"
@@ -107,32 +139,19 @@ jobs:
                 aws rds describe-db-engine-versions --region "$REGION" --engine postgres \
                   --query 'DBEngineVersions[?starts_with(EngineVersion, `16`) || starts_with(EngineVersion, `17`) || starts_with(EngineVersion, `18`)].EngineVersion' \
                   --output text 2>&1 || echo "rds:DescribeDBEngineVersions FAILED"
-                echo "===== Self EC2 identity ====="
-                TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
-                if [ -n "$TOKEN" ]; then
-                  IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || true)
-                  MAC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d '/')
-                  VPC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/vpc-id" || true)
-                  SUBNET=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/subnet-id" || true)
-                  SGS=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/security-group-ids" || true)
-                  AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone || true)
-                  echo "instance_id=$IID az=$AZ vpc=$VPC subnet=$SUBNET sgs=$SGS"
-                  if [ -n "$IID" ]; then
-                    aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
-                      --query 'Reservations[0].Instances[0].{SubnetId:SubnetId,VpcId:VpcId,SGs:SecurityGroups,PrivateIp:PrivateIpAddress,PublicIp:PublicIpAddress,IamProfile:IamInstanceProfile.Arn}' \
-                      --output json 2>&1 || echo "ec2:DescribeInstances FAILED"
-                  fi
-                  echo "===== Subnets in VPC (for DB subnet group) ====="
-                  if [ -n "$VPC" ]; then
-                    aws ec2 describe-subnets --region "$REGION" --filters "Name=vpc-id,Values=$VPC" \
-                      --query 'Subnets[].{id:SubnetId,az:AvailabilityZone,public:MapPublicIpOnLaunch,cidr:CidrBlock}' \
-                      --output table 2>&1 || echo "ec2:DescribeSubnets FAILED"
-                  fi
-                else
-                  echo "IMDSv2 token unavailable"
+                if [ -n "$IID" ]; then
+                  aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
+                    --query 'Reservations[0].Instances[0].{SubnetId:SubnetId,VpcId:VpcId,SGs:SecurityGroups,PrivateIp:PrivateIpAddress,PublicIp:PublicIpAddress,IamProfile:IamInstanceProfile.Arn}' \
+                    --output json 2>&1 || echo "ec2:DescribeInstances FAILED"
+                fi
+                echo "===== Subnets in VPC (for DB subnet group) ====="
+                if [ -n "$VPC" ]; then
+                  aws ec2 describe-subnets --region "$REGION" --filters "Name=vpc-id,Values=$VPC" \
+                    --query 'Subnets[].{id:SubnetId,az:AvailabilityZone,public:MapPublicIpOnLaunch,cidr:CidrBlock}' \
+                    --output table 2>&1 || echo "ec2:DescribeSubnets FAILED"
                 fi
               else
-                echo "aws CLI not installed on EC2"
+                echo "aws CLI not available after install attempt"
               fi
 
               echo "===== Docker migration DB ====="
