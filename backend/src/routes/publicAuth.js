@@ -3,7 +3,8 @@
  */
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { supabase } from "../supabaseClient.js";
+import { supabaseAuth } from "../supabaseAuthClient.js";
+import { findAccessTokenByHash } from "../repositories/accessTokenRepository.js";
 import { sendPasswordResetEmail } from "../services/emailService.js";
 import {
   resolvePasswordResetRedirectTo,
@@ -12,6 +13,7 @@ import {
 import { jsonError, jsonOk, safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
+import { listActiveOrganisationsPublic } from "../repositories/organisationRepository.js";
 import { sharedSupabaseMutationBlock } from "../security/sharedSupabaseMutationFreeze.js";
 
 const router = express.Router();
@@ -28,11 +30,7 @@ const forgotPasswordLimiter = rateLimit({
 
 router.get("/organisations", async (_req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("organisations")
-      .select("id, name")
-      .eq("status", "active")
-      .order("name", { ascending: true });
+    const { data, error } = await listActiveOrganisationsPublic();
     if (error) return jsonError(res, 500, error.message);
     return jsonOk(res, { items: data || [] });
   } catch (err) {
@@ -66,7 +64,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
     });
 
   try {
-    const { data, error } = await supabase.auth.admin.generateLink({
+    const { data, error } = await supabaseAuth.auth.admin.generateLink({
       type: "recovery",
       email,
       options: { redirectTo },
@@ -133,7 +131,7 @@ router.get("/access-tokens/by-hash", async (req, res) => {
   const tokenHash = safeTrim(req.query.tokenHash);
   if (!tokenHash) return jsonError(res, 400, "tokenHash required");
   try {
-    const { data, error } = await supabase.from("access_tokens").select("*").eq("token_hash", tokenHash).maybeSingle();
+    const { data, error } = await findAccessTokenByHash(tokenHash);
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Invalid token");
     if (data.revoked) return jsonError(res, 410, "Token revoked");

@@ -1,5 +1,6 @@
-import { supabase } from "../supabaseClient.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
+import { listUnlinkedFieldExecutivesByOrganisation, updateFieldExecutiveIfUserIdNull, listAllFieldExecutivesOrdered } from "../repositories/fieldExecutiveRepository.js";
+import { listUsersByRole } from "../repositories/userRepository.js";
 
 export function normalizeFeEmail(email) {
   return email ? String(email).trim().toLowerCase() : "";
@@ -23,12 +24,7 @@ export async function attemptFeAutoLink({ appUser, authUserId }) {
   const hasFeUserId = await hasPublicColumn("field_executives", "user_id");
   if (!hasFeUserId) return null;
 
-  const { data: candidates, error } = await supabase
-    .from("field_executives")
-    .select("id, email, user_id, organisation_id")
-    .eq("organisation_id", organisationId)
-    .is("user_id", null)
-    .not("email", "is", null);
+  const { data: candidates, error } = await listUnlinkedFieldExecutivesByOrganisation(organisationId);
 
   if (error) {
     console.warn("[FE_AUTO_LINK] lookup failed", { message: error.message, email, organisationId });
@@ -55,13 +51,7 @@ export async function attemptFeAutoLink({ appUser, authUserId }) {
     patch.auth_user_id = String(authUserId);
   }
 
-  const { data: updated, error: updErr } = await supabase
-    .from("field_executives")
-    .update(patch)
-    .eq("id", fe.id)
-    .is("user_id", null)
-    .select("id")
-    .maybeSingle();
+  const { data: updated, error: updErr } = await updateFieldExecutiveIfUserIdNull(fe.id, patch);
 
   if (updErr) {
     console.warn("[FE_AUTO_LINK] update failed", { message: updErr.message, feId: fe.id, email });
@@ -80,17 +70,16 @@ export async function attemptFeAutoLink({ appUser, authUserId }) {
  * @returns {Promise<{ items: object[] }>}
  */
 export async function buildFeLinkAuditReport() {
-  const { data: fes, error: feErr } = await supabase
-    .from("field_executives")
-    .select("id, name, email, user_id, organisation_id")
-    .order("name", { ascending: true });
+  const { data: fes, error: feErr } = await listAllFieldExecutivesOrdered(
+    "id, name, email, user_id, organisation_id"
+  );
 
   if (feErr) throw Object.assign(new Error(feErr.message), { code: feErr.code });
 
-  const { data: feUsers, error: userErr } = await supabase
-    .from("users")
-    .select("id, email, organisation_id, role")
-    .eq("role", "FIELD_EXECUTIVE");
+  const { data: feUsers, error: userErr } = await listUsersByRole(
+    "FIELD_EXECUTIVE",
+    "id, email, organisation_id, role"
+  );
 
   if (userErr) throw Object.assign(new Error(userErr.message), { code: userErr.code });
 
@@ -128,6 +117,4 @@ export async function buildFeLinkAuditReport() {
 
   return { items };
 }
-
-
 

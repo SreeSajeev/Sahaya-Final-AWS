@@ -1,9 +1,9 @@
 // src/services/clientNotificationService.js
 
-import { supabase } from "../supabaseClient.js";
 import { sendClientResolutionEmail } from "./emailService.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
+import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
 
 export async function handleClientResolutionNotification(ticketId) {
   try {
@@ -12,12 +12,10 @@ export async function handleClientResolutionNotification(ticketId) {
       return;
     }
 
-    // Fetch ticket details
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .select("opened_by_email, ticket_number")
-      .eq("id", ticketId)
-      .single();
+    const { data: ticket, error } = await getTicketByIdUnscopedSingle(
+      ticketId,
+      "opened_by_email, ticket_number"
+    );
 
     if (error || !ticket) {
       console.error("[CLIENT_NOTIFY] Ticket fetch failed", error?.message || error);

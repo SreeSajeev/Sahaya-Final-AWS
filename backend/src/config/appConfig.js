@@ -70,22 +70,19 @@ const FE_ACTION_TOKEN_EXPIRY_HOURS = Math.min(
 );
 
 /**
- * Database access mode for repositories (incremental migration).
- * When unset, behavior matches pre-Prisma defaults: Supabase unless USE_POSTGRES_DB forces direct PG.
+ * Database access mode for repositories.
+ * Only `prisma` is active; `supabase` is accepted for compatibility but treated as prisma.
  *
- * @typedef {"supabase"|"shadow_pg"|"postgres"|"prisma"|"shadow_prisma"} DbMode
+ * @typedef {"supabase"|"prisma"} DbMode
  */
 
 /** @returns {DbMode} */
 export function resolveDbMode() {
   const raw = String(process.env.DB_MODE || "").trim().toLowerCase();
-  const allowed = new Set(["supabase", "shadow_pg", "postgres", "prisma", "shadow_prisma"]);
-  if (raw && allowed.has(raw)) {
+  if (raw === "supabase" || raw === "prisma") {
     return /** @type {DbMode} */ (raw);
   }
-  // Preserve legacy flag semantics when DB_MODE is not set
-  if (USE_POSTGRES_DB) return "postgres";
-  return "supabase";
+  return "prisma";
 }
 
 export {

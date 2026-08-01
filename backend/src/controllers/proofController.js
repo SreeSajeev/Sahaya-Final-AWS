@@ -1,5 +1,5 @@
 // src/controllers/proofController.js
-import { supabase } from "../supabaseClient.js";
+import { supabaseAuth } from "../supabaseAuthClient.js";
 import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
 import {
   setOnsiteDeadline,
@@ -14,11 +14,18 @@ import {
 } from "../services/tokenService.js";
 import { SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
+import {
+  getFeActionTokenById,
+  markFeActionTokenExpired,
+} from "../repositories/feActionTokenRepository.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { replicateProofsToS3 } from "../services/s3ProofReplication.js";
 import { redactStoragePath } from "../utils/redact.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
+import { getAssignmentById, updateAssignmentById } from "../repositories/assignmentRepository.js";
+import { insertCommentReturning } from "../repositories/commentRepository.js";
+import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
 
 function countProofImages(attachments) {
   if (!attachments || typeof attachments !== "object" || Array.isArray(attachments)) return 0;
@@ -73,11 +80,7 @@ export async function uploadFeProof(req, res) {
     }
 
     const hasTokenStateColumn = await hasPublicColumn("fe_action_tokens", "token_state");
-    const { data: actionToken } = await supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("id", token)
-      .maybeSingle();
+    const { data: actionToken } = await getFeActionTokenById(token);
 
     if (!actionToken) {
       return res.status(404).json({ error: "Invalid token" });
@@ -95,11 +98,7 @@ export async function uploadFeProof(req, res) {
     }
     if (effectiveTokenState === TOKEN_STATES.EXPIRED || isTokenExpired(actionToken.expires_at)) {
       if (hasTokenStateColumn) {
-        await supabase
-          .from("fe_action_tokens")
-          .update({ token_state: TOKEN_STATES.EXPIRED })
-          .eq("id", token)
-          .eq("used", false);
+        await markFeActionTokenExpired(token);
       }
       return res.status(410).json({ error: "Token expired", code: "TOKEN_EXPIRED" });
     }
@@ -122,11 +121,10 @@ export async function uploadFeProof(req, res) {
       bytes: payloadBytes,
     });
 
-    const { data: ticketLifecycleRow } = await supabase
-      .from("tickets")
-      .select("status, current_assignment_id, organisation_id, client_slug")
-      .eq("id", ticketId)
-      .maybeSingle();
+    const { data: ticketLifecycleRow } = await getTicketByIdUnscoped(
+      ticketId,
+      "status, current_assignment_id, organisation_id, client_slug"
+    );
 
     if (ticketLifecycleRow?.status === "REJECTED") {
       return res.status(400).json({ error: "Ticket has been rejected" });
@@ -161,22 +159,14 @@ export async function uploadFeProof(req, res) {
       }
       const resolvedOutcome = outcome === "FAILED" ? "FAILED" : "SUCCESS";
 
-      const { data: ticketRow } = await supabase
-        .from("tickets")
-        .select("current_assignment_id")
-        .eq("id", ticketId)
-        .single();
+      const { data: ticketRow } = await getTicketByIdUnscoped(ticketId, "current_assignment_id");
 
       const assignmentId = ticketRow?.current_assignment_id;
       if (!assignmentId) {
         return res.status(400).json({ error: "No current assignment" });
       }
 
-      const { data: assignment } = await supabase
-        .from("ticket_assignments")
-        .select("id, outcome")
-        .eq("id", assignmentId)
-        .single();
+      const { data: assignment } = await getAssignmentById(assignmentId, "id, outcome");
 
       if (!assignment) {
         return res.status(400).json({ error: "Assignment not found" });
@@ -233,26 +223,19 @@ export async function uploadFeProof(req, res) {
           image_count: countProofImages(attachmentsToStore),
         });
 
-        await supabase
-          .from("ticket_assignments")
-          .update({
-            outcome: "FAILED",
-            ended_at: nowIso,
-            failure_reason: reason,
-          })
-          .eq("id", assignmentId);
+        await updateAssignmentById(assignmentId, {
+          outcome: "FAILED",
+          ended_at: nowIso,
+          failure_reason: reason,
+        });
 
-        const { data: failedProofComment, error: failedProofCommentErr } = await supabase
-          .from("ticket_comments")
-          .insert({
+        const { data: failedProofComment, error: failedProofCommentErr } = await insertCommentReturning({
             ticket_id: ticketId,
             source: "FE",
             author_id: actionToken.fe_id,
-            body: `Field Executive reported resolution failed: ${reason}`,
-            attachments: attachmentsToStore,
-          })
-          .select("id")
-          .single();
+          body: `Field Executive reported resolution failed: ${reason}`,
+          attachments: attachmentsToStore,
+        });
 
         if (!failedProofCommentErr && failedProofComment?.id && hasAnyProof) {
           console.error("[s3-proof-upload] schedule detached replication (resolution failed)", {
@@ -270,13 +253,10 @@ export async function uploadFeProof(req, res) {
           );
         }
 
-        await supabase
-          .from("tickets")
-          .update({
-            status: "FE_ATTEMPT_FAILED",
-            updated_at: nowIso,
-          })
-          .eq("id", ticketId);
+        await updateTicketById(ticketId, {
+          status: "FE_ATTEMPT_FAILED",
+          updated_at: nowIso,
+        });
 
         clearOnsiteAndResolutionDeadlines(ticketId).catch((err) =>
           console.error("[SLA] clearOnsiteAndResolutionDeadlines", ticketId, err.message)
@@ -292,13 +272,10 @@ export async function uploadFeProof(req, res) {
       }
 
       /* SUCCESS */
-      await supabase
-        .from("ticket_assignments")
-        .update({
-          outcome: "SUCCESS",
-          ended_at: nowIso,
-        })
-        .eq("id", assignmentId);
+      await updateAssignmentById(assignmentId, {
+        outcome: "SUCCESS",
+        ended_at: nowIso,
+      });
 
       const resolutionAttachments = normalizeProofAttachmentsForStorage(
         attachments && typeof attachments === "object" ? attachments : {}
@@ -310,17 +287,13 @@ export async function uploadFeProof(req, res) {
         image_count: countProofImages(resolutionAttachments),
       });
 
-      const { data: resolutionComment, error: commentError } = await supabase
-        .from("ticket_comments")
-        .insert({
-          ticket_id: ticketId,
-          source: "FE",
-          author_id: actionToken.fe_id,
-          body: "Field Executive uploaded resolution proof",
-          attachments: resolutionAttachments,
-        })
-        .select("id")
-        .single();
+      const { data: resolutionComment, error: commentError } = await insertCommentReturning({
+        ticket_id: ticketId,
+        source: "FE",
+        author_id: actionToken.fe_id,
+        body: "Field Executive uploaded resolution proof",
+        attachments: resolutionAttachments,
+      });
 
       if (commentError) {
         console.error("Comment Insert Error:", commentError?.message || commentError);
@@ -349,13 +322,10 @@ export async function uploadFeProof(req, res) {
         });
       }
 
-      await supabase
-        .from("tickets")
-        .update({
-          status: "RESOLVED_PENDING_VERIFICATION",
-          updated_at: nowIso,
-        })
-        .eq("id", ticketId);
+      await updateTicketById(ticketId, {
+        status: "RESOLVED_PENDING_VERIFICATION",
+        updated_at: nowIso,
+      });
 
       void insertAuditLog({
         entity_type: "ticket",
@@ -418,7 +388,7 @@ export async function uploadFeProof(req, res) {
             const buffer = Buffer.from(base64Data, "base64");
             const actionType = actionToken.action_type || "RESOLUTION";
             const filePath = `${ticketId}/${actionType}/${Date.now()}.jpg`;
-            const { error: uploadError } = await supabase.storage
+            const { error: uploadError } = await supabaseAuth.storage
               .from("fe-proofs")
               .upload(filePath, buffer, {
                 contentType: "image/jpeg",
@@ -427,10 +397,7 @@ export async function uploadFeProof(req, res) {
             if (uploadError) {
               console.error("[Proof Storage] Upload failed:", uploadError.message);
             } else {
-              await supabase
-                .from("ticket_assignments")
-                .update({ proof_storage_path: filePath })
-                .eq("id", assignmentId);
+              await updateAssignmentById(assignmentId, { proof_storage_path: filePath });
               console.log("📦 Proof uploaded to Supabase:", redactStoragePath(filePath));
             }
           }
@@ -461,18 +428,14 @@ export async function uploadFeProof(req, res) {
       image_count: countProofImages(onsiteAttachments),
     });
 
-    const { data: ticketComment, error: commentError } = await supabase
-      .from("ticket_comments")
-      .insert({
-        ticket_id: ticketId,
-        source: "FE",
-        author_id: actionToken.fe_id,
-        body: `Demo ${actionToken.action_type} proof uploaded`,
-        attachments: onsiteAttachments,
-        created_at: nowIso,
-      })
-      .select("id")
-      .single();
+    const { data: ticketComment, error: commentError } = await insertCommentReturning({
+      ticket_id: ticketId,
+      source: "FE",
+      author_id: actionToken.fe_id,
+      body: `Demo ${actionToken.action_type} proof uploaded`,
+      attachments: onsiteAttachments,
+      created_at: nowIso,
+    });
 
     if (commentError) {
       console.error("Comment Insert Error:", commentError?.message || commentError);
@@ -500,13 +463,10 @@ export async function uploadFeProof(req, res) {
         ? "ON_SITE"
         : "RESOLVED_PENDING_VERIFICATION";
 
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({
-        status: nextStatus,
-        updated_at: nowIso,
-      })
-      .eq("id", ticketId);
+    const { error: updateError } = await updateTicketById(ticketId, {
+      status: nextStatus,
+      updated_at: nowIso,
+    });
 
     if (updateError) {
       console.error("Status Update Error:", updateError?.message || updateError);
@@ -560,10 +520,10 @@ export async function uploadFeProof(req, res) {
       if (hasOnSiteConfirmedAt) assignmentMetaPayload.on_site_confirmed_at = nowIso;
       if (hasOnSiteProofCommentId) assignmentMetaPayload.on_site_proof_comment_id = ticketComment?.id ?? null;
       if (Object.keys(assignmentMetaPayload).length > 0) {
-        await supabase
-          .from("ticket_assignments")
-          .update(assignmentMetaPayload)
-          .eq("id", ticketLifecycleRow?.current_assignment_id ?? null);
+        await updateAssignmentById(
+          ticketLifecycleRow?.current_assignment_id ?? null,
+          assignmentMetaPayload
+        );
       } else {
         console.warn("[proof] assignment metadata columns missing; skipping safe write");
       }

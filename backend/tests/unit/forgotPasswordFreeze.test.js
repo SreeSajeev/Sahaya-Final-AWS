@@ -6,15 +6,15 @@ describe("POST /auth/public/forgot-password freeze", () => {
   afterEach(() => {
     delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
     vi.resetModules();
-    vi.doUnmock("../../src/supabaseClient.js");
+    vi.doUnmock("../../src/supabaseAuthClient.js");
   });
 
   it("returns 403 and never calls generateLink when freeze is on", async () => {
     process.env.SHARED_SUPABASE_MUTATIONS_DISABLED = "true";
 
     const generateLink = vi.fn();
-    vi.doMock("../../src/supabaseClient.js", () => ({
-      supabase: {
+    vi.doMock("../../src/supabaseAuthClient.js", () => ({
+      supabaseAuth: {
         auth: { admin: { generateLink } },
       },
     }));

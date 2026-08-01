@@ -1,7 +1,4 @@
-// src/routes/tickets.js
-
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { TOKEN_STATES, revokeTokensForTicket } from "../services/tokenService.js";
 import { sendResolutionEmail } from "../services/emailService.js";
 import { setOnsiteDeadline } from "../services/slaService.js";
@@ -45,6 +42,22 @@ import {
   TICKET_CREATE_ROLES,
 } from "../constants/rolePolicies.js";
 import { validateTicketClosePreconditions } from "../services/closeValidationService.js";
+import {
+  listTicketsScoped,
+  getTicketsByIdsScoped,
+  getTicketByIdForAssign,
+  getTicketByIdScoped,
+  getTicketByIdUnscoped,
+  updateTicketById,
+  updateTicketCloseWithFallback,
+  reviewCompleteTicketScoped,
+  getTicketStatusById,
+} from "../repositories/ticketQueryRepository.js";
+import { updateSlaByTicketId } from "../repositories/slaRepository.js";
+import { insertComment } from "../repositories/commentRepository.js";
+import { getAssignmentById } from "../repositories/assignmentRepository.js";
+import { findUserNameById } from "../repositories/userRepository.js";
+import { findActiveResolutionTokenForTicket } from "../repositories/feActionTokenRepository.js";
 
 const router = express.Router();
 
@@ -212,16 +225,8 @@ router.get("/", async (req, res) => {
       return jsonRes(res, 400, { error: "Invalid query", details: q.error.flatten() });
     }
     const { limit, offset } = q.data;
-    const end = offset + limit - 1;
 
-    const { data, error } = await withTenantScope(
-      supabase
-      .from("tickets")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .range(offset, end),
-      req
-    );
+    const { data, error } = await listTicketsScoped(req, { limit, offset, filters: {} });
 
     if (error) {
       return jsonRes(res, 500, { error: safeDbErrorForClient(error, "Failed to list tickets") });
@@ -261,12 +266,10 @@ router.post(
   });
 
   try {
-    const { data: tickets, error: ticketsError } = await withTenantScope(
-      supabase
-        .from("tickets")
-        .select("id, ticket_number, status, organisation_id")
-        .in("id", uniqueIds),
-      req
+    const { data: tickets, error: ticketsError } = await getTicketsByIdsScoped(
+      req,
+      uniqueIds,
+      "id, ticket_number, status, organisation_id"
     );
 
     if (ticketsError) {
@@ -484,13 +487,11 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
   }
 
   try {
-    const { data: ticket, error: ticketError } = await withTenantScope(
-      supabase
-        .from("tickets")
-        .select("id, status, organisation_id, ticket_number, client_slug")
-        .eq("id", ticketId),
-      req
-    ).single();
+    const { data: ticket, error: ticketError } = await getTicketByIdScoped(
+      req,
+      ticketId,
+      "id, status, organisation_id, ticket_number, client_slug"
+    );
 
     if (ticketError || !ticket) {
       console.log("[REJECT] ticket fetch failed or missing:", { ticketId, hasError: Boolean(ticketError) });
@@ -528,15 +529,12 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
     }
 
     // Update ticket terminal fields.
-    const updateTicketRes = await supabase
-      .from("tickets")
-      .update({
-        status: "REJECTED",
-        needs_review: false,
-        current_assignment_id: null,
-        updated_at: nowIso,
-      })
-      .eq("id", ticketId);
+    const updateTicketRes = await updateTicketById(ticketId, {
+      status: "REJECTED",
+      needs_review: false,
+      current_assignment_id: null,
+      updated_at: nowIso,
+    });
     if (updateTicketRes.error) {
       console.error("[REJECT] update tickets failed:", updateTicketRes.error.message);
       return jsonRes(res, 500, {
@@ -544,19 +542,15 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       });
     }
 
-    // Stop SLA (no row is OK — ticket may lack sla_tracking).
-    const updateSlaRes = await supabase
-      .from("sla_tracking")
-      .update({
-        assignment_deadline: null,
-        onsite_deadline: null,
-        resolution_deadline: null,
-        assignment_breached: false,
-        onsite_breached: false,
-        resolution_breached: false,
-        updated_at: nowIso,
-      })
-      .eq("ticket_id", ticketId);
+    const updateSlaRes = await updateSlaByTicketId(ticketId, {
+      assignment_deadline: null,
+      onsite_deadline: null,
+      resolution_deadline: null,
+      assignment_breached: false,
+      onsite_breached: false,
+      resolution_breached: false,
+      updated_at: nowIso,
+    });
     if (updateSlaRes.error) {
       console.error("[REJECT] update sla_tracking failed:", updateSlaRes.error.message);
       return jsonRes(res, 500, {
@@ -566,17 +560,13 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
 
     // Audit comment (skip duplicates if already rejected).
     if (!alreadyRejected) {
-      const { data: rejectorRow } = await supabase
-        .from("users")
-        .select("name")
-        .eq("id", req.appUser.id)
-        .maybeSingle();
+      const { data: rejectorRow } = await findUserNameById(req.appUser.id);
       const rejectedByName =
         rejectorRow?.name != null && String(rejectorRow.name).trim() !== ""
           ? String(rejectorRow.name).trim()
           : "Unknown";
 
-      const insertCommentRes = await supabase.from("ticket_comments").insert({
+      const insertCommentRes = await insertComment({
         ticket_id: ticketId,
         source: "STAFF",
         author_id: req.appUser.id,
@@ -597,11 +587,7 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       }
     }
 
-    const { data: finalTicket, error: finalTicketError } = await supabase
-      .from("tickets")
-      .select("status")
-      .eq("id", ticketId)
-      .single();
+    const { data: finalTicket, error: finalTicketError } = await getTicketStatusById(ticketId);
     if (finalTicketError || !finalTicket || finalTicket.status !== "REJECTED") {
       console.error("[REJECT] final status verification failed:", {
         ticketId,
@@ -647,13 +633,7 @@ router.post("/:id/on-site-token", async (req, res) => {
   const ticketId = req.params.id;
 
   try {
-    const { data: ticket, error: ticketError } = await withTenantScope(
-      supabase
-        .from("tickets")
-        .select("ticket_number, vehicle_number, location, current_assignment_id, status, organisation_id")
-        .eq("id", ticketId),
-      req
-    ).single();
+    const { data: ticket, error: ticketError } = await getTicketByIdForAssign(req, ticketId);
 
     if (ticketError || !ticket) {
       return jsonRes(res, 404, { error: "Ticket not found" });
@@ -670,26 +650,21 @@ router.post("/:id/on-site-token", async (req, res) => {
       return jsonRes(res, 400, { error: "Assignment missing" });
     }
 
-    const { data: assignment, error: assignmentError } = await supabase
-      .from("ticket_assignments")
-      .select("fe_id")
-      .eq("id", ticket.current_assignment_id)
-      .single();
+    const { data: assignment, error: assignmentError } = await getAssignmentById(
+      ticket.current_assignment_id,
+      "fe_id"
+    );
 
     if (assignmentError || !assignment) {
       return jsonRes(res, 400, { error: "Assignment missing" });
     }
 
     const nowIso = new Date().toISOString();
-    const { data: existingActiveToken } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "RESOLUTION")
-      .eq("token_state", TOKEN_STATES.ACTIVE)
-      .eq("used", false)
-      .gt("expires_at", nowIso)
-      .maybeSingle();
+    const { data: existingActiveToken } = await findActiveResolutionTokenForTicket({
+      ticketId,
+      nowIso,
+      tokenState: TOKEN_STATES.ACTIVE,
+    });
 
     if (!existingActiveToken?.id) {
       return jsonRes(res, 409, {
@@ -698,10 +673,7 @@ router.post("/:id/on-site-token", async (req, res) => {
       });
     }
 
-    await supabase
-      .from("tickets")
-      .update({ status: "ON_SITE" })
-      .eq("id", ticketId);
+    await updateTicketById(ticketId, { status: "ON_SITE" });
 
     setOnsiteDeadline(ticketId).catch((err) =>
       console.error("[SLA] setOnsiteDeadline after on-site-token", ticketId, err.message)
@@ -770,11 +742,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
     const selectFields =
       "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, organisation_id, status, current_assignment_id";
 
-    const { data: existing, error: loadErr } = await supabase
-      .from("tickets")
-      .select(selectFields)
-      .eq("id", ticketId)
-      .maybeSingle();
+    const { data: existing, error: loadErr } = await getTicketByIdUnscoped(ticketId, selectFields);
 
     if (loadErr) {
       console.error("[CLOSE] load ticket", {
@@ -828,34 +796,11 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       resolution_category: resolutionCategoryValue,
     };
 
-    let result = await supabase
-      .from("tickets")
-      .update(updatePayload)
-      .eq("id", ticketId)
-      .select(selectFields)
-      .single();
-
-    if (result.error) {
-      const isColumnError =
-        result.error.code === "42703" ||
-        (result.error.message &&
-          /verification_remarks|review_notes|resolution_category|column|resolved_at/.test(
-            result.error.message
-          ));
-      if (isColumnError) {
-        updatePayload = {
-          status: "RESOLVED",
-          resolved_at: new Date(),
-          ...(remarksValue ? { verification_remarks: remarksValue } : {}),
-        };
-        result = await supabase
-          .from("tickets")
-          .update(updatePayload)
-          .eq("id", ticketId)
-          .select(selectFields)
-          .single();
-      }
-    }
+    let result = await updateTicketCloseWithFallback(ticketId, updatePayload, {
+      status: "RESOLVED",
+      resolved_at: new Date(),
+      ...(remarksValue ? { verification_remarks: remarksValue } : {}),
+    });
 
     if (result.error) {
       console.error("[CLOSE] update", {
@@ -1023,27 +968,20 @@ router.patch("/:id/review-complete", requireRole(STAFF_OPERATION_ROLES), async (
   }
 
   try {
-    const { data: ticket, error } = await withTenantScope(
-      supabase
-      .from("tickets")
-      .update({
-        category: cat,
-        issue_type: issue,
-        location: normalizeLocation(loc),
-        vehicle_number:
-          vehicle_number != null && String(vehicle_number).trim() !== ""
-            ? String(vehicle_number).trim()
-            : null,
-        priority: priorityNorm.priority,
-        priority_level: priorityNorm.priority_level,
-        needs_review: false,
-        confidence_score: 100,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", ticketId)
-      .select("*, organisation_id"),
-      req
-    ).single();
+    const { data: ticket, error } = await reviewCompleteTicketScoped(req, ticketId, {
+      category: cat,
+      issue_type: issue,
+      location: normalizeLocation(loc),
+      vehicle_number:
+        vehicle_number != null && String(vehicle_number).trim() !== ""
+          ? String(vehicle_number).trim()
+          : null,
+      priority: priorityNorm.priority,
+      priority_level: priorityNorm.priority_level,
+      needs_review: false,
+      confidence_score: 100,
+      updated_at: new Date().toISOString(),
+    });
 
     if (error) {
       return jsonRes(res, 404, { error: safeDbErrorForClient(error, "Ticket not found") });

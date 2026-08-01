@@ -1,6 +1,7 @@
-import { supabase } from "../supabaseClient.js";
 import { jsonRes, jsonOk, safeDbErrorForClient } from "../utils/http.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
+import { getFeActionTokenByIdSingle } from "../repositories/feActionTokenRepository.js";
+import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
 
 export async function validateFeActionToken(req, res) {
   try {
@@ -12,11 +13,7 @@ export async function validateFeActionToken(req, res) {
 
     const nowISO = new Date().toISOString();
 
-    const { data: actionToken, error } = await supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("id", token)
-      .single();
+    const { data: actionToken, error } = await getFeActionTokenByIdSingle(token);
 
     if (error || !actionToken) {
       return jsonRes(res, 404, { error: "Invalid token" });
@@ -31,11 +28,10 @@ export async function validateFeActionToken(req, res) {
     }
 
     // 🔥 FOR DEMO: fetch ticket separately without lifecycle enforcement
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("id, ticket_number, status, organisation_id")
-      .eq("id", actionToken.ticket_id)
-      .single();
+    const { data: ticket } = await getTicketByIdUnscopedSingle(
+      actionToken.ticket_id,
+      "id, ticket_number, status, organisation_id"
+    );
 
     if (ticket?.status === "REJECTED") {
       return jsonRes(res, 403, { error: "Ticket has been rejected" });

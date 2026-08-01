@@ -55,6 +55,12 @@ jobs:
 
             ensure_env_flag frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED true
             ensure_env_flag backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED true
+            # Phase A: Prisma → EC2 Postgres is authoritative; keep dual-write risks off during migration.
+            ensure_env_flag backend/.env DB_MODE prisma
+            # Unverified bucket isolation — disable S3 proof replication during Phase A validation.
+            ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED false
+            # Temporary Phase A write-path probe (disable after gate PASS).
+            ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED true
 
             echo "===== FRONTEND ====="
 
@@ -74,7 +80,9 @@ jobs:
 
             npm install
 
-            pm2 restart sahaya-final-aws-monorepo-api
+            npx prisma generate
+
+            pm2 restart sahaya-final-aws-monorepo-api --update-env
 
             systemctl reload nginx
 

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { supabase } from "../../supabaseClient.js";
 import {
   OTP_MAX_ATTEMPTS,
   OTP_MAX_REQUESTS_PER_MOBILE,
@@ -18,6 +17,14 @@ import {
   verifyOtpHash,
 } from "./otpCrypto.js";
 import { sendOtpSms } from "./smsTransport.js";
+import {
+  countRecentOtpSessions,
+  findPendingOtpSession,
+  updateOtpSessionById,
+  insertOtpSession,
+  findOtpSessionById,
+} from "../../repositories/publicOtpSessionRepository.js";
+import { findActiveComplaintPointByPublicToken } from "../../repositories/tenantComplaintPointRepository.js";
 
 /** Phase 4 placeholder until complaint form captures name (Phase 5). */
 const PENDING_REPORTER_NAME = "Pending";
@@ -28,52 +35,26 @@ const PENDING_REPORTER_NAME = "Pending";
 export async function getActiveComplaintPointByToken(publicToken) {
   const token = String(publicToken || "").trim();
   if (!token) return { data: null, error: null };
-  const { data, error } = await supabase
-    .from("tenant_complaint_points")
-    .select("id, organisation_id, name, status, public_token")
-    .eq("public_token", token)
-    .maybeSingle();
-  if (error) return { data: null, error };
-  if (!data || data.status !== "active") return { data: null, error: null };
-  return { data, error: null };
+  return findActiveComplaintPointByPublicToken(token);
 }
 
 async function countRecentOtpRequests(complaintPointId, mobile10) {
   const since = new Date(Date.now() - OTP_REQUEST_WINDOW_MINUTES * 60 * 1000).toISOString();
-  const { count, error } = await supabase
-    .from("public_otp_sessions")
-    .select("id", { count: "exact", head: true })
-    .eq("complaint_point_id", complaintPointId)
-    .eq("reporter_mobile", mobile10)
-    .gte("created_at", since);
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  return countRecentOtpSessions(complaintPointId, mobile10, since);
 }
 
 async function findPendingSession(complaintPointId, mobile10) {
-  const nowIso = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("public_otp_sessions")
-    .select("*")
-    .eq("complaint_point_id", complaintPointId)
-    .eq("reporter_mobile", mobile10)
-    .eq("status", "pending")
-    .gt("expires_at", nowIso)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return data;
+  return findPendingOtpSession(complaintPointId, mobile10);
 }
 
 async function expireSessionIfNeeded(row) {
   if (!row || row.status !== "pending") return row;
   if (new Date(row.expires_at) > new Date()) return row;
-  await supabase
-    .from("public_otp_sessions")
-    .update({ status: "expired", updated_at: new Date().toISOString() })
-    .eq("id", row.id)
-    .eq("status", "pending");
+  await updateOtpSessionById(
+    row.id,
+    { status: "expired", updated_at: new Date().toISOString() },
+    { statusEq: "pending" }
+  );
   return { ...row, status: "expired" };
 }
 
@@ -139,25 +120,25 @@ export async function sendPublicOtp({ mobile, complaintPointToken, req }) {
     const otpHash = hashOtp(sessionId, otp);
     // Resend issues a new OTP and extends expiry but preserves attempt_count so resend
     // cannot reset the per-session brute-force counter (security review FIX 4).
-    const { error: updErr } = await supabase
-      .from("public_otp_sessions")
-      .update({
+    const { error: updErr } = await updateOtpSessionById(
+      sessionId,
+      {
         otp_hash: otpHash,
         resend_count: (pending.resend_count ?? 0) + 1,
         expires_at: expiresAt.toISOString(),
         updated_at: new Date().toISOString(),
         ip_hash: ipHash,
         user_agent_hash: uaHash,
-      })
-      .eq("id", sessionId)
-      .eq("status", "pending");
+      },
+      { statusEq: "pending" }
+    );
     if (updErr) {
       return { ok: false, status: 500, message: "Failed to update OTP session" };
     }
   } else {
     sessionId = randomUUID();
     const otpHash = hashOtp(sessionId, otp);
-    const { error: insErr } = await supabase.from("public_otp_sessions").insert({
+    const { error: insErr } = await insertOtpSession({
       id: sessionId,
       complaint_point_id: point.id,
       organisation_id: point.organisation_id,
@@ -231,11 +212,7 @@ export async function sendPublicOtp({ mobile, complaintPointToken, req }) {
  * @param {{ otpSessionId: string, otp: string, req: import('express').Request }} params
  */
 export async function verifyPublicOtp({ otpSessionId, otp, req }) {
-  const { data: row, error } = await supabase
-    .from("public_otp_sessions")
-    .select("*")
-    .eq("id", otpSessionId)
-    .maybeSingle();
+  const { data: row, error } = await findOtpSessionById(otpSessionId, "*");
 
   if (error) {
     return { ok: false, status: 500, message: "Failed to load OTP session" };
@@ -281,19 +258,19 @@ export async function verifyPublicOtp({ otpSessionId, otp, req }) {
   }
 
   if (new Date(session.expires_at) <= new Date()) {
-    await supabase
-      .from("public_otp_sessions")
-      .update({ status: "expired", updated_at: new Date().toISOString() })
-      .eq("id", session.id);
+    await updateOtpSessionById(session.id, {
+      status: "expired",
+      updated_at: new Date().toISOString(),
+    });
     return { ok: false, status: 410, message: "OTP has expired" };
   }
 
   const attempts = session.attempt_count ?? 0;
   if (attempts >= OTP_MAX_ATTEMPTS) {
-    await supabase
-      .from("public_otp_sessions")
-      .update({ status: "locked", updated_at: new Date().toISOString() })
-      .eq("id", session.id);
+    await updateOtpSessionById(session.id, {
+      status: "locked",
+      updated_at: new Date().toISOString(),
+    });
     auditOtpEvent({
       action: "otp_locked",
       organisationId: session.organisation_id,
@@ -314,7 +291,7 @@ export async function verifyPublicOtp({ otpSessionId, otp, req }) {
     if (nextAttempts >= OTP_MAX_ATTEMPTS) {
       updates.status = "locked";
     }
-    await supabase.from("public_otp_sessions").update(updates).eq("id", session.id);
+    await updateOtpSessionById(session.id, updates);
     if (updates.status === "locked") {
       auditOtpEvent({
         action: "otp_locked",
@@ -329,15 +306,15 @@ export async function verifyPublicOtp({ otpSessionId, otp, req }) {
   }
 
   const verifiedAt = new Date().toISOString();
-  const { error: updErr } = await supabase
-    .from("public_otp_sessions")
-    .update({
+  const { error: updErr } = await updateOtpSessionById(
+    session.id,
+    {
       status: "verified",
       verified_at: verifiedAt,
       updated_at: verifiedAt,
-    })
-    .eq("id", session.id)
-    .eq("status", "pending");
+    },
+    { statusEq: "pending" }
+  );
 
   if (updErr) {
     return { ok: false, status: 500, message: "Failed to verify OTP" };

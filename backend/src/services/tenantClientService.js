@@ -1,5 +1,11 @@
-import { supabase } from "../supabaseClient.js";
 import { safeTrim } from "../utils/http.js";
+import {
+  getTenantClientByIdRow,
+  insertTenantClientRow,
+  listTenantClientsQuery,
+  loadActiveTenantClientSlugs,
+  updateTenantClientRow,
+} from "../repositories/tenantClientRepository.js";
 
 export function normalizeClientSlug(raw) {
   return String(raw ?? "")
@@ -23,21 +29,13 @@ function resolveOrganisationIdForWrite(req, bodyOrganisationId) {
  * @returns {Promise<Set<string>>}
  */
 export async function loadAllowedClientSlugsForTenant(req) {
-  let q = supabase
-    .from("tenant_clients")
-    .select("slug, organisation_id")
-    .eq("status", "active");
-
-  if (!req.isSuperAdmin) {
-    if (!req.tenantId) return new Set();
-    q = q.eq("organisation_id", req.tenantId);
-  }
-
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
+  const rows = await loadActiveTenantClientSlugs({
+    isSuperAdmin: req.isSuperAdmin,
+    tenantId: req.tenantId,
+  });
 
   const slugs = new Set();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const key = normalizeClientSlug(row.slug);
     if (key) slugs.add(key);
   }
@@ -53,32 +51,17 @@ export async function listTenantClients(req, opts = {}) {
   const statusFilter = safeTrim(opts.status);
   const activeOnly = opts.activeOnly === true;
 
-  let q = supabase
-    .from("tenant_clients")
-    .select("*")
-    .order("name", { ascending: true });
-
-  if (!req.isSuperAdmin) {
-    if (!req.tenantId) {
-      return { data: [], error: null };
-    }
-    q = q.eq("organisation_id", req.tenantId);
-  } else if (organisationIdFilter) {
-    q = q.eq("organisation_id", organisationIdFilter);
-  }
-
-  if (statusFilter) {
-    q = q.eq("status", statusFilter);
-  } else if (activeOnly) {
-    q = q.eq("status", "active");
-  }
-
-  const { data, error } = await q;
-  return { data: data ?? [], error };
+  return listTenantClientsQuery({
+    isSuperAdmin: req.isSuperAdmin,
+    tenantId: req.tenantId,
+    organisationIdFilter,
+    statusFilter,
+    activeOnly,
+  });
 }
 
 export async function getTenantClientById(req, id) {
-  const { data, error } = await supabase.from("tenant_clients").select("*").eq("id", id).maybeSingle();
+  const { data, error } = await getTenantClientByIdRow(id);
   if (error) return { data: null, error };
   if (!data) return { data: null, error: null };
   if (!req.isSuperAdmin && req.tenantId && data.organisation_id !== req.tenantId) {
@@ -120,10 +103,10 @@ export async function createTenantClient(req, body) {
     updated_at: nowIso,
   };
 
-  const { data, error } = await supabase.from("tenant_clients").insert(insert).select("*").single();
+  const { data, error } = await insertTenantClientRow(insert);
   if (error) {
     const msg = String(error.message || "");
-    if (msg.includes("tenant_clients_organisation_slug_unique") || msg.includes("duplicate key")) {
+    if (msg.includes("tenant_clients_organisation_slug_unique") || msg.includes("duplicate key") || error.code === "23505") {
       return { error: { status: 400, message: `Client slug "${slug}" already exists for this tenant` } };
     }
     return { error: { status: 400, message: msg } };
@@ -173,16 +156,11 @@ export async function updateTenantClient(req, id, body) {
     return { error: { status: 400, message: "No valid fields to update" } };
   }
 
-  const { data, error } = await supabase
-    .from("tenant_clients")
-    .update(patch)
-    .eq("id", id)
-    .select("*")
-    .single();
+  const { data, error } = await updateTenantClientRow(id, patch);
 
   if (error) {
     const msg = String(error.message || "");
-    if (msg.includes("tenant_clients_organisation_slug_unique") || msg.includes("duplicate key")) {
+    if (msg.includes("tenant_clients_organisation_slug_unique") || msg.includes("duplicate key") || error.code === "23505") {
       return { error: { status: 400, message: "Client slug already exists for this tenant" } };
     }
     return { error: { status: 400, message: msg } };
@@ -199,12 +177,10 @@ export async function deleteTenantClient(req, id) {
     return { data: existing.data };
   }
 
-  const { data, error } = await supabase
-    .from("tenant_clients")
-    .update({ status: "inactive", updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select("*")
-    .single();
+  const { data, error } = await updateTenantClientRow(id, {
+    status: "inactive",
+    updated_at: new Date().toISOString(),
+  });
 
   if (error) return { error: { status: 400, message: error.message } };
   return { data };

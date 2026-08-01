@@ -1,5 +1,4 @@
 import express from "express";
-import { supabase } from "../supabaseClient.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { FE_MANAGEMENT_ROLES } from "../constants/rolePolicies.js";
@@ -7,16 +6,16 @@ import {
   attachTenantContext,
   isTenantAllowed,
   requireTenantOrSuperAdmin,
-  scopeQueryByTenant,
 } from "../middleware/tenantContext.js";
-
-function withTenantScope(query, req, orgColumn = "organisation_id") {
-  return scopeQueryByTenant(query, req, orgColumn);
-}
 import { jsonError, jsonOk, safeTrim } from "../utils/http.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
+import {
+  insertFieldExecutive,
+  getFieldExecutiveOrgByIdScoped,
+  updateFieldExecutiveById,
+} from "../repositories/fieldExecutiveRepository.js";
 
 const router = express.Router();
 
@@ -59,7 +58,7 @@ router.post("/", requireRole(FE_MANAGEMENT_ROLES), async (req, res) => {
     const userId = safeTrim(req.body?.user_id);
     if (userId) payload.user_id = userId;
 
-    const { data, error } = await supabase.from("field_executives").insert(payload).select("*").single();
+    const { data, error } = await insertFieldExecutive(payload);
     if (error) return jsonError(res, 400, error.message);
     if (!isTenantAllowed(req, data?.organisation_id)) return jsonError(res, 403, "Forbidden");
 
@@ -87,9 +86,7 @@ router.patch("/:id", requireRole(FE_MANAGEMENT_ROLES), async (req, res) => {
   const startedAt = Date.now();
   const id = req.params.id;
   try {
-    let q = supabase.from("field_executives").select("id, organisation_id").eq("id", id);
-    q = withTenantScope(q, req);
-    const { data: existing, error: exErr } = await q.maybeSingle();
+    const { data: existing, error: exErr } = await getFieldExecutiveOrgByIdScoped(req, id);
     if (exErr) return jsonError(res, 500, exErr.message);
     if (!existing) return jsonError(res, 404, "Field executive not found");
     if (!isTenantAllowed(req, existing.organisation_id)) return jsonError(res, 403, "Forbidden");
@@ -104,9 +101,7 @@ router.patch("/:id", requireRole(FE_MANAGEMENT_ROLES), async (req, res) => {
     }
     if (Object.keys(patch).length === 0) return jsonError(res, 400, "No valid fields to update");
 
-    let uq = supabase.from("field_executives").update(patch).eq("id", id).select("*");
-    uq = withTenantScope(uq, req);
-    const { data, error } = await uq.single();
+    const { data, error } = await updateFieldExecutiveById(id, patch);
     if (error) return jsonError(res, 500, error.message);
     logEvent("fieldExecutives.patch", { tenantId: req.tenantId ?? null, feId: id, ms: Date.now() - startedAt });
     return jsonOk(res, data);
@@ -116,4 +111,3 @@ router.patch("/:id", requireRole(FE_MANAGEMENT_ROLES), async (req, res) => {
 });
 
 export default router;
-

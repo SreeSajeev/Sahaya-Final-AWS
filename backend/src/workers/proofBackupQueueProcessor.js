@@ -3,13 +3,21 @@
  * Called periodically from the worker loop. Additive only; does not change proof submission flow.
  */
 
-import { supabase } from "../supabaseClient.js";
+import { supabaseAuth } from "../supabaseAuthClient.js";
 import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
 import { replicateProofToS3 } from "../services/s3ProofReplication.js";
 import { WORKER_TENANT_ISOLATION_ENABLED } from "../config/appConfig.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactStoragePath } from "../utils/redact.js";
+import { listOrganisationIds } from "../repositories/organisationRepository.js";
+import {
+  listProofBackupQueueBatch,
+  deleteProofBackupQueueRow,
+} from "../repositories/feProofBackupQueueRepository.js";
+import { getCommentById, updateCommentById } from "../repositories/commentRepository.js";
+import { getTicketByIdUnscoped } from "../repositories/ticketQueryRepository.js";
+import { updateAssignmentById } from "../repositories/assignmentRepository.js";
 
 const BATCH_SIZE = 20;
 
@@ -17,21 +25,18 @@ async function getWorkerTenantScopes() {
   if (!WORKER_TENANT_ISOLATION_ENABLED) return [null];
   const hasOrgOnQueue = await hasPublicColumn("fe_proof_backup_queue", "organisation_id");
   if (!hasOrgOnQueue) return [null];
-  const { data: orgRows } = await supabase.from("organisations").select("id");
+  const { data: orgRows } = await listOrganisationIds();
   const tenantIds = Array.isArray(orgRows) ? orgRows.map((r) => r.id).filter(Boolean) : [];
   return [null, ...tenantIds];
 }
 
 async function processProofBackupQueueForScope(tenantId = null) {
   const hasOrgOnQueue = await hasPublicColumn("fe_proof_backup_queue", "organisation_id");
-  let queueQuery = supabase
-    .from("fe_proof_backup_queue")
-    .select("id, ticket_comment_id, ticket_id, action_type")
-    .order("created_at", { ascending: true })
-    .limit(BATCH_SIZE);
-  if (hasOrgOnQueue && tenantId) queueQuery = queueQuery.eq("organisation_id", tenantId);
-  if (hasOrgOnQueue && !tenantId) queueQuery = queueQuery.is("organisation_id", null);
-  const { data: rows, error: fetchError } = await queueQuery;
+  const { data: rows, error: fetchError } = await listProofBackupQueueBatch({
+    limit: BATCH_SIZE,
+    tenantId,
+    hasOrgOnQueue,
+  });
 
   if (fetchError) {
     console.error("[Proof Backup Queue] Fetch failed:", fetchError.message);
@@ -48,17 +53,14 @@ async function processProofBackupQueueForScope(tenantId = null) {
         ticketId: row.ticket_id,
         event: "processing_backup_job",
       }));
-      const { data: comment, error: commentError } = await supabase
-        .from("ticket_comments")
-        .select("attachments")
-        .eq("id", row.ticket_comment_id)
-        .single();
+      const { data: comment, error: commentError } = await getCommentById(
+        row.ticket_comment_id,
+        "attachments"
+      );
 
       if (commentError || !comment?.attachments) {
         console.warn("[Proof Backup Queue] Comment not found or no attachments:", row.ticket_comment_id);
-        let deleteQuery = supabase.from("fe_proof_backup_queue").delete().eq("id", row.id);
-        if (hasOrgOnQueue && tenantId) deleteQuery = deleteQuery.eq("organisation_id", tenantId);
-        await deleteQuery;
+        await deleteProofBackupQueueRow(row.id, { tenantId, hasOrgOnQueue });
         continue;
       }
 
@@ -73,9 +75,7 @@ async function processProofBackupQueueForScope(tenantId = null) {
       const base64List = images.length > 0 ? images : legacy;
 
       if (!base64List || base64List.length === 0) {
-        let deleteQuery = supabase.from("fe_proof_backup_queue").delete().eq("id", row.id);
-        if (hasOrgOnQueue && tenantId) deleteQuery = deleteQuery.eq("organisation_id", tenantId);
-        await deleteQuery;
+        await deleteProofBackupQueueRow(row.id, { tenantId, hasOrgOnQueue });
         continue;
       }
 
@@ -97,7 +97,7 @@ async function processProofBackupQueueForScope(tenantId = null) {
             redactStoragePath(filePath)
           );
         } else {
-          const { error: uploadError } = await supabase.storage
+          const { error: uploadError } = await supabaseAuth.storage
             .from("fe-proofs")
             .upload(filePath, buffer, {
               contentType: "image/jpeg",
@@ -105,7 +105,6 @@ async function processProofBackupQueueForScope(tenantId = null) {
             });
 
           if (uploadError) {
-            // Idempotency: if the object already exists, treat as success.
             const statusCode = uploadError?.statusCode ?? uploadError?.status;
             const msg = String(uploadError?.message ?? "");
             const isConflict = statusCode === 409 || /already exists/i.test(msg);
@@ -128,21 +127,19 @@ async function processProofBackupQueueForScope(tenantId = null) {
 
       const storagePaths = base64List.map((_, idx) => `${basePath}/${idx}.jpg`);
 
-      const { data: commentRow, error: commentAttachErr } = await supabase
-        .from("ticket_comments")
-        .select("attachments")
-        .eq("id", row.ticket_comment_id)
-        .maybeSingle();
+      const { data: commentRow, error: commentAttachErr } = await getCommentById(
+        row.ticket_comment_id,
+        "attachments"
+      );
       if (!commentAttachErr && commentRow) {
         const prev =
           commentRow.attachments && typeof commentRow.attachments === "object" && !Array.isArray(commentRow.attachments)
             ? commentRow.attachments
             : {};
         const merged = { ...prev, proof_storage_paths: storagePaths };
-        const { error: attUpdErr } = await supabase
-          .from("ticket_comments")
-          .update({ attachments: merged })
-          .eq("id", row.ticket_comment_id);
+        const { error: attUpdErr } = await updateCommentById(row.ticket_comment_id, {
+          attachments: merged,
+        });
         if (attUpdErr) {
           console.warn("[Proof Backup Queue] attachments merge failed:", attUpdErr.message);
         } else {
@@ -154,23 +151,14 @@ async function processProofBackupQueueForScope(tenantId = null) {
         }
       }
 
-      const { data: ticketRow } = await supabase
-        .from("tickets")
-        .select("current_assignment_id")
-        .eq("id", row.ticket_id)
-        .single();
+      const { data: ticketRow } = await getTicketByIdUnscoped(row.ticket_id, "current_assignment_id");
 
       const assignmentId = ticketRow?.current_assignment_id;
       if (assignmentId) {
-        await supabase
-          .from("ticket_assignments")
-          .update({ proof_storage_path: firstFilePath })
-          .eq("id", assignmentId);
+        await updateAssignmentById(assignmentId, { proof_storage_path: firstFilePath });
       }
 
-      let deleteQuery = supabase.from("fe_proof_backup_queue").delete().eq("id", row.id);
-      if (hasOrgOnQueue && tenantId) deleteQuery = deleteQuery.eq("organisation_id", tenantId);
-      await deleteQuery;
+      await deleteProofBackupQueueRow(row.id, { tenantId, hasOrgOnQueue });
       console.log(
         "📦 Proof uploaded to Supabase:",
         redactStoragePath(firstFilePath),

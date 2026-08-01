@@ -35,7 +35,7 @@ describe("provisionAdminUser freeze", () => {
     delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
     delete process.env.PROVISION_SERVER_SIDE_ENABLED;
     vi.resetModules();
-    vi.doUnmock("../../src/supabaseClient.js");
+    vi.doUnmock("../../src/supabaseAuthClient.js");
   });
 
   it("returns 403 and never calls auth.admin.createUser when freeze is on", async () => {
@@ -45,16 +45,14 @@ describe("provisionAdminUser freeze", () => {
     const createUser = vi.fn();
     const listUsers = vi.fn();
     const deleteUser = vi.fn();
-    vi.doMock("../../src/supabaseClient.js", () => ({
-      supabase: {
+    vi.doMock("../../src/supabaseAuthClient.js", () => ({
+      supabaseAuth: {
         auth: {
           admin: { createUser, listUsers, deleteUser },
         },
-        from: vi.fn(),
       },
     }));
 
-    // Avoid pulling real Prisma/repos for this guard test
     vi.doMock("../../src/repositories/userRepository.js", () => ({
       findUserByEmail: vi.fn(),
       insertUser: vi.fn(),

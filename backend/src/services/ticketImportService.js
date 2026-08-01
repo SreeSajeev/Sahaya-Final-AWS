@@ -1,4 +1,4 @@
-import { supabase } from "../supabaseClient.js";
+import { listOrganisationSlugsAndStatus } from "../repositories/organisationRepository.js";
 import { safeTrim } from "../utils/http.js";
 import { BULK_IMPORT_MAX_ROWS, TENANT_CLIENTS_ENABLED } from "../config/appConfig.js";
 import { createManualTicketFromBody } from "./manualTicketService.js";
@@ -62,7 +62,7 @@ function resolveComplaintId(raw) {
 
 /** Legacy validation source when TENANT_CLIENTS_ENABLED is false. */
 async function loadAllowedClientSlugsFromOrganisations() {
-  const { data, error } = await supabase.from("organisations").select("slug, status");
+  const { data, error } = await listOrganisationSlugsAndStatus();
   if (error) throw new Error(error.message);
   const slugs = new Set();
   for (const row of data ?? []) {

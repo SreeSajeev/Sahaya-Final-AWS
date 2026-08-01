@@ -21,7 +21,7 @@ import { createTicket, hasRequiredFieldsForOpen, countStructuredComplaintFields,
 import { classifyEmail } from '../services/emailClassificationService.js';
 import { validateRequiredFields } from '../services/requiredFieldValidator.js';
 import { getEmailText } from '../utils/emailParser.js';
-import { supabase } from '../supabaseClient.js';
+import { listOrganisationIds } from '../repositories/organisationRepository.js';
 import { insertAuditLog } from '../services/auditLogService.js';
 import { hasPublicColumn } from '../services/schemaCompatService.js';
 import { WORKER_TENANT_ISOLATION_ENABLED } from '../config/appConfig.js';
@@ -112,7 +112,7 @@ async function getWorkerTenantScopes() {
   if (!WORKER_TENANT_ISOLATION_ENABLED) return [null];
   const hasOrgOnRawEmails = await hasPublicColumn("raw_emails", "organisation_id");
   if (!hasOrgOnRawEmails) return [null];
-  const { data: orgRows } = await supabase.from("organisations").select("id");
+  const { data: orgRows } = await listOrganisationIds();
   const tenantIds = Array.isArray(orgRows) ? orgRows.map((r) => r.id).filter(Boolean) : [];
   return [null, ...tenantIds];
 }
