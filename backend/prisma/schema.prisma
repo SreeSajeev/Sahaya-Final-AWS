@@ -143,18 +143,17 @@ model TicketComment {
 }
 
 model AuditLog {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  entityType     String    @map("entity_type")
-  entityId       String?   @map("entity_id") @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entityType     String   @map("entity_type")
+  entityId       String   @map("entity_id") @db.Uuid
   action         String
-  performedBy    String?   @map("performed_by") @db.Uuid
-  metadata       Json?
-  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  organisationId String?   @map("organisation_id") @db.Uuid
-  actorUserId    String?   @map("actor_user_id") @db.Uuid
-  actorFeId      String?   @map("actor_fe_id") @db.Uuid
-  actorRole      String?   @map("actor_role")
-  requestId      String?   @map("request_id")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  organisationId String   @map("organisation_id") @db.Uuid
+  actorUserId    String?  @map("actor_user_id") @db.Uuid
+  actorFeId      String?  @map("actor_fe_id") @db.Uuid
+  actorRole      String?  @map("actor_role")
+  requestId      String?  @map("request_id")
   summary        String?
 
   @@map("audit_logs")

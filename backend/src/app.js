@@ -433,9 +433,17 @@ app.post("/internal/phase-a-db-probe", async (req, res) => {
     const marker = `PHASE_A_VALIDATION_${Date.now()}`;
     const { insertAuditLogRow } = await import("./repositories/auditLogRepository.js");
     const { prisma } = await import("./db/prisma.js");
+    const org = await prisma.organisation.findFirst({
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!org?.id) {
+      return jsonRes(res, 500, { error: "No organisation available for probe" });
+    }
     const { error } = await insertAuditLogRow({
       entity_type: "phase_a_probe",
-      entity_id: null,
+      entity_id: org.id,
+      organisation_id: org.id,
       action: marker,
       metadata: { purpose: "phase_a_dataplane_proof" },
       summary: marker,
