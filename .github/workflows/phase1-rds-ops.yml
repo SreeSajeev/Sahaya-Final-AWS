@@ -19,6 +19,7 @@ on:
           - cutover
           - rollback
           - smoke
+          - schema_probe
       rds_identifier:
         description: "RDS instance id (TEST only)"
         required: false
@@ -179,6 +180,21 @@ jobs:
               docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT version();" 2>&1 | head -2 || true
               docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE') AS tables, (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM organisations) AS organisations, (SELECT count(*) FROM tickets) AS tickets;" 2>&1 || true
               echo "===== INSPECT COMPLETE ====="
+              exit 0
+            fi
+
+
+            if [ "$MODE" = "schema_probe" ]; then
+              echo "===== audit_logs columns ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -c "\d+ audit_logs" 2>&1 | head -80
+              echo "===== tickets columns (sample) ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_logs' ORDER BY ordinal_position;"
+              echo "===== users columns ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='users' ORDER BY ordinal_position;"
+              echo "===== ticket_number_sequences ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT count(*) FROM ticket_number_sequences;" 2>&1 || echo missing_table
+              echo "===== baseline counts ====="
+              docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'), (SELECT count(*) FROM users), (SELECT count(*) FROM organisations), (SELECT count(*) FROM tickets);"
               exit 0
             fi
 
