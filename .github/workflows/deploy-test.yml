@@ -60,7 +60,7 @@ jobs:
             # Unverified bucket isolation — disable S3 proof replication during Phase A validation.
             ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED false
             # Temporary Phase A write-path probe (disable after gate PASS).
-            ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED true
+            ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
 
             echo "===== FRONTEND ====="
 
