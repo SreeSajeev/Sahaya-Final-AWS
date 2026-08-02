@@ -64,6 +64,45 @@ jobs:
             # Temporary Phase A write-path probe (disable after gate PASS).
             ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
 
+            # Phase D: Sahaya local auth (no Supabase Auth at runtime).
+            ensure_env_flag backend/.env APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag frontend/.env VITE_APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN .test-sahaya.pariskq.in
+            ensure_env_flag backend/.env AUTH_COOKIE_SECURE true
+            ensure_env_flag backend/.env AUTH_COOKIE_SAMESITE lax
+            ensure_env_flag backend/.env AUTH_CORS_ORIGINS https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env JWT_ACCESS_TTL_SEC 900
+            ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
+            ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
+            ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
+            ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
+            ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
+
+            # Generate JWT secrets once if missing (never echo values).
+            ensure_secret_once() {
+              local file="$1"
+              local key="$2"
+              if [ ! -f "$file" ]; then
+                echo "Missing env file: $file" >&2
+                exit 1
+              fi
+              if grep -q "^${key}=.\+" "$file"; then
+                echo "Keeping existing ${key}"
+              else
+                local val
+                val="$(openssl rand -base64 48 | tr -d '\n')"
+                if grep -q "^${key}=" "$file"; then
+                  sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file"
+                  rm -f "${file}.bak"
+                else
+                  printf '\n%s=%s\n' "$key" "$val" >> "$file"
+                fi
+                echo "Generated ${key} in ${file}"
+              fi
+            }
+            ensure_secret_once backend/.env JWT_ACCESS_SECRET
+            ensure_secret_once backend/.env JWT_REFRESH_SECRET
+
             echo "===== FRONTEND ====="
 
             cd frontend
@@ -83,6 +122,7 @@ jobs:
             npm install
 
             npx prisma generate
+            npx prisma migrate deploy
 
             pm2 restart sahaya-final-aws-monorepo-api --update-env
 

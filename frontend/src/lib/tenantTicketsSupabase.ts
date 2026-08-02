@@ -1,18 +1,16 @@
-import { supabase } from "@/integrations/supabase/client";
 import { fetchJson } from "@/lib/backendDataApi";
 import { ticketPassesPriorityFilter, resolveTicketPriorityLevel } from "@/lib/priority";
 import { getEndOfDayIST, getStartOfDayIST } from "@/lib/dateUtils";
 import type { DashboardStats, Ticket, TicketFilters, TicketStatus, UserRole } from "@/lib/types";
 import { ticketMatchesSearch } from "@/lib/ticketSearch";
 
-/** Dev-only (or VITE_DEBUG_SUPABASE_SESSION=true): confirm JWT/session is visible to the SDK. */
+/** Dev-only session debug (no Supabase Auth). */
 export async function logTicketsSessionDebug(context: string): Promise<void> {
   const enabled =
     import.meta.env.DEV || String(import.meta.env.VITE_DEBUG_SUPABASE_SESSION ?? "").trim() === "true";
   if (!enabled) return;
-  const session = await supabase.auth.getSession();
   // eslint-disable-next-line no-console
-  console.log("SESSION DEBUG:", context, session);
+  console.log("SESSION DEBUG:", context, { hasToken: Boolean(sessionStorage.getItem("sahaya_access_token")) });
 }
 
 const MAX_TENANT_TICKET_ROWS = 5000;

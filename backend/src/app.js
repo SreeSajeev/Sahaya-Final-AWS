@@ -4,6 +4,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { optionalPostmarkWebhookSecret } from "./middleware/postmarkWebhookAuth.js";
@@ -36,6 +37,7 @@ import dataApiRouter from "./routes/dataApi.js";
 import fePublicRouter from "./routes/fePublic.js";
 import authProvisionRouter from "./routes/authProvision.js";
 import publicAuthRouter from "./routes/publicAuth.js";
+import localAuthRouter from "./routes/localAuth.js";
 import feMeRouter from "./routes/feMe.js";
 import fieldExecutivesRouter from "./routes/fieldExecutives.js";
 import complaintPointsRouter from "./routes/complaintPoints.js";
@@ -176,18 +178,21 @@ async function resolveInboundOrganisationId(toEmail) {
    GLOBAL MIDDLEWARE
 ====================================================== */
 
-// CORS: allow frontend app origin (APP_BASE_URL) + dev origins
+// CORS: APP_BASE_URL + AUTH_CORS_ORIGINS (comma-separated). Prefer TEST SPA only on TEST.
+const extraCors = String(process.env.AUTH_CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const corsOrigins = [
   APP_BASE_URL,
-  "https://opsxbypariskq.vercel.app",
+  ...extraCors,
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",
   "http://127.0.0.1:3000",
   "http://127.0.0.1:8080",
   "http://127.0.0.1:5173",
-  "https://sahaya.pariskq.in",
-].filter((o, i, a) => a.indexOf(o) === i);
+].filter((o, i, a) => o && a.indexOf(o) === i);
 
 const corsOptions = {
   origin: corsOrigins,
@@ -211,6 +216,7 @@ const corsOptions = {
 app.options(/.*/, cors(corsOptions));
 
 app.use(cors(corsOptions));
+app.use(cookieParser());
 
 // Minimal hardening; CSP disabled for JSON API (avoid breaking unknown clients).
 app.use(
@@ -250,10 +256,13 @@ app.use("/fe", fePublicRouter);
 // FE authenticated APIs (remove frontend direct DB writes)
 app.use("/fe", feMeRouter);
 
-// Public auth helpers (no JWT) — login/signup org list
+// Public auth helpers (no JWT) — org list, forgot/reset password, legacy access-token lookup
 app.use("/auth/public", publicAuthRouter);
 
-// Auth provisioning APIs (remove browser-side users inserts)
+// Local Sahaya auth (login/refresh/logout/signup/change-password)
+app.use("/auth", localAuthRouter);
+
+// Auth provisioning APIs (admin provision + /me compatibility)
 app.use("/auth", authProvisionRouter);
 
 // Field Executives (write APIs for frontend migration)

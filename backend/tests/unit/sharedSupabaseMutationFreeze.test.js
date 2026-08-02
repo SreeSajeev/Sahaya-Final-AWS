@@ -30,32 +30,28 @@ describe("sharedSupabaseMutationFreeze", () => {
   });
 });
 
-describe("provisionAdminUser freeze", () => {
+describe("provisionAdminUser (PostgreSQL-only)", () => {
   afterEach(() => {
     delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
     delete process.env.PROVISION_SERVER_SIDE_ENABLED;
     vi.resetModules();
-    vi.doUnmock("../../src/supabaseAuthClient.js");
   });
 
-  it("returns 403 and never calls auth.admin.createUser when freeze is on", async () => {
+  it("creates local password hash and never needs supabaseAuth even with freeze on", async () => {
     process.env.SHARED_SUPABASE_MUTATIONS_DISABLED = "true";
     process.env.PROVISION_SERVER_SIDE_ENABLED = "true";
 
-    const createUser = vi.fn();
-    const listUsers = vi.fn();
-    const deleteUser = vi.fn();
-    vi.doMock("../../src/supabaseAuthClient.js", () => ({
-      supabaseAuth: {
-        auth: {
-          admin: { createUser, listUsers, deleteUser },
-        },
+    const insertUser = vi.fn(async () => ({
+      data: {
+        id: "33333333-3333-3333-3333-333333333333",
+        email: "freeze-test@example.com",
+        role: "STAFF",
       },
+      error: null,
     }));
-
     vi.doMock("../../src/repositories/userRepository.js", () => ({
-      findUserByEmail: vi.fn(),
-      insertUser: vi.fn(),
+      findUserByEmail: vi.fn(async () => ({ data: null, error: null })),
+      insertUser,
       updateUserById: vi.fn(),
     }));
     vi.doMock("../../src/repositories/fieldExecutiveRepository.js", () => ({
@@ -67,6 +63,17 @@ describe("provisionAdminUser freeze", () => {
     }));
     vi.doMock("../../src/services/auditLogService.js", () => ({
       insertAuditLog: vi.fn(),
+    }));
+    vi.doMock("../../src/services/passwordService.js", () => ({
+      hashPassword: vi.fn(async () => "$argon2id$mock"),
+      normalizeEmail: (e) => String(e).trim().toLowerCase(),
+    }));
+    vi.doMock("../../src/db/prisma.js", () => ({
+      prisma: {
+        user: {
+          update: vi.fn(async () => ({})),
+        },
+      },
     }));
 
     const { provisionAdminUser } = await import("../../src/services/userProvisioningService.js");
@@ -81,11 +88,9 @@ describe("provisionAdminUser freeze", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
-    expect(result.message).toMatch(/temporarily disabled/i);
-    expect(createUser).not.toHaveBeenCalled();
-    expect(listUsers).not.toHaveBeenCalled();
-    expect(deleteUser).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(insertUser).toHaveBeenCalled();
+    const payload = insertUser.mock.calls[0][0];
+    expect(payload.password_hash).toBe("$argon2id$mock");
   });
 });

@@ -16,7 +16,7 @@ import { ArrowLeft, Mail, CheckCircle } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 /**
- * Forgot password: request a reset link via Postmark (backend generates Supabase recovery link).
+ * Forgot password: request a Sahaya backend reset link (local tokens; dry-run by default on TEST).
  */
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");

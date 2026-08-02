@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { supabaseAuth } from "../supabaseAuthClient.js";
 import { PROVISION_SERVER_SIDE_ENABLED } from "../config/appConfig.js";
-import { sharedSupabaseMutationBlock } from "../security/sharedSupabaseMutationFreeze.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
 import { safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
+import { hashPassword, normalizeEmail } from "./passwordService.js";
 import {
   findUserByEmail,
   insertUser,
@@ -17,6 +16,7 @@ import {
   findFieldExecutiveByUserIdFull,
   insertFieldExecutive,
 } from "../repositories/fieldExecutiveRepository.js";
+import { prisma } from "../db/prisma.js";
 
 const ROLES = ["CLIENT", "STAFF", "FIELD_EXECUTIVE", "ADMIN", "SUPER_ADMIN"];
 
@@ -49,41 +49,6 @@ const provisionBodySchema = z.object({
 
 const TENANT_ADMIN_CREATABLE = new Set(["STAFF", "FIELD_EXECUTIVE", "CLIENT"]);
 
-async function findAuthUserByEmail(email) {
-  const normalized = String(email).trim().toLowerCase();
-  let page = 1;
-  for (let i = 0; i < 10; i++) {
-    const { data, error } = await supabaseAuth.auth.admin.listUsers({ page, perPage: 200 });
-    if (error) throw error;
-    const users = data?.users ?? [];
-    const found = users.find((u) => (u.email || "").trim().toLowerCase() === normalized);
-    if (found) return found;
-    if (users.length < 200) break;
-    page += 1;
-  }
-  return null;
-}
-
-async function deleteAuthUser(authUserId) {
-  if (!authUserId) return;
-  const freeze = sharedSupabaseMutationBlock();
-  if (freeze) {
-    logEvent("userProvisioning.compensateAuthDeleteFrozen", {
-      authUserId,
-      code: freeze.code,
-    });
-    return;
-  }
-  try {
-    await supabaseAuth.auth.admin.deleteUser(authUserId);
-  } catch (err) {
-    logEvent("userProvisioning.compensateAuthDeleteFailed", {
-      authUserId,
-      message: err?.message ?? String(err),
-    });
-  }
-}
-
 function resolveOrganisationId({ role, organisationId }) {
   if (role === "SUPER_ADMIN") return null;
   return organisationId ?? null;
@@ -91,7 +56,6 @@ function resolveOrganisationId({ role, organisationId }) {
 
 /**
  * Authorize and normalize admin provision request.
- * @returns {{ ok: true, body: object } | { ok: false, status: number, message: string }}
  */
 export function authorizeAdminProvision(req, rawBody) {
   const parsed = provisionBodySchema.safeParse(rawBody ?? {});
@@ -139,7 +103,7 @@ export function authorizeAdminProvision(req, rawBody) {
     ok: true,
     body: {
       ...body,
-      email: body.email.trim().toLowerCase(),
+      email: normalizeEmail(body.email),
       name: body.name.trim(),
       organisationId,
       clientSlug: safeTrim(body.clientSlug),
@@ -148,17 +112,11 @@ export function authorizeAdminProvision(req, rawBody) {
 }
 
 /**
- * Server-side admin user provisioning (auth + public.users + optional FE).
- * Idempotent when public.users row already exists for email with auth_id linked.
+ * Server-side admin user provisioning — PostgreSQL only (no Supabase Auth).
  */
 export async function provisionAdminUser({ req, body }) {
   if (!PROVISION_SERVER_SIDE_ENABLED) {
     return { ok: false, status: 404, message: "Server-side provisioning is not enabled" };
-  }
-
-  const freeze = sharedSupabaseMutationBlock();
-  if (freeze) {
-    return { ok: false, status: 403, message: freeze.message, code: freeze.code };
   }
 
   const email = body.email;
@@ -170,7 +128,7 @@ export async function provisionAdminUser({ req, body }) {
   const { data: existingUser, error: existingErr } = await findUserByEmail(email);
   if (existingErr) return { ok: false, status: 500, message: existingErr.message };
 
-  if (existingUser?.auth_id) {
+  if (existingUser?.password_hash) {
     let feRow = null;
     if (role === "FIELD_EXECUTIVE" && existingUser.id) {
       const hasFeUserId = await hasPublicColumn("field_executives", "user_id");
@@ -186,94 +144,20 @@ export async function provisionAdminUser({ req, body }) {
         profile: existingUser,
         created: false,
         fieldExecutive: feRow,
-        authUserId: existingUser.auth_id,
       },
     };
   }
 
-  let authUserId = null;
-  let createdAuth = false;
-
   try {
-    if (existingUser && !existingUser.auth_id) {
-      const authUser = await findAuthUserByEmail(email);
-      if (authUser?.id) {
-        authUserId = authUser.id;
-      } else {
-        const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
-          email,
-          password: body.password,
-          email_confirm: true,
-          user_metadata: {
-            name: body.name,
-            role,
-            ...(organisationId ? { organisation_id: organisationId } : {}),
-            ...(clientSlug ? { client_slug: clientSlug } : {}),
-            approval_status: "approved",
-          },
-        });
-        if (createErr) {
-          const dup =
-            createErr.message?.toLowerCase().includes("already") ||
-            createErr.code === "user_already_exists";
-          if (dup) {
-            const again = await findAuthUserByEmail(email);
-            if (!again?.id) {
-              return { ok: false, status: 409, message: "Email already registered" };
-            }
-            authUserId = again.id;
-          } else {
-            return { ok: false, status: 400, message: createErr.message };
-          }
-        } else {
-          authUserId = created?.user?.id ?? null;
-          createdAuth = true;
-        }
-      }
-    } else if (!existingUser) {
-      const { data: created, error: createErr } = await supabaseAuth.auth.admin.createUser({
-        email,
-        password: body.password,
-        email_confirm: true,
-        user_metadata: {
-          name: body.name,
-          role,
-          ...(organisationId ? { organisation_id: organisationId } : {}),
-          ...(clientSlug ? { client_slug: clientSlug } : {}),
-          approval_status: "approved",
-        },
-      });
-      if (createErr) {
-        const dup =
-          createErr.message?.toLowerCase().includes("already") ||
-          createErr.code === "user_already_exists";
-        if (dup) {
-          const authUser = await findAuthUserByEmail(email);
-          if (!authUser?.id) {
-            return { ok: false, status: 409, message: "Email already registered" };
-          }
-          authUserId = authUser.id;
-        } else {
-          return { ok: false, status: 400, message: createErr.message };
-        }
-      } else {
-        authUserId = created?.user?.id ?? null;
-        createdAuth = true;
-      }
-    }
-
-    if (!authUserId) {
-      return { ok: false, status: 500, message: "Failed to create auth user" };
-    }
-
+    const passwordHash = await hashPassword(body.password);
     const userPayload = {
-      auth_id: authUserId,
       email,
       name: body.name,
       role,
       approval_status: "approved",
       active,
       is_active: active,
+      password_hash: passwordHash,
       ...(organisationId ? { organisation_id: organisationId } : {}),
       ...(clientSlug ? { client_slug: clientSlug } : {}),
     };
@@ -285,22 +169,25 @@ export async function provisionAdminUser({ req, body }) {
       const { data: updated, error: updErr } = await updateUserById(existingUser.id, userPayload);
       if (updErr) throw Object.assign(new Error(updErr.message), { code: updErr.code });
       profile = updated;
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: { passwordHash, passwordChangedAt: new Date() },
+      });
     } else {
       const { data: inserted, error: insErr } = await insertUser(userPayload);
       if (insErr) {
         if (insErr.code === "23505") {
-          const { data: retry } = await findUserByEmail(email);
-          if (retry) {
-            profile = retry;
-          } else {
-            throw Object.assign(new Error(insErr.message), { code: insErr.code });
-          }
-        } else {
-          throw Object.assign(new Error(insErr.message), { code: insErr.code });
+          return { ok: false, status: 409, message: "Email already registered" };
         }
-      } else {
-        profile = inserted;
-        createdProfile = true;
+        throw Object.assign(new Error(insErr.message), { code: insErr.code });
+      }
+      profile = inserted;
+      createdProfile = true;
+      if (profile?.id) {
+        await prisma.user.update({
+          where: { id: profile.id },
+          data: { passwordHash, passwordChangedAt: new Date() },
+        });
       }
     }
 
@@ -310,27 +197,26 @@ export async function provisionAdminUser({ req, body }) {
       const feOpts = body.fieldExecutive ?? {};
       const feName = body.name || email;
 
-      if (hasFeUserId) {
-        const { data: existingFe } = await findFieldExecutiveByUserIdFull(profile.id);
-        if (existingFe) {
-          fieldExecutive = existingFe;
-        } else {
-          const fePayload = {
-            name: feName,
-            email,
-            phone: safeTrim(feOpts.phone),
-            base_location: normalizeLocation(safeTrim(feOpts.base_location)),
-            skills: feOpts.skills ?? null,
-            active: feOpts.active !== false,
-            organisation_id: organisationId,
-            user_id: profile.id,
-          };
-          const { data: feData, error: feErr } = await insertFieldExecutive(fePayload);
-          if (feErr) throw Object.assign(new Error(feErr.message), { code: feErr.code });
-          fieldExecutive = feData;
-        }
-      } else {
+      if (!hasFeUserId) {
         return { ok: false, status: 500, message: "field_executives.user_id column is required" };
+      }
+      const { data: existingFe } = await findFieldExecutiveByUserIdFull(profile.id);
+      if (existingFe) {
+        fieldExecutive = existingFe;
+      } else {
+        const fePayload = {
+          name: feName,
+          email,
+          phone: safeTrim(feOpts.phone),
+          base_location: normalizeLocation(safeTrim(feOpts.base_location)),
+          skills: feOpts.skills ?? null,
+          active: feOpts.active !== false,
+          organisation_id: organisationId,
+          user_id: profile.id,
+        };
+        const { data: feData, error: feErr } = await insertFieldExecutive(fePayload);
+        if (feErr) throw Object.assign(new Error(feErr.message), { code: feErr.code });
+        fieldExecutive = feData;
       }
     }
 
@@ -341,7 +227,7 @@ export async function provisionAdminUser({ req, body }) {
       entity_id: profile.id,
       action: "user_created",
       organisation_id: auditOrgId,
-      metadata: { email, role, created: createdProfile },
+      metadata: { email: redactEmail(email), role, created: createdProfile, auth: "local" },
     });
 
     if (role === "CLIENT") {
@@ -352,7 +238,7 @@ export async function provisionAdminUser({ req, body }) {
         action: "client_user_created",
         organisation_id: auditOrgId,
         client_slug: clientSlug,
-        metadata: { email, client_slug: clientSlug },
+        metadata: { email: redactEmail(email), client_slug: clientSlug },
       });
     }
 
@@ -368,11 +254,10 @@ export async function provisionAdminUser({ req, body }) {
     }
 
     logEvent("userProvisioning.admin.success", {
-      userId: profile?.id ?? null,
-      role,
-      createdProfile,
-      createdAuth,
-      ms: null,
+      actorUserId: req.appUser?.id ?? null,
+      createdUserId: profile?.id ?? null,
+      created: createdProfile,
+      email: redactEmail(email),
     });
 
     return {
@@ -380,15 +265,11 @@ export async function provisionAdminUser({ req, body }) {
       status: 200,
       payload: {
         profile,
-        created: createdProfile || createdAuth,
+        created: createdProfile,
         fieldExecutive,
-        authUserId,
       },
     };
   } catch (err) {
-    if (createdAuth && authUserId) {
-      await deleteAuthUser(authUserId);
-    }
     logEvent("userProvisioning.admin.failed", {
       email: redactEmail(email),
       message: err?.message ?? String(err),
