@@ -127,7 +127,7 @@ jobs:
             # Apply Phase D DDL idempotently, then baseline that migration so future deploys use migrate deploy.
             if ! npx prisma migrate deploy; then
               echo "migrate deploy failed — baselining existing DB for Phase D auth migration"
-              npx prisma db execute --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
+              npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
               npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth
               npx prisma migrate deploy
             fi
