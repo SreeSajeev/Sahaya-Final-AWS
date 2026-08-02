@@ -1,8 +1,9 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchJson } from "@/lib/backendDataApi";
 import { ticketPassesPriorityFilter, resolveTicketPriorityLevel } from "@/lib/priority";
 import { getEndOfDayIST, getStartOfDayIST } from "@/lib/dateUtils";
 import type { DashboardStats, Ticket, TicketFilters, TicketStatus, UserRole } from "@/lib/types";
-import { buildTicketSearchOrFilter, ticketMatchesSearch } from "@/lib/ticketSearch";
+import { ticketMatchesSearch } from "@/lib/ticketSearch";
 
 /** Dev-only (or VITE_DEBUG_SUPABASE_SESSION=true): confirm JWT/session is visible to the SDK. */
 export async function logTicketsSessionDebug(context: string): Promise<void> {
@@ -21,21 +22,6 @@ export function normalizeOrgSlug(slug: string | null | undefined): string {
   return String(slug ?? "").trim().toLowerCase();
 }
 
-/** Escape `%`, `_`, `\` so `.ilike` matches the slug literally (case-insensitive). */
-function escapeIlikeExact(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
-
-/** Resolve UUID → slug for aligning `tickets.client_slug` with `organisations.slug`. */
-async function resolveOrganisationSlugFromId(orgId: string): Promise<string | null> {
-  const id = String(orgId ?? "").trim();
-  if (!id) return null;
-  const { data, error } = await supabase.from("organisations").select("slug").eq("id", id).maybeSingle();
-  if (error || data == null) return null;
-  const slug = normalizeOrgSlug((data as { slug?: string | null }).slug ?? "");
-  return slug || null;
-}
-
 export type OrganisationRow = {
   id: string;
   name: string;
@@ -44,22 +30,35 @@ export type OrganisationRow = {
   [key: string]: unknown;
 };
 
-/** Single organisation by primary key (JWT session must allow RLS read). */
+/** Single organisation by primary key via backend Prisma API. */
 export async function fetchOrganisationById(orgId: string): Promise<OrganisationRow | null> {
   const id = String(orgId ?? "").trim();
   if (!id) return null;
   await logTicketsSessionDebug("fetchOrganisationById");
-  const { data, error } = await supabase.from("organisations").select("*").eq("id", id).maybeSingle();
-  if (error) throw new Error(error.message);
-  if (data == null) return null;
-  const row = data as Record<string, unknown>;
-  return {
-    ...row,
-    id: String(row.id ?? ""),
-    name: String(row.name ?? ""),
-    slug: String(row.slug ?? ""),
-    status: String(row.status ?? ""),
-  } as OrganisationRow;
+  try {
+    const data = await fetchJson<Record<string, unknown>>(
+      `/data/organisations/${encodeURIComponent(id)}`
+    );
+    return {
+      ...data,
+      id: String(data.id ?? ""),
+      name: String(data.name ?? ""),
+      slug: String(data.slug ?? ""),
+      status: String(data.status ?? ""),
+    } as OrganisationRow;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("404") || /not found/i.test(msg)) return null;
+    throw err;
+  }
+}
+
+/** Resolve UUID → slug for aligning `tickets.client_slug` with `organisations.slug`. */
+async function resolveOrganisationSlugFromId(orgId: string): Promise<string | null> {
+  const row = await fetchOrganisationById(orgId);
+  if (!row) return null;
+  const slug = normalizeOrgSlug(row.slug);
+  return slug || null;
 }
 
 export function mapSupabaseTicketRow(row: Record<string, unknown>): Ticket {
@@ -114,7 +113,7 @@ export function mapSupabaseTicketRow(row: Record<string, unknown>): Ticket {
 const NON_OPEN_FINAL: TicketStatus[] = ["RESOLVED", "REJECTED"];
 
 /**
- * Tenant-scoped ticket list: `client_slug` matches organisation slug (case-insensitive).
+ * Tenant-scoped ticket list: organisation_id preferred; client_slug as fallback.
  */
 export async function fetchTicketsByOrganisationSlug(orgSlug: string): Promise<Ticket[]> {
   const key = normalizeOrgSlug(orgSlug);
@@ -122,29 +121,28 @@ export async function fetchTicketsByOrganisationSlug(orgSlug: string): Promise<T
 
   await logTicketsSessionDebug("fetchTicketsByOrganisationSlug");
 
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("*")
-    .ilike("client_slug", escapeIlikeExact(key))
-    .order("created_at", { ascending: false })
-    .limit(MAX_TENANT_TICKET_ROWS);
+  const params = new URLSearchParams();
+  params.set("limit", String(MAX_TENANT_TICKET_ROWS));
+  params.set("offset", "0");
+  params.set("clientSlug", key);
+  params.set("scopeAllOrganisations", "true");
 
-  if (import.meta.env.DEV) {
-    const slugsSample = [...new Set((data ?? []).slice(0, 50).map((r: { client_slug?: string | null }) => String(r.client_slug ?? "")))];
-    // eslint-disable-next-line no-console
-    console.info("[tenantTickets] organisation slug:", key, "rowCount:", data?.length ?? 0, "sample client_slug:", slugsSample);
-  }
-
-  if (error) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error("[tenantTickets]", error.message, error.code);
-    }
-    throw new Error(error.message);
-  }
-
-  const mapped = (data ?? []).map((r) => mapSupabaseTicketRow(r as Record<string, unknown>));
+  const res = await fetchJson<{ items: Record<string, unknown>[] }>(`/data/tickets?${params.toString()}`);
+  const mapped = (res.items ?? []).map((r) => mapSupabaseTicketRow(r));
   return mapped.filter((t) => normalizeOrgSlug(t.client_slug) === key);
+}
+
+/** Tickets for an organisation id (Super Admin tenant view). */
+export async function fetchTicketsByOrganisationId(organisationId: string): Promise<Ticket[]> {
+  const id = String(organisationId ?? "").trim();
+  if (!id) return [];
+  await logTicketsSessionDebug("fetchTicketsByOrganisationId");
+  const params = new URLSearchParams();
+  params.set("limit", String(MAX_TENANT_TICKET_ROWS));
+  params.set("offset", "0");
+  params.set("organisationId", id);
+  const res = await fetchJson<{ items: Record<string, unknown>[] }>(`/data/tickets?${params.toString()}`);
+  return (res.items ?? []).map((r) => mapSupabaseTicketRow(r));
 }
 
 /** Distinct client slugs within a ticket list (excluding empty). */
@@ -227,113 +225,40 @@ export function deriveDashboardStatsFromTickets(tickets: Ticket[], slaBreaches: 
   };
 }
 
-/** One fetch of ticket stubs for counting by org slug (Organisations overview). */
-export type TicketStubRow = {
-  id: string;
-  client_slug: string | null;
-  status: TicketStatus;
-  needs_review?: boolean | null;
-};
-
-export async function fetchAllTicketsStubForSlugStats(): Promise<TicketStubRow[]> {
-  await logTicketsSessionDebug("fetchAllTicketsStubForSlugStats");
-
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("id, client_slug, status, needs_review")
-    .limit(MAX_TENANT_TICKET_ROWS);
-
-  if (error) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error("[organisationsTicketStats]", error.message, error.code);
-    }
-    throw new Error(error.message);
-  }
-  return (data ?? []) as TicketStubRow[];
-}
-
-/**
- * Ticket stubs only for known organisation slugs (matches `client_slug`; case-insensitive exact).
- * Prefer this for org cards so results are not truncated by unrelated rows before `.limit`.
- */
-export async function fetchTicketStubsForOrganisationSlugs(organisationSlugs: string[]): Promise<TicketStubRow[]> {
-  const normalized = [...new Set(organisationSlugs.map(normalizeOrgSlug).filter(Boolean))];
-  if (normalized.length === 0) return [];
-  await logTicketsSessionDebug("fetchTicketStubsForOrganisationSlugs");
-  const orParts = normalized.map((s) => `client_slug.ilike.${escapeIlikeExact(s)}`);
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("id, client_slug, status, needs_review")
-    .or(orParts.join(","))
-    .limit(MAX_TENANT_TICKET_ROWS);
-
-  if (error) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error("[organisationsTicketStats] scoped stubs", error.message, error.code);
-    }
-    throw new Error(error.message);
-  }
-
-  const allow = new Set(normalized);
-  return ((data ?? []) as TicketStubRow[]).filter((r) => allow.has(normalizeOrgSlug(r.client_slug)));
-}
-
-export function aggregateTicketCountsByNormalizedSlug(rows: TicketStubRow[]) {
-  const byNorm: Record<
-    string,
-    { ticketIds: string[]; total: number; open: number; needsReview: number; distinctClientSlugs: Set<string> }
-  > = {};
-
-  for (const r of rows) {
-    const norm = normalizeOrgSlug(r.client_slug);
-    if (!norm) continue;
-    if (!byNorm[norm]) {
-      byNorm[norm] = {
-        ticketIds: [],
-        total: 0,
-        open: 0,
-        needsReview: 0,
-        distinctClientSlugs: new Set(),
-      };
-    }
-    const bucket = byNorm[norm];
-    bucket.ticketIds.push(r.id);
-    bucket.total += 1;
-    if (!NON_OPEN_FINAL.includes(r.status)) bucket.open += 1;
-    if (r.needs_review) bucket.needsReview += 1;
-    const rawSlug = String(r.client_slug ?? "").trim();
-    if (rawSlug) bucket.distinctClientSlugs.add(rawSlug);
-  }
-  return byNorm;
-}
-
 /** Ticket IDs that appear in sla_tracking with any breach flag set. */
 export async function fetchBreachedTicketIds(ticketIds: string[]): Promise<Set<string>> {
   await logTicketsSessionDebug("fetchBreachedTicketIds");
 
   const out = new Set<string>();
   const uniq = [...new Set(ticketIds)].filter(Boolean);
-  const chunkSize = 200;
+  const chunkSize = 500;
   for (let i = 0; i < uniq.length; i += chunkSize) {
     const chunk = uniq.slice(i, i + chunkSize);
-    const { data, error } = await supabase
-      .from("sla_tracking")
-      .select("ticket_id")
-      .in("ticket_id", chunk)
-      .or(
-        "assignment_breached.eq.true,onsite_breached.eq.true,resolution_breached.eq.true"
-      );
-    if (error) {
+    try {
+      const res = await fetchJson<{
+        items: Array<{
+          ticket_id?: string;
+          assignment_breached?: boolean;
+          onsite_breached?: boolean;
+          resolution_breached?: boolean;
+        }>;
+      }>("/data/sla/by-ticket-ids", {
+        method: "POST",
+        body: { ticketIds: chunk },
+      });
+      for (const row of res.items ?? []) {
+        if (
+          row.ticket_id &&
+          (row.assignment_breached || row.onsite_breached || row.resolution_breached)
+        ) {
+          out.add(String(row.ticket_id));
+        }
+      }
+    } catch (err) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.error("[fetchBreachedTicketIds]", error.message, error.code);
+        console.error("[fetchBreachedTicketIds]", err instanceof Error ? err.message : err);
       }
-      continue;
-    }
-    for (const row of data ?? []) {
-      if (row.ticket_id) out.add(String(row.ticket_id));
     }
   }
   return out;
@@ -351,7 +276,7 @@ function ticketPassesConfidence(
   return true;
 }
 
-/** Main list reads for dashboards / All Tickets via Supabase (JWT attached by the SDK). */
+/** Main list reads for dashboards / All Tickets via backend Prisma API. */
 export async function fetchWorkspaceTicketsList(opts: {
   maxRows: number;
   organisationId: string | null;
@@ -363,102 +288,62 @@ export async function fetchWorkspaceTicketsList(opts: {
 
   const { maxRows, organisationId, isSuperAdmin, filters, role } = opts;
   const scopeAll = Boolean(filters.scopeAllOrganisations);
-
   const isClient = role === "CLIENT";
 
-  /** Tenant users must have organisation_id; never rely on broken RLS staff bypass alone. */
   if (!isSuperAdmin && !scopeAll && !organisationId) {
     return [];
   }
 
-  let tenantScopeSlug: string | null = null;
-  let tenantOrganisationId: string | null = null;
+  const params = new URLSearchParams();
+  params.set("limit", String(Math.min(Math.max(maxRows, 1), MAX_TENANT_TICKET_ROWS)));
+  params.set("offset", "0");
 
-  /** SUPER_ADMIN optional org filter via UI (organisation id → slug + organisation_id). */
   if (isSuperAdmin && filters.organisationId != null && String(filters.organisationId).trim() !== "") {
-    tenantOrganisationId = String(filters.organisationId).trim();
-    tenantScopeSlug = await resolveOrganisationSlugFromId(tenantOrganisationId);
-    if (!tenantScopeSlug) return [];
-  } else if (!isSuperAdmin && !scopeAll && organisationId) {
-    tenantOrganisationId = organisationId;
-    if (isClient) {
-      const fromFilter =
-        filters.clientSlug != null && String(filters.clientSlug).trim() !== ""
-          ? normalizeOrgSlug(String(filters.clientSlug))
-          : "";
-      tenantScopeSlug = fromFilter
-        ? fromFilter
-        : await resolveOrganisationSlugFromId(organisationId);
-      if (!tenantScopeSlug) return [];
-    }
+    params.set("organisationId", String(filters.organisationId).trim());
   }
-
-  let q = supabase
-    .from("tickets")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(Math.min(Math.max(maxRows, 1), 10_000));
-
-  if (tenantOrganisationId) {
-    q = q.eq("organisation_id", tenantOrganisationId);
-  }
-
-  if (tenantScopeSlug) {
-    q = q.ilike("client_slug", escapeIlikeExact(tenantScopeSlug));
+  if (scopeAll) {
+    params.set("scopeAllOrganisations", "true");
   }
 
   if (filters.reviewQueue === true) {
-    q = q.or("status.eq.NEEDS_REVIEW,needs_review.eq.true");
+    params.set("reviewQueue", "true");
   } else if (filters.status != null && filters.status !== "all") {
-    q = q.eq("status", filters.status as string);
+    params.set("status", String(filters.status));
   }
 
   if (filters.clientSlug != null && String(filters.clientSlug).trim() !== "") {
     const cs = normalizeOrgSlug(String(filters.clientSlug));
-    if (cs) q = q.ilike("client_slug", escapeIlikeExact(cs));
+    if (cs) params.set("clientSlug", cs);
+  } else if (isClient && organisationId) {
+    const tenantScopeSlug = await resolveOrganisationSlugFromId(organisationId);
+    if (tenantScopeSlug) params.set("clientSlug", tenantScopeSlug);
   }
 
   if (filters.state != null && String(filters.state).trim() !== "") {
-    q = q.eq("state", String(filters.state).trim());
+    params.set("state", String(filters.state).trim());
   }
 
   if (filters.needsReview === true && filters.reviewQueue !== true) {
-    q = q.eq("needs_review", true);
+    params.set("needsReview", "true");
   }
 
   if (filters.unassignedOnly) {
-    q = q.is("current_assignment_id", null);
+    params.set("unassignedOnly", "true");
   }
 
   if (filters.dateFrom != null && String(filters.dateFrom).trim() !== "") {
-    q = q.gte("opened_at", getStartOfDayIST(String(filters.dateFrom).trim()).toISOString());
+    params.set("startDate", getStartOfDayIST(String(filters.dateFrom).trim()).toISOString());
   }
   if (filters.dateTo != null && String(filters.dateTo).trim() !== "") {
-    q = q.lte("opened_at", getEndOfDayIST(String(filters.dateTo).trim()).toISOString());
+    params.set("endDate", getEndOfDayIST(String(filters.dateTo).trim()).toISOString());
   }
 
-  const orFilter =
-    filters.search != null && String(filters.search).trim() !== ""
-      ? buildTicketSearchOrFilter(filters.search!, {
-          extraClientSlugs: filters.searchMatchingClientSlugs,
-          extraOrganisationIds: filters.searchMatchingOrganisationIds,
-        })
-      : null;
-  if (orFilter) {
-    q = q.or(orFilter);
+  if (filters.search != null && String(filters.search).trim() !== "") {
+    params.set("search", String(filters.search).trim());
   }
 
-  const { data, error } = await q;
-
-  if (error) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error("[fetchWorkspaceTicketsList]", error.message, error.code);
-    }
-    throw new Error(error.message);
-  }
-
-  let rows = (data ?? []).map((r) => mapSupabaseTicketRow(r as Record<string, unknown>));
+  const res = await fetchJson<{ items: Record<string, unknown>[] }>(`/data/tickets?${params.toString()}`);
+  let rows = (res.items ?? []).map((r) => mapSupabaseTicketRow(r));
 
   const searchRaw = filters.search != null ? String(filters.search).trim() : "";
   if (searchRaw !== "") {

@@ -14,9 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Sliders, Clock, ListOrdered, Plus, X, RefreshCw, Type } from "lucide-react";
 import { fetchJson } from "@/lib/backendDataApi";
 import { isTenantConfigurationEnabled } from "@/lib/tenantConfigurationFeature";
-import { supabase } from "@/integrations/supabase/client";
 import { fetchOrganisationById } from "@/lib/tenantTicketsSupabase";
-import { guardSharedSupabaseMutation } from "@/lib/sharedSupabaseMutationFreeze";
 import {
   getOrgTicketConfigKey,
   DEFAULT_FIELD_EXECUTIVE_LABEL,
@@ -204,17 +202,15 @@ export default function TicketSettings() {
   const saveReviewFieldMutation = useMutation({
     mutationFn: async () => {
       if (!effectiveOrgId) throw new Error("No tenant");
-      guardSharedSupabaseMutation("postgrest.organisations.update.reviewFields");
       const label = reviewFieldLabel.trim();
       const helper = reviewFieldHelperText.trim();
-      const { error } = await supabase
-        .from("organisations")
-        .update({
+      await fetchJson(`/data/organisations/${encodeURIComponent(effectiveOrgId)}`, {
+        method: "PATCH",
+        body: {
           review_field_label: label !== "" ? label : null,
           review_field_helper_text: helper !== "" ? helper : null,
-        })
-        .eq("id", effectiveOrgId);
-      if (error) throw new Error(error.message);
+        },
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ticket-settings-org", effectiveOrgId] });

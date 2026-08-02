@@ -1,8 +1,8 @@
-import { supabase } from "@/integrations/supabase/client";
+import { fetchJson } from "@/lib/backendDataApi";
 import type { User, UserRole } from "@/lib/types";
 
 /**
- * Maps a PostgREST row to `User`. Handles older DBs that omit optional columns.
+ * Maps a backend `/data/users` row to `User`.
  */
 function mapDbUserToUser(row: Record<string, unknown>): User {
   const name = row.name != null ? String(row.name).trim() : "";
@@ -39,37 +39,30 @@ async function fetchUsersBase(options: {
   isSuperAdmin: boolean;
   organisationId: string | null;
   limit: number;
+  approvalStatus?: string;
 }): Promise<User[]> {
-  let q = supabase
-    .from("users")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(options.limit);
-
-  if (!options.isSuperAdmin) {
-    if (!options.organisationId) {
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[UsersDirectory] Non–super admin without organisation_id; returning empty user list.");
-      }
-      return [];
+  if (!options.isSuperAdmin && !options.organisationId) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[UsersDirectory] Non–super admin without organisation_id; returning empty user list.");
     }
-    q = q.eq("organisation_id", options.organisationId);
+    return [];
   }
 
-  const { data, error } = await q;
-
-  if (error) {
-    // eslint-disable-next-line no-console
-    console.error("[UsersDirectory] Supabase users query failed:", {
-      message: error.message,
-      code: error.code,
-      details: (error as { details?: string }).details,
-      hint: (error as { hint?: string }).hint,
-    });
-    throw new Error(error.message);
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit));
+  params.set("offset", "0");
+  if (options.organisationId) {
+    params.set("organisationId", options.organisationId);
   }
-  return (data ?? []).map((r) => mapDbUserToUser(r as Record<string, unknown>));
+  if (options.approvalStatus) {
+    params.set("approvalStatus", options.approvalStatus);
+  }
+
+  const res = await fetchJson<{ items: Record<string, unknown>[] }>(
+    `/data/users?${params.toString()}`
+  );
+  return (res.items ?? []).map((r) => mapDbUserToUser(r));
 }
 
 /** All users visible to Super Admin; tenant-scoped for staff/admin with an organisation. */
@@ -80,18 +73,17 @@ export async function fetchWorkspaceUsersList(options: {
   return fetchUsersBase({ ...options, limit: 500 });
 }
 
-/** Pending approval — filtered in the client so missing `approval_status` column does not break the query. */
+/** Pending approval users via backend filter. */
 export async function fetchPendingUsersList(options: {
   isSuperAdmin: boolean;
   organisationId: string | null;
   limit?: number;
 }): Promise<User[]> {
   const cap = options.limit ?? 500;
-  const rows = await fetchUsersBase({
+  return fetchUsersBase({
     isSuperAdmin: options.isSuperAdmin,
     organisationId: options.organisationId,
-    limit: Math.min(cap * 3, 1000),
+    limit: cap,
+    approvalStatus: "pending",
   });
-  const pending = rows.filter((u) => u.approval_status === "pending");
-  return pending.slice(0, cap);
 }
