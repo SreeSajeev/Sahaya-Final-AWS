@@ -7,20 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "list_roles | set_password | smoke_login"
+        description: "list_roles | bootstrap_role_samples | smoke_login | set_password"
         required: true
         default: list_roles
         type: choice
         options:
           - list_roles
-          - set_password
+          - bootstrap_role_samples
           - smoke_login
+          - set_password
       email:
-        description: "User email for set_password / smoke_login"
+        description: "User email for set_password only"
         required: false
         default: ""
       confirm:
-        description: "Type CONFIRM for set_password"
+        description: "Type CONFIRM for mutating modes"
         required: false
         default: ""
 
@@ -34,18 +35,30 @@ jobs:
           MODE: ${{ inputs.mode }}
           TARGET_EMAIL: ${{ inputs.email }}
           CONFIRM: ${{ inputs.confirm }}
-          AUTH_SET_PASSWORD: ${{ secrets.TEST_AUTH_BOOTSTRAP_PASSWORD }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: MODE,TARGET_EMAIL,CONFIRM,AUTH_SET_PASSWORD
-          command_timeout: 10m
+          envs: MODE,TARGET_EMAIL,CONFIRM
+          command_timeout: 15m
           script: |
             set -euo pipefail
             MODE="${MODE:-list_roles}"
             MONOREPO="/var/www/apps/sahaya-final-aws-monorepo"
+            CREDS_DIR="/var/backups/sahaya/phase-d-auth"
+            CREDS_FILE="$CREDS_DIR/test-local-passwords.env"
             cd "$MONOREPO/backend"
+
+            redact() {
+              python3 - <<'PY' "$1"
+            import sys
+            e=sys.argv[1]
+            if "@" not in e:
+              print("***"); raise SystemExit
+            local,domain=e.split("@",1)
+            print((local[:2] if local else "") + "***@" + domain)
+            PY
+            }
 
             if [ "$MODE" = "list_roles" ]; then
               npm run auth:list-roles
@@ -64,8 +77,7 @@ jobs:
             });
             for (const u of rows) {
               const [local, domain] = String(u.email).split("@");
-              const redacted =
-                (local?.slice(0, 2) || "") + "***@" + (domain || "?");
+              const redacted = (local?.slice(0, 2) || "") + "***@" + (domain || "?");
               console.log(
                 [
                   u.role,
@@ -82,6 +94,100 @@ jobs:
               exit 0
             fi
 
+            if [ "$MODE" = "bootstrap_role_samples" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing bootstrap without CONFIRM" >&2
+                exit 1
+              fi
+              mkdir -p "$CREDS_DIR"
+              chmod 700 "$CREDS_DIR"
+              PASS="$(openssl rand -base64 18 | tr -d '\n'=+/ | cut -c1-16)Aa1!"
+              # Write creds file locally on EC2 only (never echoed).
+              : > "$CREDS_FILE"
+              chmod 600 "$CREDS_FILE"
+              export AUTH_SET_PASSWORD="$PASS"
+              export CREDS_FILE
+
+              node --input-type=module <<'NODE'
+            import { prisma } from "./src/db/prisma.js";
+            import { hashPassword } from "./src/services/passwordService.js";
+            import { revokeAllAuthSessionsForUser } from "./src/services/authSessionService.js";
+            import fs from "node:fs";
+
+            const roles = ["SUPER_ADMIN", "ADMIN", "STAFF", "FIELD_EXECUTIVE"];
+            const password = process.env.AUTH_SET_PASSWORD;
+            const credsPath = process.env.CREDS_FILE;
+            const lines = ["# TEST-only local auth passwords. Not Supabase. chmod 600.", ""];
+
+            for (const role of roles) {
+              const user = await prisma.user.findFirst({
+                where: {
+                  role,
+                  isActive: { not: false },
+                  approvalStatus: "approved",
+                },
+                orderBy: { email: "asc" },
+                select: { id: true, email: true, role: true, organisationId: true },
+              });
+              if (!user) {
+                console.log(`SKIP role=${role} (no approved active user)`);
+                continue;
+              }
+              const passwordHash = await hashPassword(password);
+              await prisma.user.update({
+                where: { id: user.id },
+                data: { passwordHash, passwordChangedAt: new Date() },
+              });
+              await revokeAllAuthSessionsForUser(user.id);
+              lines.push(`ROLE_${role}_EMAIL=${user.email}`);
+              lines.push(`ROLE_${role}_USER_ID=${user.id}`);
+              lines.push(`ROLE_${role}_ORG=${user.organisationId || ""}`);
+              const [local, domain] = user.email.split("@");
+              console.log(
+                `SET role=${role} email=${local.slice(0, 2)}***@${domain} org=${user.organisationId ? "set" : "null"}`
+              );
+            }
+            lines.push(`AUTH_SET_PASSWORD=${password}`);
+            fs.writeFileSync(credsPath, lines.join("\n") + "\n", { mode: 0o600 });
+            await prisma.$disconnect();
+            NODE
+              echo "Wrote credentials to EC2 path (not printed): $CREDS_FILE"
+              exit 0
+            fi
+
+            if [ "$MODE" = "smoke_login" ]; then
+              if [ ! -f "$CREDS_FILE" ]; then
+                echo "Missing $CREDS_FILE — run bootstrap_role_samples first" >&2
+                exit 1
+              fi
+              # shellcheck disable=SC1090
+              set -a
+              # shellcheck source=/dev/null
+              . "$CREDS_FILE"
+              set +a
+              for ROLE in SUPER_ADMIN ADMIN STAFF FIELD_EXECUTIVE; do
+                EVAL="ROLE_${ROLE}_EMAIL"
+                EMAIL="${!EVAL:-}"
+                if [ -z "$EMAIL" ]; then
+                  echo "SKIP smoke $ROLE (no email)"
+                  continue
+                fi
+                echo "SMOKE login role=$ROLE email=$(redact "$EMAIL")"
+                RESP="$(curl -sS -X POST http://127.0.0.1:4100/auth/login \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"email\":\"${EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}")"
+                echo "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("profile") or {}; print("ok", bool(d.get("accessToken")), "role", p.get("role"), "org", "set" if p.get("organisation_id") else "null", "err", d.get("error"))'
+                TOKEN="$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("accessToken") or "")')"
+                if [ -n "$TOKEN" ]; then
+                  ME="$(curl -sS http://127.0.0.1:4100/auth/me -H "Authorization: Bearer $TOKEN")"
+                  echo "$ME" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("profile") or {}; print("me", p.get("role"), "id_set", bool(p.get("id")))'
+                  TIX="$(curl -sS -o /tmp/tix.json -w "%{http_code}" http://127.0.0.1:4100/data/tickets?limit=5 -H "Authorization: Bearer $TOKEN")"
+                  echo "tickets_http=$TIX"
+                fi
+              done
+              exit 0
+            fi
+
             if [ "$MODE" = "set_password" ]; then
               if [ "${CONFIRM}" != "CONFIRM" ]; then
                 echo "Refusing set_password without CONFIRM" >&2
@@ -91,23 +197,16 @@ jobs:
                 echo "email required" >&2
                 exit 1
               fi
-              if [ -z "${AUTH_SET_PASSWORD}" ]; then
-                echo "Missing GitHub secret TEST_AUTH_BOOTSTRAP_PASSWORD" >&2
+              if [ ! -f "$CREDS_FILE" ]; then
+                echo "Missing bootstrap creds file; run bootstrap_role_samples first or create AUTH_SET_PASSWORD manually" >&2
                 exit 1
               fi
+              # shellcheck disable=SC1090
+              set -a
+              # shellcheck source=/dev/null
+              . "$CREDS_FILE"
+              set +a
               npm run auth:set-test-password -- --email "$TARGET_EMAIL" --from-env
-              exit 0
-            fi
-
-            if [ "$MODE" = "smoke_login" ]; then
-              if [ -z "${TARGET_EMAIL}" ] || [ -z "${AUTH_SET_PASSWORD}" ]; then
-                echo "email + TEST_AUTH_BOOTSTRAP_PASSWORD required" >&2
-                exit 1
-              fi
-              curl -sS -X POST http://127.0.0.1:4100/auth/login \
-                -H 'Content-Type: application/json' \
-                -d "{\"email\":\"${TARGET_EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}" \
-                | python3 -c 'import sys,json; d=json.load(sys.stdin); print({k:d.get(k) for k in ("error","accessToken","profile") if k in d or k=="error"}); print("hasToken", bool(d.get("accessToken"))); print("role", (d.get("profile") or {}).get("role")); print("email", (d.get("profile") or {}).get("email") and "***")'
               exit 0
             fi
 
