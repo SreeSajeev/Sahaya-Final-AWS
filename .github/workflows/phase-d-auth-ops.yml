@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "list_roles | bootstrap_role_samples | smoke_login | smoke_extended | set_password"
+        description: "list_roles | bootstrap_role_samples | smoke_login | smoke_extended"
         required: true
         default: list_roles
         type: choice
@@ -16,13 +16,8 @@ on:
           - bootstrap_role_samples
           - smoke_login
           - smoke_extended
-          - set_password
-      email:
-        description: "User email for set_password only"
-        required: false
-        default: ""
       confirm:
-        description: "Type CONFIRM for mutating modes"
+        description: "Type CONFIRM for bootstrap_role_samples"
         required: false
         default: ""
 
@@ -34,13 +29,12 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           MODE: ${{ inputs.mode }}
-          TARGET_EMAIL: ${{ inputs.email }}
           CONFIRM: ${{ inputs.confirm }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: MODE,TARGET_EMAIL,CONFIRM
+          envs: MODE,CONFIRM
           command_timeout: 15m
           script: |
             set -euo pipefail
@@ -50,48 +44,8 @@ jobs:
             CREDS_FILE="$CREDS_DIR/test-local-passwords.env"
             cd "$MONOREPO/backend"
 
-            redact() {
-              python3 - <<'PY' "$1"
-            import sys
-            e=sys.argv[1]
-            if "@" not in e:
-              print("***"); raise SystemExit
-            local,domain=e.split("@",1)
-            print((local[:2] if local else "") + "***@" + domain)
-            PY
-            }
-
             if [ "$MODE" = "list_roles" ]; then
               npm run auth:list-roles
-              node --input-type=module <<'NODE'
-            import { prisma } from "./src/db/prisma.js";
-            const rows = await prisma.user.findMany({
-              select: {
-                email: true,
-                role: true,
-                isActive: true,
-                approvalStatus: true,
-                organisationId: true,
-                passwordHash: true,
-              },
-              orderBy: [{ role: "asc" }, { email: "asc" }],
-            });
-            for (const u of rows) {
-              const [local, domain] = String(u.email).split("@");
-              const redacted = (local?.slice(0, 2) || "") + "***@" + (domain || "?");
-              console.log(
-                [
-                  u.role,
-                  redacted,
-                  "active=" + (u.isActive !== false),
-                  "approval=" + (u.approvalStatus || "n/a"),
-                  "hash=" + (u.passwordHash ? "yes" : "no"),
-                  "org=" + (u.organisationId ? "set" : "null"),
-                ].join(" | ")
-              );
-            }
-            await prisma.$disconnect();
-            NODE
               exit 0
             fi
 
@@ -103,35 +57,27 @@ jobs:
               mkdir -p "$CREDS_DIR"
               chmod 700 "$CREDS_DIR"
               PASS="$(openssl rand -base64 18 | tr -d '\n'=+/ | cut -c1-16)Aa1!"
-              # Write creds file locally on EC2 only (never echoed).
               : > "$CREDS_FILE"
               chmod 600 "$CREDS_FILE"
               export AUTH_SET_PASSWORD="$PASS"
               export CREDS_FILE
-
               node --input-type=module <<'NODE'
             import { prisma } from "./src/db/prisma.js";
             import { hashPassword } from "./src/services/passwordService.js";
             import { revokeAllAuthSessionsForUser } from "./src/services/authSessionService.js";
             import fs from "node:fs";
-
             const roles = ["SUPER_ADMIN", "ADMIN", "STAFF", "FIELD_EXECUTIVE"];
             const password = process.env.AUTH_SET_PASSWORD;
             const credsPath = process.env.CREDS_FILE;
-            const lines = ["# TEST-only local auth passwords. Not Supabase. chmod 600.", ""];
-
+            const lines = ["# TEST-only local auth passwords. Not Supabase.", ""];
             for (const role of roles) {
               const user = await prisma.user.findFirst({
-                where: {
-                  role,
-                  isActive: { not: false },
-                  approvalStatus: "approved",
-                },
+                where: { role, isActive: { not: false }, approvalStatus: "approved" },
                 orderBy: { email: "asc" },
                 select: { id: true, email: true, role: true, organisationId: true },
               });
               if (!user) {
-                console.log(`SKIP role=${role} (no approved active user)`);
+                console.log(`SKIP role=${role}`);
                 continue;
               }
               const passwordHash = await hashPassword(password);
@@ -144,168 +90,29 @@ jobs:
               lines.push(`ROLE_${role}_USER_ID=${user.id}`);
               lines.push(`ROLE_${role}_ORG=${user.organisationId || ""}`);
               const [local, domain] = user.email.split("@");
-              console.log(
-                `SET role=${role} email=${local.slice(0, 2)}***@${domain} org=${user.organisationId ? "set" : "null"}`
-              );
+              console.log(`SET role=${role} email=${local.slice(0, 2)}***@${domain}`);
             }
             lines.push(`AUTH_SET_PASSWORD=${password}`);
             fs.writeFileSync(credsPath, lines.join("\n") + "\n", { mode: 0o600 });
             await prisma.$disconnect();
             NODE
-              echo "Wrote credentials to EC2 path (not printed): $CREDS_FILE"
+              echo "Wrote credentials on EC2 (path not containing secrets in logs beyond role redaction)."
               exit 0
             fi
 
             if [ "$MODE" = "smoke_login" ] || [ "$MODE" = "smoke_extended" ]; then
-              if [ ! -f "$CREDS_FILE" ]; then
-                echo "Missing $CREDS_FILE — run bootstrap_role_samples first" >&2
-                exit 1
-              fi
-              # shellcheck disable=SC1090
-              set -a
-              # shellcheck source=/dev/null
-              . "$CREDS_FILE"
-              set +a
-              COOKIE_JAR="$(mktemp)"
-              for ROLE in SUPER_ADMIN ADMIN STAFF FIELD_EXECUTIVE; do
-                EVAL="ROLE_${ROLE}_EMAIL"
-                EMAIL="${!EVAL:-}"
-                if [ -z "$EMAIL" ]; then
-                  echo "SKIP smoke $ROLE (no email)"
-                  continue
+              # Ensure latest smoke script from develop is present (ops workflow may be on main).
+              if [ -f scripts/smoke-auth-extended.sh ]; then
+                chmod +x scripts/smoke-auth-extended.sh
+                if [ "$MODE" = "smoke_extended" ]; then
+                  bash scripts/smoke-auth-extended.sh
+                else
+                  bash scripts/smoke-auth-extended.sh | sed -n '1,/EXTENDED/p' | sed '$d'
                 fi
-                echo "SMOKE login role=$ROLE email=$(redact "$EMAIL")"
-                RESP="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST http://127.0.0.1:4100/auth/login \
-                  -H 'Content-Type: application/json' \
-                  -d "{\"email\":\"${EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}")"
-                echo "$RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("profile") or {}; print("ok", bool(d.get("accessToken")), "role", p.get("role"), "org", "set" if p.get("organisation_id") else "null", "err", d.get("error"))'
-                TOKEN="$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("accessToken") or "")')"
-                if [ -n "$TOKEN" ]; then
-                  ME="$(curl -sS http://127.0.0.1:4100/auth/me -H "Authorization: Bearer $TOKEN")"
-                  echo "$ME" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("profile") or {}; print("me", p.get("role"), "id_set", bool(p.get("id")))'
-                  TIX="$(curl -sS -o /tmp/tix.json -w "%{http_code}" "http://127.0.0.1:4100/data/tickets?limit=5" -H "Authorization: Bearer $TOKEN")"
-                  echo "tickets_http=$TIX"
-                fi
-              done
-
-              if [ "$MODE" = "smoke_extended" ]; then
-                echo "===== EXTENDED: refresh rotate + logout ====="
-                SA_EMAIL="${ROLE_SUPER_ADMIN_EMAIL}"
-                LOGIN="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST http://127.0.0.1:4100/auth/login \
-                  -H 'Content-Type: application/json' \
-                  -d "{\"email\":\"${SA_EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}")"
-                OLD_REFRESH="$(python3 - <<'PY' "$COOKIE_JAR"
-import sys
-jar=sys.argv[1]
-val=None
-for line in open(jar):
-  if line.startswith("#") or not line.strip():
-    continue
-  parts=line.split("\t")
-  if len(parts)>=7 and parts[5]=="sahaya_refresh":
-    val=parts[6].strip()
-print(val or "")
-PY
-)"
-                REF1="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST http://127.0.0.1:4100/auth/refresh -H 'Content-Type: application/json' -d '{}')"
-                echo "$REF1" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("refresh1", bool(d.get("accessToken")), "err", d.get("error"))'
-                # Old raw refresh should fail after rotation if still presented alone
-                if [ -n "$OLD_REFRESH" ]; then
-                  OLD="$(curl -sS -X POST http://127.0.0.1:4100/auth/refresh -H 'Content-Type: application/json' -d "{\"refreshToken\":\"${OLD_REFRESH}\"}")"
-                  echo "$OLD" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("old_refresh_rejected", d.get("error") is not None or not d.get("accessToken"), "err", d.get("error"))'
-                fi
-                curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST http://127.0.0.1:4100/auth/logout -H 'Content-Type: application/json' -d '{}' >/tmp/logout.json
-                REF2="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST http://127.0.0.1:4100/auth/refresh -H 'Content-Type: application/json' -d '{}')"
-                echo "$REF2" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("post_logout_refresh_fail", not d.get("accessToken"), "err", d.get("error"))'
-
-                echo "===== EXTENDED: tenant isolation ====="
-                ADM_EMAIL="${ROLE_ADMIN_EMAIL}"
-                ADM="$(curl -sS -X POST http://127.0.0.1:4100/auth/login -H 'Content-Type: application/json' -d "{\"email\":\"${ADM_EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}")"
-                ADM_TOKEN="$(echo "$ADM" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("accessToken") or "")')"
-                ADM_ORG="$(echo "$ADM" | python3 -c 'import sys,json; print((json.load(sys.stdin).get("profile") or {}).get("organisation_id") or "")')"
-                curl -sS -o /tmp/adm_tix.json -w "%{http_code}" "http://127.0.0.1:4100/data/tickets?limit=50" -H "Authorization: Bearer $ADM_TOKEN" >/tmp/adm_code.txt
-                python3 - <<'PY'
-import json
-org=open("/dev/stdin").read().strip() if False else None
-PY
-                python3 - <<PY
-import json
-adm_org="$ADM_ORG"
-code=open("/tmp/adm_code.txt").read().strip()
-data=json.load(open("/tmp/adm_tix.json"))
-items=data.get("items") or data.get("tickets") or data.get("data") or []
-if isinstance(data, list):
-  items=data
-foreign=[t for t in items if isinstance(t, dict) and t.get("organisation_id") and t.get("organisation_id")!=adm_org]
-print("tenant_tickets_http", code, "count", len(items) if isinstance(items, list) else "n/a", "foreign", len(foreign))
-PY
-
-                echo "===== EXTENDED: proof presign if available ====="
-                python3 - <<'PY'
-import json,urllib.request
-token=open("/tmp/adm_token.txt","w"); token.write("""$ADM_TOKEN"""); token.close()
-PY
-                echo "$ADM_TOKEN" > /tmp/adm_token.txt
-                node --input-type=module <<'NODE'
-            import { prisma } from "./src/db/prisma.js";
-            import fs from "node:fs";
-            const token = fs.readFileSync("/tmp/adm_token.txt", "utf8").trim();
-            const comments = await prisma.$queryRawUnsafe(`
-              SELECT id, ticket_id, attachments
-              FROM ticket_comments
-              WHERE attachments ? 'proof_storage_paths'
-              LIMIT 20
-            `);
-            let chosen = null;
-            for (const c of comments) {
-              const paths = c.attachments?.proof_storage_paths;
-              if (Array.isArray(paths) && paths.length > 0 && typeof paths[0] === "string") {
-                chosen = c;
-                break;
-              }
-            }
-            if (!chosen) {
-              console.log("proof_sample=none");
-              await prisma.$disconnect();
-              process.exit(0);
-            }
-            console.log("proof_sample", { ticketId: chosen.ticket_id, commentId: chosen.id });
-            const url = `http://127.0.0.1:4100/data/tickets/${chosen.ticket_id}/comments/${chosen.id}/proofs/0/url`;
-            const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-            const body = await res.json().catch(() => ({}));
-            const href = body?.url || null;
-            let host = null;
-            try { host = href ? new URL(href).host : null; } catch { host = null; }
-            console.log("proof_url_http", res.status, "hasUrl", Boolean(href), "host", host);
-            if (href && String(href).includes("sahaya-test-fe-proofs")) console.log("proof_bucket=sahaya-test-fe-proofs");
-            if (href && String(href).includes("crm-pariskq")) console.log("PROOF_FAIL crm-pariskq");
-            await prisma.$disconnect();
-            NODE
-              fi
-
-              rm -f "$COOKIE_JAR"
-              exit 0
-            fi
-
-            if [ "$MODE" = "set_password" ]; then
-              if [ "${CONFIRM}" != "CONFIRM" ]; then
-                echo "Refusing set_password without CONFIRM" >&2
+              else
+                echo "smoke script missing — deploy develop first" >&2
                 exit 1
               fi
-              if [ -z "${TARGET_EMAIL}" ]; then
-                echo "email required" >&2
-                exit 1
-              fi
-              if [ ! -f "$CREDS_FILE" ]; then
-                echo "Missing bootstrap creds file; run bootstrap_role_samples first or create AUTH_SET_PASSWORD manually" >&2
-                exit 1
-              fi
-              # shellcheck disable=SC1090
-              set -a
-              # shellcheck source=/dev/null
-              . "$CREDS_FILE"
-              set +a
-              npm run auth:set-test-password -- --email "$TARGET_EMAIL" --from-env
               exit 0
             fi
 
