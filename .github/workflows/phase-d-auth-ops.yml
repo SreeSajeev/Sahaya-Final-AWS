@@ -1,0 +1,115 @@
+# TEST-only Phase D auth ops via SSH. Manual trigger only.
+# Sets local PostgreSQL password hashes. Does NOT touch Supabase.
+
+name: Phase D TEST Auth Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "list_roles | set_password | smoke_login"
+        required: true
+        default: list_roles
+        type: choice
+        options:
+          - list_roles
+          - set_password
+          - smoke_login
+      email:
+        description: "User email for set_password / smoke_login"
+        required: false
+        default: ""
+      confirm:
+        description: "Type CONFIRM for set_password"
+        required: false
+        default: ""
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Phase D auth op on TEST EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          MODE: ${{ inputs.mode }}
+          TARGET_EMAIL: ${{ inputs.email }}
+          CONFIRM: ${{ inputs.confirm }}
+          AUTH_SET_PASSWORD: ${{ secrets.TEST_AUTH_BOOTSTRAP_PASSWORD }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: MODE,TARGET_EMAIL,CONFIRM,AUTH_SET_PASSWORD
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            MODE="${MODE:-list_roles}"
+            MONOREPO="/var/www/apps/sahaya-final-aws-monorepo"
+            cd "$MONOREPO/backend"
+
+            if [ "$MODE" = "list_roles" ]; then
+              npm run auth:list-roles
+              node --input-type=module <<'NODE'
+            import { prisma } from "./src/db/prisma.js";
+            const rows = await prisma.user.findMany({
+              select: {
+                email: true,
+                role: true,
+                isActive: true,
+                approvalStatus: true,
+                organisationId: true,
+                passwordHash: true,
+              },
+              orderBy: [{ role: "asc" }, { email: "asc" }],
+            });
+            for (const u of rows) {
+              const [local, domain] = String(u.email).split("@");
+              const redacted =
+                (local?.slice(0, 2) || "") + "***@" + (domain || "?");
+              console.log(
+                [
+                  u.role,
+                  redacted,
+                  "active=" + (u.isActive !== false),
+                  "approval=" + (u.approvalStatus || "n/a"),
+                  "hash=" + (u.passwordHash ? "yes" : "no"),
+                  "org=" + (u.organisationId ? "set" : "null"),
+                ].join(" | ")
+              );
+            }
+            await prisma.$disconnect();
+            NODE
+              exit 0
+            fi
+
+            if [ "$MODE" = "set_password" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing set_password without CONFIRM" >&2
+                exit 1
+              fi
+              if [ -z "${TARGET_EMAIL}" ]; then
+                echo "email required" >&2
+                exit 1
+              fi
+              if [ -z "${AUTH_SET_PASSWORD}" ]; then
+                echo "Missing GitHub secret TEST_AUTH_BOOTSTRAP_PASSWORD" >&2
+                exit 1
+              fi
+              npm run auth:set-test-password -- --email "$TARGET_EMAIL" --from-env
+              exit 0
+            fi
+
+            if [ "$MODE" = "smoke_login" ]; then
+              if [ -z "${TARGET_EMAIL}" ] || [ -z "${AUTH_SET_PASSWORD}" ]; then
+                echo "email + TEST_AUTH_BOOTSTRAP_PASSWORD required" >&2
+                exit 1
+              fi
+              curl -sS -X POST http://127.0.0.1:4100/auth/login \
+                -H 'Content-Type: application/json' \
+                -d "{\"email\":\"${TARGET_EMAIL}\",\"password\":\"${AUTH_SET_PASSWORD}\"}" \
+                | python3 -c 'import sys,json; d=json.load(sys.stdin); print({k:d.get(k) for k in ("error","accessToken","profile") if k in d or k=="error"}); print("hasToken", bool(d.get("accessToken"))); print("role", (d.get("profile") or {}).get("role")); print("email", (d.get("profile") or {}).get("email") and "***")'
+              exit 0
+            fi
+
+            echo "Unknown mode: $MODE" >&2
+            exit 1
