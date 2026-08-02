@@ -71,7 +71,7 @@ import {
   listAssignmentsByFeIdsWithTickets,
   listAllAssignmentsScoped,
 } from "../repositories/assignmentRepository.js";
-import { insertComment, listCommentsForTicket } from "../repositories/commentRepository.js";
+import { insertComment, listCommentsForTicket, getCommentById } from "../repositories/commentRepository.js";
 import {
   listUsersScoped,
   listUsersOrganisationIds,
@@ -808,6 +808,59 @@ router.get("/tickets/:id/comments", async (req, res) => {
     return jsonOk(res, { items: data || [], limit, offset });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to load comments");
+  }
+});
+
+/**
+ * Short-lived presigned GET for a proof object stored on TEST S3.
+ * Key is resolved from comment.attachments.proof_storage_paths[index] — never trusted from the client.
+ */
+router.get("/tickets/:id/comments/:commentId/proofs/:index/url", async (req, res) => {
+  const startedAt = Date.now();
+  const ticketId = safeTrim(req.params.id);
+  const commentId = safeTrim(req.params.commentId);
+  const index = toInt(req.params.index, { defaultValue: 0, min: 0, max: 50 });
+  if (!ticketId || !commentId) return jsonError(res, 400, "ticket id and comment id required");
+
+  try {
+    const { data: ticket, error: tErr } = await getTicketOrgCheckScoped(req, ticketId);
+    if (tErr) return jsonError(res, 500, tErr.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+
+    const { data: comment, error: cErr } = await getCommentById(commentId, "attachments, ticket_id");
+    if (cErr) return jsonError(res, 500, cErr.message);
+    if (!comment) return jsonError(res, 404, "Comment not found");
+    if (String(comment.ticket_id) !== String(ticketId)) {
+      return jsonError(res, 404, "Comment not found on ticket");
+    }
+
+    const att =
+      comment.attachments && typeof comment.attachments === "object" && !Array.isArray(comment.attachments)
+        ? comment.attachments
+        : {};
+    const paths = Array.isArray(att.proof_storage_paths) ? att.proof_storage_paths : [];
+    const key = paths[index];
+    if (!key || typeof key !== "string") {
+      return jsonError(res, 404, "Proof object not available (historical proofs may use DB base64 only)");
+    }
+
+    const { getProofDownloadUrl } = await import("../services/proofStorageService.js");
+    const signed = await getProofDownloadUrl({ key, expiresInSeconds: 120 });
+    logEvent("dataApi.tickets.proofUrl", {
+      tenantId: req.tenantId ?? null,
+      ticketId,
+      commentId,
+      index,
+      ms: Date.now() - startedAt,
+    });
+    return jsonOk(res, {
+      url: signed.url,
+      expiresIn: signed.expiresIn,
+      index,
+      key: signed.key,
+    });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to create proof download URL");
   }
 });
 
