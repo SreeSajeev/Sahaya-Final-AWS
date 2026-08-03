@@ -69,8 +69,15 @@ jobs:
               fi
               echo "BEFORE"; curl -sS http://127.0.0.1:4100/health || true; echo
               pm2 restart sahaya-final-aws-monorepo-api --update-env
-              sleep 3
-              echo "AFTER"; curl -sS http://127.0.0.1:4100/health; echo
+              # App needs >3s to bind after PM2 restart
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                sleep 2
+                if curl -sS -o /tmp/restart_health.json -w '%{http_code}' http://127.0.0.1:4100/health | grep -q 200; then
+                  echo "AFTER attempt=$i"; cat /tmp/restart_health.json; echo
+                  break
+                fi
+                echo "AFTER wait attempt=$i not ready"
+              done
               pm2 describe sahaya-final-aws-monorepo-api | head -40 || true
               exit 0
             fi
