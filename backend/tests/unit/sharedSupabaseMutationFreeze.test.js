@@ -1,50 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-describe("sharedSupabaseMutationFreeze", () => {
+describe("provisionAdminUser (PostgreSQL-only, Phase E)", () => {
   afterEach(() => {
-    delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
-    vi.resetModules();
-  });
-
-  it("defaults to mutations allowed (production-safe)", async () => {
-    delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
-    const mod = await import("../../src/security/sharedSupabaseMutationFreeze.js");
-    expect(mod.areSharedSupabaseMutationsDisabled()).toBe(false);
-    expect(mod.sharedSupabaseMutationBlock()).toBeNull();
-  });
-
-  it("blocks when SHARED_SUPABASE_MUTATIONS_DISABLED=true", async () => {
-    process.env.SHARED_SUPABASE_MUTATIONS_DISABLED = "true";
-    const mod = await import("../../src/security/sharedSupabaseMutationFreeze.js");
-    expect(mod.areSharedSupabaseMutationsDisabled()).toBe(true);
-    const block = mod.sharedSupabaseMutationBlock();
-    expect(block?.blocked).toBe(true);
-    expect(block?.code).toBe("SHARED_SUPABASE_MUTATIONS_DISABLED");
-    expect(block?.message).toMatch(/temporarily disabled/i);
-  });
-
-  it("does not treat other values as enabled", async () => {
-    process.env.SHARED_SUPABASE_MUTATIONS_DISABLED = "yes";
-    const mod = await import("../../src/security/sharedSupabaseMutationFreeze.js");
-    expect(mod.areSharedSupabaseMutationsDisabled()).toBe(false);
-  });
-});
-
-describe("provisionAdminUser (PostgreSQL-only)", () => {
-  afterEach(() => {
-    delete process.env.SHARED_SUPABASE_MUTATIONS_DISABLED;
     delete process.env.PROVISION_SERVER_SIDE_ENABLED;
     vi.resetModules();
   });
 
-  it("creates local password hash and never needs supabaseAuth even with freeze on", async () => {
-    process.env.SHARED_SUPABASE_MUTATIONS_DISABLED = "true";
+  it("creates local password hash without any Supabase client", async () => {
     process.env.PROVISION_SERVER_SIDE_ENABLED = "true";
 
     const insertUser = vi.fn(async () => ({
       data: {
         id: "33333333-3333-3333-3333-333333333333",
-        email: "freeze-test@example.com",
+        email: "phase-e@example.com",
         role: "STAFF",
       },
       error: null,
@@ -80,9 +48,9 @@ describe("provisionAdminUser (PostgreSQL-only)", () => {
     const result = await provisionAdminUser({
       req: { appUser: { role: "SUPER_ADMIN" } },
       body: {
-        email: "freeze-test@example.com",
+        email: "phase-e@example.com",
         password: "Abcd1234!",
-        name: "Freeze Test",
+        name: "Phase E",
         role: "STAFF",
         organisationId: "00000000-0000-0000-0000-000000000001",
       },
@@ -90,7 +58,6 @@ describe("provisionAdminUser (PostgreSQL-only)", () => {
 
     expect(result.ok).toBe(true);
     expect(insertUser).toHaveBeenCalled();
-    const payload = insertUser.mock.calls[0][0];
-    expect(payload.password_hash).toBe("$argon2id$mock");
+    expect(insertUser.mock.calls[0][0].password_hash).toBe("$argon2id$mock");
   });
 });

@@ -5,8 +5,6 @@
  * development:  APP_BASE_URL=http://localhost:3000
  * production:   APP_BASE_URL=https://sahaya.pariskq.in
  */
-import { areSharedSupabaseMutationsDisabled } from "../security/sharedSupabaseMutationFreeze.js";
-
 const APP_BASE_URL = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 const FE_GATED_RESOLUTION_TOKEN = String(process.env.FE_GATED_RESOLUTION_TOKEN || "").toLowerCase() === "true";
 const SAFE_TOKEN_LIFECYCLE = String(process.env.SAFE_TOKEN_LIFECYCLE || "true").toLowerCase() !== "false";
@@ -27,8 +25,6 @@ const TENANT_CLIENTS_ENABLED =
 /** When false, POST /auth/provision/admin returns 404; admin UIs keep browser signUp. */
 const PROVISION_SERVER_SIDE_ENABLED =
   String(process.env.PROVISION_SERVER_SIDE_ENABLED || "false").toLowerCase() === "true";
-/** TEST-only freeze mirror — see sharedSupabaseMutationFreeze.js (default OFF). */
-const SHARED_SUPABASE_MUTATIONS_DISABLED = areSharedSupabaseMutationsDisabled();
 /** When false, /complaint-points/* and /public/* OTP routes return 404. */
 const PUBLIC_COMPLAINTS_ENABLED =
   String(process.env.PUBLIC_COMPLAINTS_ENABLED || "false").toLowerCase() === "true";
@@ -71,16 +67,17 @@ const FE_ACTION_TOKEN_EXPIRY_HOURS = Math.min(
 
 /**
  * Database access mode for repositories.
- * Only `prisma` is active; `supabase` is accepted for compatibility but treated as prisma.
+ * Only `prisma` is active. Legacy `DB_MODE=supabase` is accepted and treated as prisma.
  *
- * @typedef {"supabase"|"prisma"} DbMode
+ * @typedef {"prisma"} DbMode
  */
 
 /** @returns {DbMode} */
 export function resolveDbMode() {
   const raw = String(process.env.DB_MODE || "").trim().toLowerCase();
-  if (raw === "supabase" || raw === "prisma") {
-    return /** @type {DbMode} */ (raw);
+  if (raw === "supabase") {
+    // Compatibility: former dual-write mode is gone; always Prisma → EC2 PostgreSQL.
+    return "prisma";
   }
   return "prisma";
 }
@@ -98,7 +95,6 @@ export {
   BULK_IMPORT_MAX_ROWS,
   TENANT_CLIENTS_ENABLED,
   PROVISION_SERVER_SIDE_ENABLED,
-  SHARED_SUPABASE_MUTATIONS_DISABLED,
   PUBLIC_COMPLAINTS_ENABLED,
   DAILY_TENANT_REPORT_ENABLED,
   DAILY_REPORT_DRY_RUN,

@@ -243,7 +243,7 @@ app.use(debugAirtelRouter);
 // Tickets
 app.use("/tickets", ticketsRouter);
 
-// Additive data APIs for frontend migration (Supabase DB -> backend)
+// Additive data APIs for frontend migration (direct DB → backend)
 app.use("/data", dataApiRouter);
 
 // Public magic-link proof upload — MUST be registered BEFORE any app.use("/fe", ...) so POST /fe/proof
@@ -780,13 +780,6 @@ function startAllBackgroundJobs() {
 if (PROCESS_ROLE === "worker") {
   console.log("⚙️ PROCESS_ROLE=worker — HTTP server disabled; background workers only");
   logSecurityStartup();
-  if (process.env.NODE_ENV === "development" && process.env.SUPABASE_URL) {
-    try {
-      console.log("SUPABASE_URL host:", new URL(process.env.SUPABASE_URL).host);
-    } catch {
-      /* ignore */
-    }
-  }
   startAllBackgroundJobs();
 } else {
   const roleForLog = ["all", "api"].includes(PROCESS_ROLE) ? PROCESS_ROLE : "all";
@@ -797,13 +790,6 @@ if (PROCESS_ROLE === "worker") {
   app.listen(PORT, () => {
     console.log(`🚀 Backend running on port ${PORT} (PROCESS_ROLE=${roleForLog})`);
     logSecurityStartup();
-    if (process.env.NODE_ENV === "development" && process.env.SUPABASE_URL) {
-      try {
-        console.log("SUPABASE_URL host:", new URL(process.env.SUPABASE_URL).host);
-      } catch {
-        /* ignore */
-      }
-    }
     if (roleForLog === "all") {
       startAllBackgroundJobs();
     } else {

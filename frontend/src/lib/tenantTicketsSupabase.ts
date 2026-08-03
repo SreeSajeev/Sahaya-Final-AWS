@@ -4,10 +4,10 @@ import { getEndOfDayIST, getStartOfDayIST } from "@/lib/dateUtils";
 import type { DashboardStats, Ticket, TicketFilters, TicketStatus, UserRole } from "@/lib/types";
 import { ticketMatchesSearch } from "@/lib/ticketSearch";
 
-/** Dev-only session debug (no Supabase Auth). */
+/** Dev-only session debug. */
 export async function logTicketsSessionDebug(context: string): Promise<void> {
   const enabled =
-    import.meta.env.DEV || String(import.meta.env.VITE_DEBUG_SUPABASE_SESSION ?? "").trim() === "true";
+    import.meta.env.DEV || String(import.meta.env.VITE_DEBUG_AUTH_SESSION ?? "").trim() === "true";
   if (!enabled) return;
   // eslint-disable-next-line no-console
   console.log("SESSION DEBUG:", context, { hasToken: Boolean(sessionStorage.getItem("sahaya_access_token")) });

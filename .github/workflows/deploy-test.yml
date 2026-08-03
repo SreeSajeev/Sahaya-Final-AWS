@@ -53,9 +53,7 @@ jobs:
               echo "Set ${key}=${value} in ${file}"
             }
 
-            ensure_env_flag frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED true
-            ensure_env_flag backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED true
-            # Phase A: Prisma → EC2 Postgres is authoritative; keep dual-write risks off during migration.
+            # Phase A: Prisma → EC2 Postgres is authoritative.
             ensure_env_flag backend/.env DB_MODE prisma
             # Phase C: dedicated TEST proof bucket (never crm-pariskq).
             ensure_env_flag backend/.env S3_FE_PROOFS_BUCKET sahaya-test-fe-proofs
@@ -77,6 +75,28 @@ jobs:
             ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
+
+            # Phase E: remove obsolete Supabase / freeze keys from TEST env only (never print values).
+            remove_env_key() {
+              local file="$1"
+              local key="$2"
+              if [ ! -f "$file" ]; then
+                return 0
+              fi
+              if grep -q "^${key}=" "$file"; then
+                sed -i.bak "/^${key}=/d" "$file"
+                rm -f "${file}.bak"
+                echo "Removed ${key} from ${file}"
+              fi
+            }
+            remove_env_key backend/.env SUPABASE_URL
+            remove_env_key backend/.env SUPABASE_ANON_KEY
+            remove_env_key backend/.env SUPABASE_SERVICE_ROLE_KEY
+            remove_env_key backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED
+            remove_env_key frontend/.env VITE_SUPABASE_URL
+            remove_env_key frontend/.env VITE_SUPABASE_ANON_KEY
+            remove_env_key frontend/.env VITE_SUPABASE_PUBLISHABLE_KEY
+            remove_env_key frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED
 
             # Generate JWT secrets once if missing (never echo values).
             ensure_secret_once() {
