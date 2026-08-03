@@ -24,8 +24,18 @@ on:
           - backup_restore
           - restart_pg
           - playwright_acceptance
+          - phase_f_soak_start
+          - phase_f_soak_status
+          - phase_f_soak_dense
+          - phase_f_load
+          - phase_f_security
+          - phase_f_session
+          - phase_f_passwords
+          - phase_f_observability
+          - phase_f_dr
+          - phase_f_bundle
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
         default: ""
 
@@ -43,7 +53,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: MODE,CONFIRM
-          command_timeout: 20m
+          command_timeout: 120m
           script: |
             set -euo pipefail
             MODE="${MODE:-list_roles}"
@@ -111,6 +121,77 @@ jobs:
               exit 0
             fi
 
+            if [ "$MODE" = "phase_f_soak_start" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_HOURS="${SOAK_HOURS:-6}" bash scripts/phase-f/run-phase-f.sh soak_start
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_status" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_status
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_dense" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_DURATION_SEC="${SOAK_DURATION_SEC:-3600}" bash scripts/phase-f/run-phase-f.sh soak_dense
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_load" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh load
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_security" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh security
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_session" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh session
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_passwords" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh passwords
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_observability" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_dr" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing phase_f_dr without CONFIRM" >&2
+                exit 1
+              fi
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh dr
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_bundle" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_HOURS=6 bash scripts/phase-f/run-phase-f.sh soak_start
+              bash scripts/phase-f/run-phase-f.sh passwords
+              bash scripts/phase-f/run-phase-f.sh session
+              bash scripts/phase-f/run-phase-f.sh security
+              bash scripts/phase-f/run-phase-f.sh load
+              bash scripts/phase-f/run-phase-f.sh observability
+              # Dense soak ~60m inside 120m budget; long soak continues in background
+              SOAK_DURATION_SEC=3600 SOAK_INTERVAL_SEC=8 bash scripts/phase-f/run-phase-f.sh soak_dense
+              exit 0
+            fi
+
             if [ "$MODE" = "backup_restore" ]; then
               if [ "${CONFIRM}" != "CONFIRM" ]; then
                 echo "Refusing backup_restore without CONFIRM" >&2
@@ -172,30 +253,22 @@ jobs:
               lines.push(`ROLE_${role}_USER_ID=${user.id}`);
               lines.push(`ROLE_${role}_ORG=${user.organisationId || ""}`);
               const [local, domain] = user.email.split("@");
-              console.log(`SET role=${role} email=${local.slice(0, 2)}***@${domain}`);
+              console.log(`SET role=${role} email=${local.slice(0,2)}***@${domain}`);
             }
+            lines.push("");
             lines.push(`AUTH_SET_PASSWORD=${password}`);
             fs.writeFileSync(credsPath, lines.join("\n") + "\n", { mode: 0o600 });
+            console.log("BOOTSTRAP_DONE");
             await prisma.$disconnect();
             NODE
-              echo "Wrote credentials on EC2 (path not containing secrets in logs beyond role redaction)."
               exit 0
             fi
 
             if [ "$MODE" = "smoke_login" ] || [ "$MODE" = "smoke_extended" ]; then
-              if [ -f scripts/smoke-auth-extended.sh ]; then
-                chmod +x scripts/smoke-auth-extended.sh
-                if [ "$MODE" = "smoke_extended" ]; then
-                  bash scripts/smoke-auth-extended.sh
-                else
-                  bash scripts/smoke-auth-extended.sh | sed -n '1,/EXTENDED/p' | sed '$d'
-                fi
-              else
-                echo "smoke script missing — deploy develop first" >&2
-                exit 1
-              fi
+              chmod +x scripts/acceptance-e2e.sh
+              bash scripts/acceptance-e2e.sh
               exit 0
             fi
 
-            echo "Unknown mode: $MODE" >&2
+            echo "Unknown MODE=$MODE" >&2
             exit 1
