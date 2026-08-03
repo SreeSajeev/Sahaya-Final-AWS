@@ -75,19 +75,52 @@ export async function api(
   return { status: res.status, json, headers: res.headers };
 }
 
-export async function login(role: Role) {
+type Session = {
+  status: number;
+  accessToken: string | undefined;
+  profile: Record<string, unknown> | undefined;
+  cookie: string;
+  error: string | undefined;
+};
+
+/** Cache successful logins per role for the suite run (avoids login rate limits). */
+const sessionCache = new Map<Role, Session>();
+
+export async function login(role: Role, opts: { force?: boolean } = {}) {
+  if (!opts.force && sessionCache.has(role)) {
+    return sessionCache.get(role)!;
+  }
   const { email, password } = roleCreds(role);
   if (!email || !password) throw new Error(`Missing credentials for ${role}`);
-  const res = await api("POST", "/auth/login", { body: { email, password } });
-  const setCookie = res.headers.getSetCookie?.() || [];
-  const cookie = setCookie.map((c) => c.split(";")[0]).join("; ");
-  return {
-    status: res.status,
-    accessToken: res.json?.accessToken as string | undefined,
-    profile: res.json?.profile as Record<string, unknown> | undefined,
-    cookie,
-    error: res.json?.error as string | undefined,
+
+  let last: Session = {
+    status: 0,
+    accessToken: undefined,
+    profile: undefined,
+    cookie: "",
+    error: "not_attempted",
   };
+
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const res = await api("POST", "/auth/login", { body: { email, password } });
+    const setCookie = res.headers.getSetCookie?.() || [];
+    const cookie = setCookie.map((c) => c.split(";")[0]).join("; ");
+    last = {
+      status: res.status,
+      accessToken: res.json?.accessToken as string | undefined,
+      profile: res.json?.profile as Record<string, unknown> | undefined,
+      cookie,
+      error: res.json?.error as string | undefined,
+    };
+    if (res.status === 200 && last.accessToken) {
+      sessionCache.set(role, last);
+      return last;
+    }
+    // Rate limit / transient — backoff
+    const waitMs = Math.min(30_000, 2000 * attempt * attempt);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  return last;
 }
 
 export function redactEmail(email: string) {

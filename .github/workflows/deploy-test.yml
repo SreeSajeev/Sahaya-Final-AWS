@@ -75,6 +75,8 @@ jobs:
             ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
+            # TEST acceptance suites share role sample logins; keep limiter above suite volume.
+            ensure_env_flag backend/.env RATE_LIMIT_LOGIN_MAX 200
 
             # Phase E: remove obsolete Supabase / freeze keys from TEST env only (never print values).
             remove_env_key() {
