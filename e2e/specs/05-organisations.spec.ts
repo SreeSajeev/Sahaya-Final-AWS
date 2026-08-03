@@ -38,6 +38,11 @@ test.describe("Organisations", () => {
     test.skip(!hasCreds("SUPER_ADMIN"), "missing SA creds");
     await browserLogin(page, "SUPER_ADMIN");
     await page.goto("/app/organisations");
-    await expect(page.getByText(/organisation/i).first()).toBeVisible({ timeout: 20_000 });
+    await expect(page).not.toHaveURL(/\/login/);
+    await expect(page.locator("body")).toBeVisible();
+    // Heading copy varies (Organisations / Organizations / Tenants)
+    await expect(
+      page.getByText(/organisation|organization|tenant/i).first()
+    ).toBeVisible({ timeout: 20_000 });
   });
 });
