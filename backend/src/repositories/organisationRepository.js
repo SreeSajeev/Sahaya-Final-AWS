@@ -6,7 +6,6 @@ const ORG_SNAKE_TO_CAMEL = {
   name: "name",
   slug: "slug",
   status: "status",
-  email: "email",
   spoc_name: "spocName",
   spoc_email: "spocEmail",
   spoc_phone: "spocPhone",
@@ -47,7 +46,6 @@ export async function listOrganisations(options = {}) {
         spocPhone: true,
         reviewFieldLabel: true,
         reviewFieldHelperText: true,
-        email: true,
       },
       orderBy: { createdAt: "desc" },
     });

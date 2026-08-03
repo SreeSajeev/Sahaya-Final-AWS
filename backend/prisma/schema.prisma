@@ -57,7 +57,7 @@ model Organisation {
   slug                  String    @unique
   createdAt             DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   status                String    @default("active")
-  email                 String?
+  // NOTE: no `email` column on live TEST organisations (use incoming_emails / spoc_email).
   spocName              String?   @map("spoc_name")
   spocEmail             String?   @map("spoc_email")
   spocPhone             String?   @map("spoc_phone")
