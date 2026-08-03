@@ -1,5 +1,5 @@
-# TEST-only Phase D auth ops via SSH. Manual trigger only.
-# Sets local PostgreSQL password hashes. Does NOT touch Supabase.
+# TEST-only Phase D/E acceptance ops via SSH. Manual trigger only.
+# Does NOT touch Supabase or production.
 
 name: Phase D TEST Auth Ops
 
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "list_roles | bootstrap_role_samples | smoke_login | smoke_extended"
+        description: "Ops mode"
         required: true
         default: list_roles
         type: choice
@@ -16,8 +16,11 @@ on:
           - bootstrap_role_samples
           - smoke_login
           - smoke_extended
+          - db_inspect
+          - acceptance_e2e
+          - restart_api
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api"
         required: false
         default: ""
 
@@ -35,7 +38,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: MODE,CONFIRM
-          command_timeout: 15m
+          command_timeout: 20m
           script: |
             set -euo pipefail
             MODE="${MODE:-list_roles}"
@@ -46,6 +49,35 @@ jobs:
 
             if [ "$MODE" = "list_roles" ]; then
               npm run auth:list-roles
+              exit 0
+            fi
+
+            if [ "$MODE" = "db_inspect" ]; then
+              chmod +x scripts/acceptance-db-inspect.sh
+              bash scripts/acceptance-db-inspect.sh
+              echo "=== DOCKER / BACKUP MARKERS ==="
+              docker ps --format '{{.Names}} {{.Status}} {{.Ports}}' | grep -i sahaya || true
+              ls -la /var/backups/sahaya 2>/dev/null | head -40 || echo "no /var/backups/sahaya listing"
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
+              exit 0
+            fi
+
+            if [ "$MODE" = "restart_api" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing restart without CONFIRM" >&2
+                exit 1
+              fi
+              echo "BEFORE"; curl -sS http://127.0.0.1:4100/health || true; echo
+              pm2 restart sahaya-final-aws-monorepo-api --update-env
+              sleep 3
+              echo "AFTER"; curl -sS http://127.0.0.1:4100/health; echo
+              pm2 describe sahaya-final-aws-monorepo-api | head -40 || true
+              exit 0
+            fi
+
+            if [ "$MODE" = "acceptance_e2e" ]; then
+              chmod +x scripts/acceptance-e2e.sh
+              bash scripts/acceptance-e2e.sh
               exit 0
             fi
 
@@ -101,7 +133,6 @@ jobs:
             fi
 
             if [ "$MODE" = "smoke_login" ] || [ "$MODE" = "smoke_extended" ]; then
-              # Ensure latest smoke script from develop is present (ops workflow may be on main).
               if [ -f scripts/smoke-auth-extended.sh ]; then
                 chmod +x scripts/smoke-auth-extended.sh
                 if [ "$MODE" = "smoke_extended" ]; then
