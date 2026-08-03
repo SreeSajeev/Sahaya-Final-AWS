@@ -597,8 +597,10 @@ const emails = {
         const proofUpload = await http("POST", "/fe/proof", {
           body: {
             token: proofToken,
-            attachments: [{ image_base64: `data:image/png;base64,${pngB64}`, filename: "E2E_TEST_proof.png" }],
-            outcome: "ON_SITE",
+            attachments: {
+              image_base64: `data:image/png;base64,${pngB64}`,
+              images: [{ image_base64: `data:image/png;base64,${pngB64}`, filename: "E2E_TEST_proof.png" }],
+            },
           },
         });
         record("PROOF", "upload_fe_proof", proofUpload.status < 300, {
@@ -607,138 +609,141 @@ const emails = {
           code: proofUpload.json?.code,
         });
 
-        const commentWithPath = await prisma.ticketComment.findFirst({
-          where: {
-            ticketId,
-            attachments: { path: ["proof_storage_paths"] },
-          },
-          orderBy: { createdAt: "desc" },
-        });
-        // Prisma JSON path filter may not work — use raw
-        const pathRows = await prisma.$queryRawUnsafe(
-          `SELECT id, attachments FROM ticket_comments
-           WHERE ticket_id = $1::uuid AND attachments ? 'proof_storage_paths'
-           ORDER BY created_at DESC LIMIT 1`,
-          ticketId
-        );
-        const paths = pathRows[0]?.attachments?.proof_storage_paths || [];
-        record("PROOF", "db_proof_storage_paths", paths.length > 0, {
-          count: paths.length,
-          keyPrefix: paths[0] ? String(paths[0]).slice(0, 40) : null,
-        });
-        if (paths[0]) fixtures.proofs.push(...paths);
-
-        const bucketOk = (() => {
-          try {
-            return getProofS3Bucket() === "sahaya-test-fe-proofs" && isProofS3Enabled();
-          } catch (e) {
-            return false;
-          }
-        })();
-        record("S3", "config_test_bucket_enabled", bucketOk, {
-          enabled: isProofS3Enabled(),
-          bucket: (() => {
-            try {
-              return getProofS3Bucket();
-            } catch (e) {
-              return String(e.message).slice(0, 80);
-            }
-          })(),
-        });
-
-        if (pathRows[0]?.id && paths.length > 0) {
-          const urlRes = await http(
-            "GET",
-            `/data/tickets/${ticketId}/comments/${pathRows[0].id}/proofs/0/url`,
-            { token: STA }
+        try {
+          const pathRows = await prisma.$queryRawUnsafe(
+            `SELECT id FROM ticket_comments
+             WHERE ticket_id = '${ticketId}'::uuid AND attachments ? 'proof_storage_paths'
+             ORDER BY created_at DESC LIMIT 1`
           );
-          record("PROOF", "presign_url", urlRes.status === 200 && Boolean(urlRes.json?.url || urlRes.json?.item?.url), {
-            status: urlRes.status,
-            err: urlRes.json?.error,
+          const pathMeta = pathRows[0]
+            ? await prisma.ticketComment.findUnique({ where: { id: pathRows[0].id } })
+            : null;
+          const paths = pathMeta?.attachments?.proof_storage_paths || [];
+          record("PROOF", "db_proof_storage_paths", paths.length > 0, {
+            count: paths.length,
+            keyPrefix: paths[0] ? String(paths[0]).slice(0, 40) : null,
           });
-          const url = urlRes.json?.url || urlRes.json?.item?.url;
-          if (url) {
-            const getObj = await fetch(url);
-            record("PROOF", "presign_fetch_object", getObj.status === 200, {
-              status: getObj.status,
-              bytes: Number(getObj.headers.get("content-length") || 0),
-            });
-          }
+          if (paths[0]) fixtures.proofs.push(...paths);
 
-          // cross-tenant: ADMIN from different org tries
+          const bucketOk = (() => {
+            try {
+              return getProofS3Bucket() === "sahaya-test-fe-proofs" && isProofS3Enabled();
+            } catch {
+              return false;
+            }
+          })();
+          record("S3", "config_test_bucket_enabled", bucketOk, {
+            enabled: isProofS3Enabled(),
+            bucket: (() => {
+              try {
+                return getProofS3Bucket();
+              } catch (e) {
+                return String(e.message).slice(0, 80);
+              }
+            })(),
+          });
+
+          if (pathRows[0]?.id && paths.length > 0) {
+            const urlRes = await http(
+              "GET",
+              `/data/tickets/${ticketId}/comments/${pathRows[0].id}/proofs/0/url`,
+              { token: STA }
+            );
+            record("PROOF", "presign_url", urlRes.status === 200 && Boolean(urlRes.json?.url || urlRes.json?.item?.url), {
+              status: urlRes.status,
+              err: urlRes.json?.error,
+            });
+            const url = urlRes.json?.url || urlRes.json?.item?.url;
+            if (url) {
+              const getObj = await fetch(url);
+              record("PROOF", "presign_fetch_object", getObj.status === 200, {
+                status: getObj.status,
+                bytes: Number(getObj.headers.get("content-length") || 0),
+              });
+            }
+          }
+        } catch (e) {
+          record("PROOF", "post_upload_db_check", false, { err: String(e.message).slice(0, 120) });
+        }
+      } else {
+        record("PROOF", "upload_fe_proof", false, { reason: "no_token" });
+      }
+
+      // Always attempt controlled direct S3 proof path (mandatory closure)
+      if (isProofS3Enabled()) {
+        try {
+          const bucket = getProofS3Bucket();
+          if (bucket !== "sahaya-test-fe-proofs") throw new Error("wrong bucket");
+          const comment = await prisma.ticketComment.create({
+            data: {
+              ticketId,
+              source: "E2E_TEST",
+              body: "E2E_TEST_direct_s3_proof",
+              organisationId: dbT.organisationId,
+              attachments: {},
+            },
+          });
+          fixtures.comments.push(comment.id);
+          const buf = Buffer.from(pngB64, "base64");
+          const up = await uploadProof({
+            tenantId: dbT.organisationId,
+            ticketId,
+            commentId: comment.id,
+            buffer: buf,
+            contentType: "image/png",
+            filename: "E2E_TEST_direct.png",
+          });
+          const key = up.key;
+          await prisma.ticketComment.update({
+            where: { id: comment.id },
+            data: {
+              attachments: {
+                proof_storage_paths: [key],
+                image_base64: `data:image/png;base64,${pngB64}`,
+              },
+            },
+          });
+          fixtures.proofs.push(key);
+          const signed = await getProofDownloadUrl({ key, expiresInSeconds: 60 });
+          const got = await fetch(signed.url);
+          record("PROOF", "direct_s3_upload_presign", got.status === 200, {
+            status: got.status,
+            keyPrefix: key.slice(0, 50),
+            bucket: up.bucket,
+          });
+          // cross-tenant IDOR ticket
           if (ADM && admOrg && dbT?.organisationId && admOrg !== dbT.organisationId) {
             const x = await http(
               "GET",
-              `/data/tickets/${ticketId}/comments/${pathRows[0].id}/proofs/0/url`,
+              `/data/tickets/${ticketId}/comments/${comment.id}/proofs/0/url`,
               { token: ADM }
             );
             record("TENANT", "cross_tenant_presign_blocked", x.status === 403 || x.status === 404, {
               status: x.status,
             });
-          } else {
-            // use SA ticket from another org if admin same org
+          } else if (ADM && admOrg) {
             const foreignTicket = await prisma.ticket.findFirst({
-              where: admOrg ? { organisationId: { not: admOrg } } : { id: "00000000-0000-0000-0000-000000000000" },
+              where: { organisationId: { not: admOrg } },
               select: { id: true },
             });
-            if (foreignTicket && ADM) {
+            if (foreignTicket) {
               const x = await http("GET", `/data/tickets/${foreignTicket.id}`, { token: ADM });
               record("TENANT", "idor_foreign_ticket", x.status === 403 || x.status === 404, {
                 status: x.status,
               });
             }
           }
+          try {
+            await deleteProof({ key });
+            record("PROOF", "direct_s3_cleanup", true, {});
+          } catch (e) {
+            record("PROOF", "direct_s3_cleanup", false, { err: String(e.message).slice(0, 80) });
+          }
+        } catch (e) {
+          record("PROOF", "direct_s3_fallback", false, { err: String(e.message).slice(0, 160) });
         }
       } else {
-        // Direct S3 service path if token flow unavailable but S3 enabled
-        if (isProofS3Enabled()) {
-          try {
-            const bucket = getProofS3Bucket();
-            if (bucket !== "sahaya-test-fe-proofs") throw new Error("wrong bucket");
-            const comment = await prisma.ticketComment.create({
-              data: {
-                ticketId,
-                source: "E2E_TEST",
-                body: "E2E_TEST_direct_s3_proof",
-                organisationId: dbT.organisationId,
-                attachments: {},
-              },
-            });
-            fixtures.comments.push(comment.id);
-            const buf = Buffer.from(pngB64, "base64");
-            const up = await uploadProof({
-              tenantId: dbT.organisationId,
-              ticketId,
-              commentId: comment.id,
-              buffer: buf,
-              contentType: "image/png",
-              filename: "E2E_TEST_direct.png",
-            });
-            const key = up.key;
-            await prisma.ticketComment.update({
-              where: { id: comment.id },
-              data: { attachments: { proof_storage_paths: [key], image_base64: `data:image/png;base64,${pngB64}` } },
-            });
-            fixtures.proofs.push(key);
-            const signed = await getProofDownloadUrl({ key, expiresInSeconds: 60 });
-            const got = await fetch(signed.url);
-            record("PROOF", "direct_s3_upload_presign", got.status === 200, {
-              status: got.status,
-              keyPrefix: key.slice(0, 50),
-              bucket: up.bucket,
-            });
-            try {
-              await deleteProof({ key });
-              record("PROOF", "direct_s3_cleanup", true, {});
-            } catch (e) {
-              record("PROOF", "direct_s3_cleanup", false, { err: String(e.message).slice(0, 80) });
-            }
-          } catch (e) {
-            record("PROOF", "direct_s3_fallback", false, { err: String(e.message).slice(0, 120) });
-          }
-        } else {
-          record("PROOF", "upload_fe_proof", false, { reason: "no_token_and_s3_disabled" });
-        }
+        record("PROOF", "direct_s3_fallback", false, { reason: "s3_disabled" });
       }
     }
 
