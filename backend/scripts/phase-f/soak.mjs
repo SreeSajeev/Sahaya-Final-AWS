@@ -154,7 +154,7 @@ async function cycle(tokens, password, emails) {
       if (feId) {
         const assign = await http("POST", `/tickets/${ticketId}/assign`, {
           token: STA,
-          body: { fe_id: feId },
+          body: { feId },
         });
         bumpStatus(assign.status);
         latencies.assign.push(assign.ms);

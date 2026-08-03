@@ -166,7 +166,7 @@ async function main() {
       if (feId) {
         const assign = await http("POST", `/tickets/${lastId}/assign`, {
           token: STA,
-          body: { fe_id: feId },
+          body: { feId: feId },
         });
         scenarios.assign.push(assign.ms);
         if (assign.status >= 500) errors.push({ scenario: "assign", status: assign.status });
