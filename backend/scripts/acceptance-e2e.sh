@@ -52,6 +52,9 @@ probe() {
   local label="$1" token="$2" path="$3"
   code="$(curl -sS -o /tmp/e2e_body.json -w '%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $token" -H 'Origin: https://test-sahaya.pariskq.in')"
   echo "$label http=$code path=$path"
+  if [ "$code" != "200" ] && [ "$code" != "401" ] && [ "$code" != "403" ] && [ "$code" != "404" ]; then
+    python3 -c 'import json;d=json.load(open("/tmp/e2e_body.json"));print("ERR_BODY",d.get("error") or d)' 2>/dev/null || echo "ERR_BODY_raw $(head -c 200 /tmp/e2e_body.json)"
+  fi
 }
 
 echo "===== AUTHENTICATED READS ====="
@@ -59,7 +62,10 @@ probe SA_me "$SA" /auth/me
 probe SA_tickets "$SA" '/data/tickets?limit=5'
 probe SA_orgs "$SA" '/data/organisations?limit=20'
 probe SA_users "$SA" '/data/users?limit=20'
-probe SA_sla "$SA" '/data/sla?limit=5'
+probe SA_sla "$SA" '/data/sla/monitor?limit=5'
+probe SA_orgs_stats "$SA" '/data/organisations/stats'
+probe SA_tickets_list_legacy "$SA" '/tickets?limit=5'
+probe SA_sla_tracked "$SA" '/data/sla/tracked-count'
 probe ADM_tickets "$ADM" '/data/tickets?limit=50'
 probe ADM_users "$ADM" '/data/users?limit=20'
 probe STA_tickets "$STA" '/data/tickets?limit=20'
@@ -125,7 +131,7 @@ print("post_logout_refresh_fail", not d.get("accessToken"), d.get("error"))'
 
 echo "===== SAFE WRITE (create TEST ticket if allowed) ====="
 # Prefer STAFF create if endpoint exists
-CREATE_CODE="$(curl -sS -o /tmp/e2e_create.json -w '%{http_code}' -X POST "$API_BASE/data/tickets" \
+CREATE_CODE="$(curl -sS -o /tmp/e2e_create.json -w '%{http_code}' -X POST "$API_BASE/tickets" \
   -H "Authorization: Bearer $STA" -H 'Content-Type: application/json' \
   -d '{"short_description":"E2E_TEST_ACCEPTANCE_MARKER","category":"OTHER","issue_type":"OTHER","priority_level":"LOW","status":"OPEN"}' || true)"
 echo "create_ticket_http=$CREATE_CODE"
