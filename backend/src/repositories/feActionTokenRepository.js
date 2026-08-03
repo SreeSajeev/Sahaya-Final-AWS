@@ -11,7 +11,6 @@ const TOKEN_SNAKE_TO_CAMEL = {
   token_state: "tokenState",
   activated_at: "activatedAt",
   revoked_at: "revokedAt",
-  idempotency_key: "idempotencyKey",
   organisation_id: "organisationId",
   used_at: "usedAt",
 };

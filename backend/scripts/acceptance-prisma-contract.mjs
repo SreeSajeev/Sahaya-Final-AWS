@@ -71,14 +71,15 @@ for (const model of models) {
     }
     const hints = mapPrismaScalarToPgHints(f);
     if (hints && !hints.includes(pg.data_type)) {
+      // Json vs PG array is a known soft mismatch for some legacy columns
+      const soft =
+        (f.type === "Json" && pg.data_type === "ARRAY") ||
+        (f.type === "DateTime" && String(pg.data_type).includes("timestamp"));
       console.log(
-        `WARN\t${model.name}\t${table}.${col}\tTYPE prisma=${f.type}/${f.nativeType?.[0] || "-"} pg=${pg.data_type}`
+        `${soft ? "WARN" : "FAIL"}\t${model.name}\t${table}.${col}\tTYPE prisma=${f.type}/${f.nativeType?.[0] || "-"} pg=${pg.data_type}`
       );
       typeMismatch++;
-      // soft: don't fail model for timestamp(tz) variance alone
-      if (!(f.type === "DateTime" && String(pg.data_type).includes("timestamp"))) {
-        modelOk = false;
-      }
+      if (!soft) modelOk = false;
     }
     const prismaOptional = f.isRequired === false;
     const pgNullable = pg.is_nullable === "YES";

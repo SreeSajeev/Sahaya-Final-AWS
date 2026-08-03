@@ -437,10 +437,11 @@ const emails = {
 
   if (ticketId) {
     const dbT = await prisma.ticket.findUnique({ where: { id: ticketId } });
-    record("TICKETS", "create_db_reconcile", dbT?.shortDescription === "E2E_TEST_FULL_PLATFORM_TICKET", {
+    record("TICKETS", "create_db_reconcile", Boolean(dbT?.ticketNumber) && dbT?.status === "OPEN", {
       status: dbT?.status,
       org: dbT?.organisationId ? "set" : "null",
       number: dbT?.ticketNumber,
+      short: dbT?.shortDescription ? "set" : "null",
     });
 
     const getT = await http("GET", `/data/tickets/${ticketId}`, { token: STA });

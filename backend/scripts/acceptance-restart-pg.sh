@@ -2,14 +2,17 @@
 # Controlled restart of ONLY sahaya-migration-db. Confirm required.
 set -euo pipefail
 echo "===== BEFORE COUNTS ====="
-docker exec sahaya-migration-db psql -U postgres -d sahaya -tAc \
+cd /var/www/apps/sahaya-final-aws-monorepo/backend 2>/dev/null || true
+DB_USER="$(node --input-type=module -e 'import "dotenv/config"; const u=new URL(process.env.DATABASE_URL); process.stdout.write(u.username||"sahaya")')"
+DB_NAME="$(node --input-type=module -e 'import "dotenv/config"; const u=new URL(process.env.DATABASE_URL); process.stdout.write((u.pathname||"/sahaya").replace(/^\//,"").split("?")[0]||"sahaya")')"
+docker exec sahaya-migration-db psql -U "$DB_USER" -d "$DB_NAME" -tAc \
   "SELECT 'users='||COUNT(*) FROM users; SELECT 'tickets='||COUNT(*) FROM tickets; SELECT 'orgs='||COUNT(*) FROM organisations;"
 echo "===== HEALTH BEFORE ====="
 curl -sS http://127.0.0.1:4100/health || true; echo
 echo "===== RESTART CONTAINER ====="
 docker restart sahaya-migration-db
 for i in $(seq 1 40); do
-  if docker exec sahaya-migration-db pg_isready -U postgres >/dev/null 2>&1; then
+  if docker exec sahaya-migration-db pg_isready -U "$DB_USER" >/dev/null 2>&1; then
     echo "pg_ready attempt=$i"
     break
   fi
@@ -17,7 +20,7 @@ for i in $(seq 1 40); do
 done
 sleep 3
 echo "===== AFTER COUNTS ====="
-docker exec sahaya-migration-db psql -U postgres -d sahaya -tAc \
+docker exec sahaya-migration-db psql -U "$DB_USER" -d "$DB_NAME" -tAc \
   "SELECT 'users='||COUNT(*) FROM users; SELECT 'tickets='||COUNT(*) FROM tickets; SELECT 'orgs='||COUNT(*) FROM organisations;"
 echo "===== API RECONNECT ====="
 for i in $(seq 1 20); do

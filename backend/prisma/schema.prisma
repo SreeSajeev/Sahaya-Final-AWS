@@ -236,8 +236,7 @@ model TicketAssignment {
   assignedAt                   DateTime?       @default(now()) @map("assigned_at") @db.Timestamp(6)
   organisationId               String?         @map("organisation_id") @db.Uuid
   assignmentDueAt              DateTime?       @map("assignment_due_at") @db.Timestamptz(6)
-  assignmentNotificationSentAt DateTime?       @map("assignment_notification_sent_at") @db.Timestamptz(6)
-  assignmentNotificationId     String?         @map("assignment_notification_id")
+  // assignment_notification_* not present on live TEST PG; gated via hasPublicColumn in services.
   proofStoragePath             String?         @map("proof_storage_path")
   createdAt                    DateTime?       @default(now()) @map("created_at") @db.Timestamp(6)
   outcome                      String?
@@ -276,7 +275,7 @@ model FeActionToken {
   tokenState       String    @map("token_state")
   activatedAt      DateTime? @map("activated_at") @db.Timestamp(6)
   revokedAt        DateTime? @map("revoked_at") @db.Timestamp(6)
-  idempotencyKey   String?   @map("idempotency_key")
+  // idempotency_key not on live TEST PG; tokenService uses hasPublicColumn gate.
   organisationId   String?   @map("organisation_id") @db.Uuid
 
   @@map("fe_action_tokens")
