@@ -9,7 +9,9 @@ test.describe("Security", () => {
 
   test("tenant isolation — ADMIN list has no foreign org tickets", async () => {
     test.skip(!hasCreds("ADMIN"), "missing ADMIN creds");
+    await new Promise((r) => setTimeout(r, 1500));
     const sess = await login("ADMIN");
+    expect(sess.status).toBe(200);
     const orgId = sess.profile?.organisation_id as string | undefined;
     expect(orgId).toBeTruthy();
     const list = await api("GET", "/data/tickets?limit=100", { token: sess.accessToken });

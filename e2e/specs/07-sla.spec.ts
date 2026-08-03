@@ -5,7 +5,9 @@ import { browserLogin } from "../helpers/auth";
 test.describe("SLA", () => {
   test("monitor + tracked-count reconciles with totalSlaRows", async () => {
     test.skip(!hasCreds("SUPER_ADMIN"), "missing SA creds");
+    await new Promise((r) => setTimeout(r, 1500));
     const sess = await login("SUPER_ADMIN");
+    expect(sess.status).toBe(200);
     const token = sess.accessToken!;
 
     const monitor = await api("GET", "/data/sla/monitor?limit=10", { token });
@@ -18,7 +20,6 @@ test.describe("SLA", () => {
     expect(tracked.json.totalSlaRows).toBeGreaterThanOrEqual(tracked.json.count);
     expect(tracked.json.byStatus).toBeTruthy();
   });
-
   test("browser SLA page", async ({ page }) => {
     test.skip(!hasCreds("SUPER_ADMIN") && !hasCreds("ADMIN"), "missing creds");
     const role = hasCreds("SUPER_ADMIN") ? "SUPER_ADMIN" : "ADMIN";

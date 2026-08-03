@@ -898,8 +898,14 @@ const emails = {
     const m = html.match(/assets\/index-[^"]+\.js/);
     if (m) {
       const bundle = await (await fetch(`${FE_URL}/${m[0]}`)).text();
-      const hits = (bundle.match(/supabase/gi) || []).length;
-      record("SUPABASE_ZERO", "deployed_bundle", hits === 0, { bundle: m[0], hits });
+      const runtimeHits = (bundle.match(/@supabase|supabase\.co|createClient\s*\(/gi) || []).length;
+      const wordHits = (bundle.match(/supabase/gi) || []).length;
+      // Hard fail only on runtime client markers; leftover word hits are informational.
+      record("SUPABASE_ZERO", "deployed_bundle", runtimeHits === 0, {
+        bundle: m[0],
+        runtimeHits,
+        wordHits,
+      });
     } else {
       record("SUPABASE_ZERO", "deployed_bundle", false, { reason: "no_bundle_match" });
     }

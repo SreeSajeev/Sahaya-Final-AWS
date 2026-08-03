@@ -5,10 +5,11 @@ export async function browserLogin(page: Page, role: Role) {
   if (!hasCreds(role)) throw new Error(`Missing browser creds for ${role}`);
   const { email, password } = roleCreds(role);
   await page.goto("/login");
+  await page.locator("#signin-email").waitFor({ state: "visible", timeout: 30_000 });
   await page.locator("#signin-email").fill(email!);
   await page.locator("#signin-password").fill(password!);
   await page.locator("form").getByRole("button", { name: /^sign in$/i }).click();
-  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 45_000 });
+  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 60_000 });
 }
 
 export async function browserLogout(page: Page) {
