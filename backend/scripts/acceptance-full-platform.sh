@@ -11,6 +11,7 @@ set -a; . "$CREDS_FILE"; set +a
 
 echo "===== 0 ENV / ARCHITECTURE MARKERS ====="
 node --input-type=module <<'NODE'
+import "dotenv/config";
 import fs from "node:fs";
 const envPath = ".env";
 const raw = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
@@ -48,6 +49,7 @@ node scripts/acceptance-prisma-contract.mjs || echo "CONTRACT_EXIT=$?"
 
 echo "===== 2 BASELINE COUNTS + PASSWORD COVERAGE ====="
 node --input-type=module <<'NODE'
+import "dotenv/config";
 import { prisma } from "./src/db/prisma.js";
 const tables = [
   "users","organisations","tickets","ticket_comments","ticket_assignments",
@@ -94,6 +96,7 @@ NODE
 
 echo "===== 3 FULL HTTP / WORKFLOW SUITE ====="
 node --input-type=module <<'NODE'
+import "dotenv/config";
 import fs from "node:fs";
 import { prisma } from "./src/db/prisma.js";
 import {

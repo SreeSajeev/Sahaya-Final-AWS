@@ -3,6 +3,7 @@
  * TEST-only: Compare every Prisma model field against live PostgreSQL information_schema.
  * No secrets. No Supabase. No writes.
  */
+import "dotenv/config";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db/prisma.js";
 
