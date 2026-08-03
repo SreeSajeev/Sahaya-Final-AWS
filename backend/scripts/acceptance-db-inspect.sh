@@ -165,5 +165,35 @@ for (const t of triggers) console.log(`${t.table_name}\t${t.trigger_name}`);
 const backups = await prisma.$queryRawUnsafe(`SELECT 1`);
 console.log("=== DB_OK ===", Boolean(backups));
 
+console.log("=== ORG COLUMNS ===");
+const orgCols = await prisma.$queryRawUnsafe(`
+  SELECT column_name, data_type FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='organisations' ORDER BY ordinal_position
+`);
+for (const c of orgCols) console.log(`${c.column_name}\t${c.data_type}`);
+
+console.log("=== ORG_LIST_PROBE ===");
+try {
+  const rows = await prisma.organisation.findMany({
+    select: {
+      id: true, name: true, slug: true, createdAt: true, status: true,
+      incomingEmails: true, outgoingEmails: true, spocName: true, spocEmail: true,
+      spocPhone: true, reviewFieldLabel: true, reviewFieldHelperText: true, email: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  console.log("org_findMany_ok", rows.length);
+} catch (e) {
+  console.log("org_findMany_fail", e.code || "NOCODE", String(e.message).slice(0, 400));
+}
+try {
+  const rowsMin = await prisma.organisation.findMany({
+    select: { id: true, name: true, slug: true, status: true },
+  });
+  console.log("org_findMany_min_ok", rowsMin.length);
+} catch (e) {
+  console.log("org_findMany_min_fail", String(e.message).slice(0, 200));
+}
+
 await prisma.$disconnect();
 NODE
