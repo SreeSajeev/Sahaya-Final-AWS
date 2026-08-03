@@ -7,7 +7,7 @@ export async function browserLogin(page: Page, role: Role) {
   await page.goto("/login");
   await page.locator("#signin-email").fill(email!);
   await page.locator("#signin-password").fill(password!);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.locator("form").getByRole("button", { name: /^sign in$/i }).click();
   await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 45_000 });
 }
 

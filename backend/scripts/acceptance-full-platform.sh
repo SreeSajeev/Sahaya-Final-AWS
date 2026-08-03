@@ -108,8 +108,8 @@ import {
 } from "./src/services/proofStorageService.js";
 
 const API = process.env.API_BASE || "https://api.test-sahaya.pariskq.in";
-const FE = process.env.FE_BASE || "https://test-sahaya.pariskq.in";
-const ORIGIN = FE;
+const FE_URL = process.env.FE_BASE || "https://test-sahaya.pariskq.in";
+const ORIGIN = FE_URL;
 const results = [];
 const fixtures = { tickets: [], comments: [], proofs: [], orgs: [], users: [] };
 
@@ -340,7 +340,7 @@ const emails = {
   const SA = tokens.SUPER_ADMIN?.accessToken;
   const ADM = tokens.ADMIN?.accessToken;
   const STA = tokens.STAFF?.accessToken;
-  const FE = tokens.FIELD_EXECUTIVE?.accessToken;
+  const FE_TOK = tokens.FIELD_EXECUTIVE?.accessToken;
   const admOrg = tokens.ADMIN?.profile?.organisation_id;
   const staOrg = tokens.STAFF?.profile?.organisation_id;
 
@@ -564,14 +564,14 @@ const emails = {
       }
 
       // FE me tickets
-      if (FE) {
-        const feTickets = await http("GET", "/fe/me/tickets", { token: FE });
+      if (FE_TOK) {
+        const feTickets = await http("GET", "/fe/me/tickets", { token: FE_TOK });
         record("FE", "me_tickets", feTickets.status === 200, {
           status: feTickets.status,
           count: (feTickets.json?.items || []).length,
         });
         const feOrgs = await http("POST", "/data/organisations", {
-          token: FE,
+          token: FE_TOK,
           body: { name: "x", slug: `fe-fail-${Date.now()}`, status: "active" },
         });
         record("AUTHZ", "fe_cannot_create_org", feOrgs.status === 403 || feOrgs.status === 401, {
@@ -692,7 +692,7 @@ const emails = {
           const comment = await prisma.ticketComment.create({
             data: {
               ticketId,
-              source: "E2E_TEST",
+              source: "STAFF",
               body: "E2E_TEST_direct_s3_proof",
               organisationId: dbT.organisationId,
               attachments: {},
@@ -884,17 +884,27 @@ const emails = {
 
   // FE pages HTTP shell
   for (const p of ["/", "/login", "/app", "/app/tickets", "/app/organisations", "/app/sla", "/app/users", "/fe"]) {
-    const r = await fetch(`${FE}${p}`);
-    record("FRONTEND", `shell_${p}`, r.status === 200, { status: r.status });
+    try {
+      const r = await fetch(`${FE_URL}${p}`);
+      record("FRONTEND", `shell_${p}`, r.status === 200, { status: r.status });
+    } catch (e) {
+      record("FRONTEND", `shell_${p}`, false, { err: String(e.message).slice(0, 80) });
+    }
   }
 
   // Bundle supabase zero
-  const html = await (await fetch(FE)).text();
-  const m = html.match(/assets\/index-[^"]+\.js/);
-  if (m) {
-    const bundle = await (await fetch(`${FE}/${m[0]}`)).text();
-    const hits = (bundle.match(/supabase/gi) || []).length;
-    record("SUPABASE_ZERO", "deployed_bundle", hits === 0, { bundle: m[0], hits });
+  try {
+    const html = await (await fetch(FE_URL)).text();
+    const m = html.match(/assets\/index-[^"]+\.js/);
+    if (m) {
+      const bundle = await (await fetch(`${FE_URL}/${m[0]}`)).text();
+      const hits = (bundle.match(/supabase/gi) || []).length;
+      record("SUPABASE_ZERO", "deployed_bundle", hits === 0, { bundle: m[0], hits });
+    } else {
+      record("SUPABASE_ZERO", "deployed_bundle", false, { reason: "no_bundle_match" });
+    }
+  } catch (e) {
+    record("SUPABASE_ZERO", "deployed_bundle", false, { err: String(e.message).slice(0, 80) });
   }
 
   // Feature workers inventory (static from env)
