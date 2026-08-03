@@ -19,8 +19,12 @@ on:
           - db_inspect
           - acceptance_e2e
           - restart_api
+          - prisma_contract
+          - full_acceptance
+          - backup_restore
+          - restart_pg
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore"
         required: false
         default: ""
 
@@ -85,6 +89,37 @@ jobs:
             if [ "$MODE" = "acceptance_e2e" ]; then
               chmod +x scripts/acceptance-e2e.sh
               bash scripts/acceptance-e2e.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "prisma_contract" ]; then
+              node scripts/acceptance-prisma-contract.mjs
+              exit 0
+            fi
+
+            if [ "$MODE" = "full_acceptance" ]; then
+              chmod +x scripts/acceptance-full-platform.sh
+              bash scripts/acceptance-full-platform.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "backup_restore" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing backup_restore without CONFIRM" >&2
+                exit 1
+              fi
+              chmod +x scripts/acceptance-backup-restore.sh
+              bash scripts/acceptance-backup-restore.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "restart_pg" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing restart_pg without CONFIRM" >&2
+                exit 1
+              fi
+              chmod +x scripts/acceptance-restart-pg.sh
+              bash scripts/acceptance-restart-pg.sh
               exit 0
             fi
 
