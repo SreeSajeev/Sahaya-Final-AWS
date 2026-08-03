@@ -12,22 +12,33 @@ redact(){ python3 -c 'import sys;e=sys.argv[1];l,d=e.split("@",1);print(l[:2]+"*
 
 login() {
   local email="$1"
+  # Fresh jar per login so role cookies do not collide.
+  : > "$COOKIE_JAR"
   curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/login" \
     -H 'Content-Type: application/json' -H 'Origin: https://test-sahaya.pariskq.in' \
-    -d "{\"email\":\"${email}\",\"password\":\"${AUTH_SET_PASSWORD}\"}"
+    -d "{\"email\":\"${email}\",\"password\":\"${AUTH_SET_PASSWORD}\"}" || true
 }
 
 echo "===== AUTH wrong password ====="
 BAD="$(curl -sS -X POST "$API_BASE/auth/login" -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${ROLE_SUPER_ADMIN_EMAIL}\",\"password\":\"DefinitelyWrong1!\"}")"
-echo "$BAD" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("wrong_pw",d.get("error"), "no_token", not d.get("accessToken"))'
+  -d "{\"email\":\"${ROLE_SUPER_ADMIN_EMAIL}\",\"password\":\"DefinitelyWrong1!\"}" || true)"
+echo "$BAD" | python3 -c 'import sys,json
+raw=sys.stdin.read().strip()
+d=json.loads(raw) if raw else {}
+print("wrong_pw",d.get("error"), "no_token", not d.get("accessToken"))'
 
 echo "===== ROLE MATRIX ====="
 declare -A TOKENS
 for ROLE in SUPER_ADMIN ADMIN STAFF FIELD_EXECUTIVE; do
   EVAL="ROLE_${ROLE}_EMAIL"; EMAIL="${!EVAL:-}"
   [ -n "$EMAIL" ] || { echo "SKIP $ROLE"; continue; }
+  sleep 1
   RESP="$(login "$EMAIL")"
+  if [ -z "$RESP" ]; then
+    echo "login $ROLE FAIL empty_body"
+    TOKENS[$ROLE]=""
+    continue
+  fi
   echo "$RESP" | python3 -c 'import sys,json;d=json.load(sys.stdin);p=d.get("profile")or{};print("login",p.get("role"),bool(d.get("accessToken")),"org", "set" if p.get("organisation_id") else "null")'
   TOKENS[$ROLE]="$(echo "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("accessToken")or"")')"
 done
@@ -103,10 +114,14 @@ PY
 echo "===== REFRESH / LOGOUT ====="
 login "${ROLE_SUPER_ADMIN_EMAIL}" >/tmp/e2e_sa_login.json
 REF="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/refresh" -H 'Content-Type: application/json' -d '{}')"
-echo "$REF" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("refresh",bool(d.get("accessToken")))'
-curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/logout" -H 'Content-Type: application/json' -d '{}' >/dev/null
-REF2="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/refresh" -H 'Content-Type: application/json' -d '{}')"
-echo "$REF2" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("post_logout_refresh_fail", not d.get("accessToken"), d.get("error"))'
+echo "$REF" | python3 -c 'import sys,json
+raw=sys.stdin.read().strip(); d=json.loads(raw) if raw else {}
+print("refresh",bool(d.get("accessToken")))'
+curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/logout" -H 'Content-Type: application/json' -d '{}' >/dev/null || true
+REF2="$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$API_BASE/auth/refresh" -H 'Content-Type: application/json' -d '{}' || true)"
+echo "$REF2" | python3 -c 'import sys,json
+raw=sys.stdin.read().strip(); d=json.loads(raw) if raw else {}
+print("post_logout_refresh_fail", not d.get("accessToken"), d.get("error"))'
 
 echo "===== SAFE WRITE (create TEST ticket if allowed) ====="
 # Prefer STAFF create if endpoint exists
