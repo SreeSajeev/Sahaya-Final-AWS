@@ -1,4 +1,5 @@
 import express from "express";
+import { prisma } from "../db/prisma.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import {
   attachTenantContext,
@@ -61,8 +62,6 @@ import {
   listSlaBreachesByTicketIdsScoped,
   listSlaAssignmentDeadlinesByTicketIds,
   listAllSlaRowsScoped,
-  listAllSlaTicketIds,
-  listTicketStatusesByIds,
   listSlaBreachRowsGlobal,
 } from "../repositories/slaRepository.js";
 import {
@@ -1619,19 +1618,45 @@ router.get("/sla/tracked-count", async (req, res) => {
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
 
   try {
-    const { data: rows, error } = await listAllSlaTicketIds();
-    if (error) return jsonError(res, 500, error.message);
-    const list = rows ?? [];
-    if (list.length === 0) return jsonOk(res, { count: 0 });
-
-    const ticketIds = [...new Set(list.map((r) => r.ticket_id).filter(Boolean))];
-    const { data: tickets, error: ticketErr } = await listTicketStatusesByIds(ticketIds);
-    if (ticketErr) return jsonError(res, 500, ticketErr.message);
-
-    const rejectedIds = new Set((tickets ?? []).filter((t) => t.status === "REJECTED").map((t) => t.id));
-    const count = list.filter((r) => !rejectedIds.has(r.ticket_id)).length;
-    logEvent("dataApi.sla.trackedCount", { ms: Date.now() - startedAt, count });
-    return jsonOk(res, { count });
+    // Authoritative SQL: same source of truth as direct PostgreSQL probes.
+    // `count` = SLA rows joined to a non-REJECTED ticket (dashboard tracked metric).
+    // `totalSlaRows` = raw COUNT(*) FROM sla_tracking (must equal PG).
+    const [aggRows, byStatusRows] = await Promise.all([
+      prisma.$queryRawUnsafe(`
+        SELECT
+          COUNT(*)::int AS total_sla_rows,
+          COUNT(*) FILTER (WHERE t.id IS NULL)::int AS orphan_sla_rows,
+          COUNT(*) FILTER (WHERE t.status = 'REJECTED')::int AS rejected_sla_rows,
+          COUNT(*) FILTER (
+            WHERE t.id IS NOT NULL AND t.status IS DISTINCT FROM 'REJECTED'
+          )::int AS tracked_count
+        FROM sla_tracking s
+        LEFT JOIN tickets t ON t.id = s.ticket_id
+      `),
+      prisma.$queryRawUnsafe(`
+        SELECT COALESCE(t.status, '__ORPHAN__') AS status, COUNT(*)::int AS cnt
+        FROM sla_tracking s
+        LEFT JOIN tickets t ON t.id = s.ticket_id
+        GROUP BY COALESCE(t.status, '__ORPHAN__')
+        ORDER BY 1
+      `),
+    ]);
+    const row = aggRows?.[0] || {};
+    const count = Number(row.tracked_count || 0);
+    /** @type {Record<string, number>} */
+    const byStatus = {};
+    for (const r of byStatusRows || []) {
+      byStatus[String(r.status)] = Number(r.cnt || 0);
+    }
+    const payload = {
+      count,
+      totalSlaRows: Number(row.total_sla_rows || 0),
+      orphanSlaRows: Number(row.orphan_sla_rows || 0),
+      rejectedSlaRows: Number(row.rejected_sla_rows || 0),
+      byStatus,
+    };
+    logEvent("dataApi.sla.trackedCount", { ms: Date.now() - startedAt, count, totalSlaRows: payload.totalSlaRows });
+    return jsonOk(res, payload);
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to compute SLA tracked count");
   }

@@ -14,30 +14,61 @@ import { generateTicketNumberForCreation } from "../utils/ticketNumber.js";
 import { insertTicket } from "../repositories/ticketQueryRepository.js";
 import { insertComment } from "../repositories/commentRepository.js";
 
+const optionalTrimmedString = (max) =>
+  z
+    .string()
+    .max(max)
+    .optional()
+    .nullable()
+    .transform((v) => {
+      if (v == null) return null;
+      const t = String(v).trim();
+      return t === "" ? null : t;
+    });
+
 /** Shared with POST /tickets — behaviour must stay identical. */
 export const createTicketBodySchema = z.object({
   ticket_number: z.string().max(120).optional().nullable(),
-  vehicle_number: z.string().max(80).optional().nullable(),
-  category: z.string().max(200).optional().nullable(),
-  issue_type: z.string().max(200).optional().nullable(),
-  location: z.string().max(500).optional().nullable(),
-  state: z.string().max(100).optional().nullable(),
-  complaint_id: z.string().max(120).optional().nullable(),
+  vehicle_number: optionalTrimmedString(80),
+  category: optionalTrimmedString(200),
+  issue_type: optionalTrimmedString(200),
+  location: optionalTrimmedString(500),
+  state: optionalTrimmedString(100),
+  complaint_id: optionalTrimmedString(120),
   priority: z.boolean().optional(),
   priority_level: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
-  opened_by_email: z.string().max(320).optional().nullable(),
-  client_slug: z.string().max(120).optional().nullable(),
-  description: z.string().max(20000).optional().nullable(),
+  opened_by_email: optionalTrimmedString(320),
+  client_slug: optionalTrimmedString(120),
+  /** Persisted on tickets.short_description */
+  short_description: optionalTrimmedString(2000),
+  /** Optional staff comment body; also backfills short_description when that field is absent */
+  description: optionalTrimmedString(20000),
   organisation_id: z.string().uuid().optional().nullable(),
   notify_emails: z.array(z.string().max(320)).max(50).optional(),
 });
 
+const SUBSTANTIVE_KEYS = [
+  "short_description",
+  "description",
+  "category",
+  "issue_type",
+  "vehicle_number",
+  "location",
+  "complaint_id",
+  "client_slug",
+];
+
 /**
  * Manual ticket creation (same logic as legacy POST /tickets handler).
- * @returns {{ ok: true, ticket: object } | { ok: false, error: string, status?: number }}
+ * @returns {{ ok: true, ticket: object } | { ok: false, error: string, status?: number, details?: object }}
  */
 export async function createManualTicketFromBody(req, body) {
-  const parsed = createTicketBodySchema.safeParse(body ?? {});
+  const raw = body ?? {};
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, status: 400, error: "Request body must be a JSON object" };
+  }
+
+  const parsed = createTicketBodySchema.safeParse(raw);
   if (!parsed.success) {
     return {
       ok: false,
@@ -48,6 +79,20 @@ export async function createManualTicketFromBody(req, body) {
   }
 
   const data = parsed.data;
+
+  const hasSubstantive = SUBSTANTIVE_KEYS.some((k) => {
+    const v = data[k];
+    return v != null && String(v).trim() !== "";
+  });
+  if (!hasSubstantive) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        "Ticket requires at least one of: short_description, description, category, issue_type, vehicle_number, location, complaint_id, client_slug",
+    };
+  }
+
   const nowIso = new Date().toISOString();
 
   const organisationId =
@@ -101,6 +146,18 @@ export async function createManualTicketFromBody(req, body) {
     };
   }
 
+  const shortFromField =
+    data.short_description != null && String(data.short_description).trim() !== ""
+      ? String(data.short_description).trim()
+      : null;
+  const descriptionTrimmed =
+    data.description != null && String(data.description).trim() !== ""
+      ? String(data.description).trim()
+      : null;
+  const shortDescription =
+    shortFromField ||
+    (descriptionTrimmed ? descriptionTrimmed.slice(0, 2000) : null);
+
   const insertPayload = {
     ticket_number: ticketNumber,
     vehicle_number: data.vehicle_number ?? null,
@@ -109,6 +166,7 @@ export async function createManualTicketFromBody(req, body) {
     location: normalizeLocation(data.location),
     state: normalizeTicketState(data.state),
     complaint_id: data.complaint_id ?? null,
+    short_description: shortDescription,
     source: "MANUAL",
     needs_review: false,
     confidence_score: 100,
@@ -138,10 +196,10 @@ export async function createManualTicketFromBody(req, body) {
     };
   }
 
-  if (data.description && String(data.description).trim() !== "") {
+  if (descriptionTrimmed) {
     await insertComment({
       ticket_id: ticket.id,
-      body: String(data.description).trim(),
+      body: descriptionTrimmed,
       source: "STAFF",
       author_id: req.appUser?.id ?? null,
       ...(organisationId ? { organisation_id: organisationId } : {}),
@@ -190,6 +248,7 @@ export async function createManualTicketFromBody(req, body) {
       source: "MANUAL",
       ticket_number: ticket.ticket_number ?? null,
       client_slug: ticket.client_slug ?? null,
+      short_description: ticket.short_description ?? null,
       ...(validatedNotifyEmails.length > 0
         ? {
             notify_emails_requested: validatedNotifyEmails.map((e) => redactEmail(e)),

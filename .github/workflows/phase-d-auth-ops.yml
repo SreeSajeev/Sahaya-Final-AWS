@@ -23,6 +23,7 @@ on:
           - full_acceptance
           - backup_restore
           - restart_pg
+          - playwright_acceptance
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore"
         required: false
@@ -100,6 +101,13 @@ jobs:
             if [ "$MODE" = "full_acceptance" ]; then
               chmod +x scripts/acceptance-full-platform.sh
               bash scripts/acceptance-full-platform.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "playwright_acceptance" ]; then
+              cd "$MONOREPO/e2e"
+              chmod +x run-acceptance.sh
+              CREDS_FILE="$CREDS_FILE" bash run-acceptance.sh
               exit 0
             fi
 

@@ -271,6 +271,7 @@ model FeActionToken {
   actionType       String    @map("action_type")
   expiresAt        DateTime  @map("expires_at") @db.Timestamp(6)
   used             Boolean   @default(false)
+  usedAt           DateTime? @map("used_at") @db.Timestamp(6)
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   tokenState       String    @map("token_state")
   activatedAt      DateTime? @map("activated_at") @db.Timestamp(6)

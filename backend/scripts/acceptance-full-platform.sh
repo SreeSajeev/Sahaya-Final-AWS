@@ -446,6 +446,21 @@ const emails = {
 
     const getT = await http("GET", `/data/tickets/${ticketId}`, { token: STA });
     record("TICKETS", "get", getT.status === 200, { status: getT.status });
+    const expectedShort = "E2E_TEST_FULL_PLATFORM_TICKET";
+    const getShort =
+      getT?.json?.item?.short_description ?? getT?.json?.short_description ?? null;
+    record(
+      "TICKETS",
+      "short_description_persist",
+      createT.json?.short_description === expectedShort &&
+        dbT?.shortDescription === expectedShort &&
+        getShort === expectedShort,
+      {
+        api: createT.json?.short_description ?? null,
+        db: dbT?.shortDescription ?? null,
+        get: getShort,
+      }
+    );
 
     const listT = await http("GET", "/data/tickets?limit=20", { token: STA });
     record("TICKETS", "list", listT.status === 200, {
@@ -776,11 +791,27 @@ const emails = {
   });
   const slaCount = await http("GET", "/data/sla/tracked-count", { token: SA });
   const dbSla = await prisma.slaTracking.count();
-  record("SLA", "tracked_count_reconcile", slaCount.status === 200, {
-    api: slaCount.json?.count ?? slaCount.json,
-    db: dbSla,
-  });
-
+  const dbTrackedRows = await prisma.$queryRawUnsafe(`
+    SELECT COUNT(*)::int AS tracked_count
+    FROM sla_tracking s
+    JOIN tickets t ON t.id = s.ticket_id
+    WHERE t.status IS DISTINCT FROM 'REJECTED'
+  `);
+  const dbTracked = Number(dbTrackedRows?.[0]?.tracked_count || 0);
+  const apiTotal = Number(slaCount.json?.totalSlaRows ?? -1);
+  const apiTracked = Number(slaCount.json?.count ?? -1);
+  record(
+    "SLA",
+    "tracked_count_reconcile",
+    slaCount.status === 200 && apiTotal === dbSla && apiTracked === dbTracked,
+    {
+      apiTracked,
+      apiTotal,
+      dbTotal: dbSla,
+      dbTracked,
+      byStatusKeys: slaCount.json?.byStatus ? Object.keys(slaCount.json.byStatus).length : 0,
+    }
+  );
   // Dashboard
   const dash = await http("GET", "/data/dashboard/stats", { token: SA });
   const dbTickets = await prisma.ticket.count();

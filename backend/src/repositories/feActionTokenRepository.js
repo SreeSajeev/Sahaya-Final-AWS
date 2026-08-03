@@ -144,7 +144,10 @@ export async function markFeActionTokenUsedAtomic({
     return true;
   } catch (err) {
     if (err instanceof Error && err.message === "Token already used or invalid") throw err;
-    throw toSupabaseStyleError(err);
+    const shaped = toSupabaseStyleError(err);
+    const wrapped = new Error(shaped?.message || "Failed to mark token used");
+    wrapped.code = shaped?.code;
+    throw wrapped;
   }
 }
 

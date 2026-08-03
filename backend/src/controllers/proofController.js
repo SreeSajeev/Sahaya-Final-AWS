@@ -315,7 +315,14 @@ export async function uploadFeProof(req, res) {
           console.error("[SLA] clearOnsiteAndResolutionDeadlines", ticketId, err.message)
         );
 
-        await markTokenUsed(token);
+        try {
+          await markTokenUsed(token);
+        } catch (markErr) {
+          console.error("[proof] markTokenUsed failed after successful FAILED proof persist", {
+            ticketId,
+            error: markErr?.message || markErr,
+          });
+        }
 
         return res.json({
           success: true,
@@ -415,13 +422,20 @@ export async function uploadFeProof(req, res) {
         console.error("[SLA] setResolutionDeadline after proof", ticketId, err.message)
       );
 
-      await markTokenUsed(token);
-      console.log(JSON.stringify({
-        event: "resolution_token_used",
-        ticket_id: ticketId,
-        token_id: maskTokenForLog(token),
-        outcome: resolvedOutcome,
-      }));
+      try {
+        await markTokenUsed(token);
+        console.log(JSON.stringify({
+          event: "resolution_token_used",
+          ticket_id: ticketId,
+          token_id: maskTokenForLog(token),
+          outcome: resolvedOutcome,
+        }));
+      } catch (markErr) {
+        console.error("[proof] markTokenUsed failed after successful RESOLUTION proof persist", {
+          ticketId,
+          error: markErr?.message || markErr,
+        });
+      }
 
       return res.json({
         success: true,
@@ -532,7 +546,15 @@ export async function uploadFeProof(req, res) {
       );
     }
 
-    await markTokenUsed(token);
+    try {
+      await markTokenUsed(token);
+    } catch (markErr) {
+      // Proof + S3 already persisted; do not fail the client after successful storage.
+      console.error("[proof] markTokenUsed failed after successful ON_SITE proof persist", {
+        ticketId,
+        error: markErr?.message || markErr,
+      });
+    }
 
     if (actionToken.action_type === "ON_SITE") {
       const hasOnSiteConfirmedAt = await hasPublicColumn("ticket_assignments", "on_site_confirmed_at");
@@ -540,25 +562,36 @@ export async function uploadFeProof(req, res) {
       const assignmentMetaPayload = {};
       if (hasOnSiteConfirmedAt) assignmentMetaPayload.on_site_confirmed_at = nowIso;
       if (hasOnSiteProofCommentId) assignmentMetaPayload.on_site_proof_comment_id = ticketComment?.id ?? null;
-      if (Object.keys(assignmentMetaPayload).length > 0) {
-        await updateAssignmentById(
-          ticketLifecycleRow?.current_assignment_id ?? null,
-          assignmentMetaPayload
-        );
+      const assignmentId = ticketLifecycleRow?.current_assignment_id ?? null;
+      if (Object.keys(assignmentMetaPayload).length > 0 && assignmentId) {
+        const { error: assignMetaErr } = await updateAssignmentById(assignmentId, assignmentMetaPayload);
+        if (assignMetaErr) {
+          console.error("[proof] assignment metadata update failed", assignMetaErr?.message || assignMetaErr);
+        }
+      } else if (Object.keys(assignmentMetaPayload).length > 0 && !assignmentId) {
+        console.warn("[proof] assignment metadata skipped (no current_assignment_id)");
       } else {
         console.warn("[proof] assignment metadata columns missing; skipping safe write");
       }
 
-      const activatedTokenId = await activateResolutionTokenAfterOnSiteProof({
-        ticketId,
-        feId: actionToken.fe_id,
-      });
-      console.log(JSON.stringify({
-        event: "resolution_token_activated",
-        ticket_id: ticketId,
-        token_id: maskTokenForLog(activatedTokenId),
-        trigger_token_id: maskTokenForLog(token),
-      }));
+      try {
+        const activatedTokenId = await activateResolutionTokenAfterOnSiteProof({
+          ticketId,
+          feId: actionToken.fe_id,
+        });
+        console.log(JSON.stringify({
+          event: "resolution_token_activated",
+          ticket_id: ticketId,
+          token_id: maskTokenForLog(activatedTokenId),
+          trigger_token_id: maskTokenForLog(token),
+        }));
+      } catch (activateErr) {
+        // Proof + S3 already persisted; do not fail the client after successful storage.
+        console.error("[proof] resolution token activate failed after successful proof", {
+          ticketId,
+          error: activateErr?.message || activateErr,
+        });
+      }
     }
 
     return res.json({
@@ -567,9 +600,11 @@ export async function uploadFeProof(req, res) {
       demo: true,
     });
   } catch (err) {
-    console.error("[DEMO uploadFeProof ERROR]", err?.message || err);
+    const message = err?.message || (typeof err === "object" && err?.message) || String(err);
+    console.error("[DEMO uploadFeProof ERROR]", message, err?.code || err?.meta || "");
     return res.status(500).json({
       error: "Demo proof upload failed",
+      code: err?.code || "PROOF_UPLOAD_FAILED",
     });
   }
 }
