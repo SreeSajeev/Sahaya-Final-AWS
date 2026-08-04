@@ -382,10 +382,12 @@ No real external sends.
 
 | Severity | Blocker | Smallest next action |
 |----------|---------|----------------------|
-| **High** | 28 ACTIVE_PASSWORD_MISSING cannot log in until first-login | Controlled TEST activation per account via forgot-password + DRY_RUN/capture (or deactivate unused); re-audit until active-missing=0 for required logins |
+| OPERATIONAL | 29 LOGIN_REQUIRED accounts still null-hash (activation-ready, C=0) | Ops-run first-login activation per required account when cutover approved (no mass email in F.2) |
 | Medium | SEC-RATE-001 / TEST login max=200 | Set production `RATE_LIMIT_LOGIN_MAX` to 20–30 |
-| Medium | No `/metrics` / alerting deployed | Wire synthetic health + threshold alerts (table above); optional thin `/metrics` later |
-| Low | Soak harness lacks refresh | Add `/auth/refresh` to `soak.mjs` so future soaks don't emit harness 401s |
+| Medium | No `/metrics` / alerting deployed | Wire synthetic health + threshold alerts; optional thin `/metrics` later |
+| Low | Soak harness lacks refresh | Add `/auth/refresh` to `soak.mjs` for future soaks |
+
+**Closed High (F.1/F.2):** incomplete 6h soak; local-auth technical coverage (`C ≠ 0`).
 
 ---
 
