@@ -17,14 +17,7 @@ function assignmentInsertToPrisma(insert) {
 function assignmentPatchToPrisma(patch) {
   /** @type {Record<string, unknown>} */
   const data = {};
-  if (Object.prototype.hasOwnProperty.call(patch, "assignment_notification_sent_at")) {
-    data.assignmentNotificationSentAt = patch.assignment_notification_sent_at
-      ? new Date(String(patch.assignment_notification_sent_at))
-      : null;
-  }
-  if (Object.prototype.hasOwnProperty.call(patch, "assignment_notification_id")) {
-    data.assignmentNotificationId = patch.assignment_notification_id;
-  }
+  // assignment_notification_* columns are absent on live TEST; callers use hasPublicColumn + raw SQL.
   if (Object.prototype.hasOwnProperty.call(patch, "proof_storage_path")) {
     data.proofStoragePath = patch.proof_storage_path;
   }
@@ -64,21 +57,26 @@ export async function updateAssignmentById(assignmentId, patch) {
 }
 
 export async function getAssignmentNotificationSentAt(assignmentId) {
-  
-    try {
-      const row = await prisma.ticketAssignment.findUnique({
-        where: { id: assignmentId },
-        select: { assignmentNotificationSentAt: true },
-      });
-      return {
-        data: row
-          ? { assignment_notification_sent_at: row.assignmentNotificationSentAt?.toISOString() ?? null }
-          : null,
-        error: null,
-      };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT CASE WHEN EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='ticket_assignments'
+            AND column_name='assignment_notification_sent_at'
+        ) THEN (
+          SELECT assignment_notification_sent_at::text FROM ticket_assignments WHERE id = $1::uuid
+        ) ELSE NULL END AS assignment_notification_sent_at`,
+      assignmentId
+    );
+    return {
+      data: {
+        assignment_notification_sent_at: rows?.[0]?.assignment_notification_sent_at ?? null,
+      },
+      error: null,
+    };
+  } catch (err) {
+    return { data: { assignment_notification_sent_at: null }, error: null };
+  }
 }
 
 export async function insertAssignment(insert) {

@@ -362,7 +362,7 @@ export default function Users() {
           <Alert>
             <AlertTitle>Loading session</AlertTitle>
             <AlertDescription className="text-muted-foreground">
-              Preparing your account and Supabase access. User list will load next.
+              Preparing your account. User list will load next.
             </AlertDescription>
           </Alert>
         )}
@@ -378,7 +378,7 @@ export default function Users() {
           <Alert variant="destructive">
             <AlertTitle>Could not load tenants</AlertTitle>
             <AlertDescription>
-              {orgsQueryErr instanceof Error ? orgsQueryErr.message : 'Supabase query failed. Check RLS on the tenants table.'}
+              {orgsQueryErr instanceof Error ? orgsQueryErr.message : 'Organisation query failed. Please retry.'}
             </AlertDescription>
           </Alert>
         )}
@@ -388,7 +388,7 @@ export default function Users() {
             <AlertTitle>Could not load users</AlertTitle>
             <AlertDescription className="space-y-2">
               <p>
-                {usersError instanceof Error ? usersError.message : 'Unknown error. Check Supabase access (RLS), then try Refresh.'}
+                {usersError instanceof Error ? usersError.message : 'Unknown error loading users. Try Refresh.'}
               </p>
               <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
                 Try again
@@ -524,7 +524,7 @@ export default function Users() {
             ) : usersByOrgThenRole.length === 0 ? (
               <div className="flex h-40 flex-col items-center justify-center rounded-lg border border-dashed text-center p-6">
                 <p className="text-sm font-medium">No users found</p>
-                <p className="text-xs text-muted-foreground mt-1">Create users from Add User or adjust Supabase RLS if the list should not be empty.</p>
+                <p className="text-xs text-muted-foreground mt-1">Create users from Add User if the list should not be empty.</p>
               </div>
             ) : (
               usersByOrgThenRole.map(({ orgId, orgName, roles }) => (

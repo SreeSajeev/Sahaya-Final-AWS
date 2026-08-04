@@ -189,7 +189,6 @@ export default function Index() {
     console.info("[AUTH DEBUG] redirect", {
       role: userProfile.role,
       email: userProfile.email,
-      supabaseUrl: (import.meta as any).env?.VITE_SUPABASE_URL,
     });
   }
 

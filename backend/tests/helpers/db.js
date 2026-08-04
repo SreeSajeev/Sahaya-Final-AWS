@@ -65,7 +65,9 @@ export async function createTestOrganisation(overrides = {}) {
       name: overrides.name || `Test Org ${slug}`,
       slug,
       status: overrides.status || "active",
-      email: overrides.email || `org-${slug}@test.sahaya.local`,
+      // No organisations.email column on live/TEST schema.
+      spocEmail: overrides.spocEmail || `org-${slug}@test.sahaya.local`,
+      incomingEmails: overrides.incomingEmails || [`org-${slug}@test.sahaya.local`],
     },
   });
   trackCleanup("organisation", org.id);

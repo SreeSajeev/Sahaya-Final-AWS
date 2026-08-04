@@ -10,6 +10,7 @@ import {
   insertComment,
   listCommentsForTicket,
   updateCommentById,
+  getCommentById,
 } from "../../src/repositories/commentRepository.js";
 
 describeIfDb("ticketCommentRepository", () => {
@@ -53,6 +54,8 @@ describeIfDb("ticketCommentRepository", () => {
     });
     const { data, error } = await updateCommentById(created.id, { body: "Updated body" });
     expect(error).toBeNull();
-    expect(data?.body).toBe("Updated body");
+    expect(data).toBeUndefined();
+    const { data: loaded } = await getCommentById(created.id);
+    expect(loaded?.body).toBe("Updated body");
   });
 });

@@ -23,8 +23,27 @@ on:
           - full_acceptance
           - backup_restore
           - restart_pg
+          - playwright_acceptance
+          - phase_f_soak_start
+          - phase_f_soak_status
+          - phase_f_soak_dense
+          - phase_f_soak_analyze
+          - phase_f_account_audit
+          - phase_f_activation_fixture
+          - phase_f_load
+          - phase_f_security
+          - phase_f_session
+          - phase_f_passwords
+          - phase_f_observability
+          - phase_f_dr
+          - phase_f_bundle
+          - phase_f1_post_soak
+          - phase_f2_reconcile
+          - phase_f_historical_audit
+          - phase_f_historical_api_probe
+          - phase_f_convergence_gate
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
         default: ""
 
@@ -42,7 +61,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: MODE,CONFIRM
-          command_timeout: 20m
+          command_timeout: 120m
           script: |
             set -euo pipefail
             MODE="${MODE:-list_roles}"
@@ -100,6 +119,180 @@ jobs:
             if [ "$MODE" = "full_acceptance" ]; then
               chmod +x scripts/acceptance-full-platform.sh
               bash scripts/acceptance-full-platform.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "playwright_acceptance" ]; then
+              cd "$MONOREPO/e2e"
+              chmod +x run-acceptance.sh
+              CREDS_FILE="$CREDS_FILE" bash run-acceptance.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_start" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_HOURS="${SOAK_HOURS:-6}" bash scripts/phase-f/run-phase-f.sh soak_start
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_status" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_status
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_dense" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_DURATION_SEC="${SOAK_DURATION_SEC:-3600}" bash scripts/phase-f/run-phase-f.sh soak_dense
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_analyze" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_status
+              bash scripts/phase-f/run-phase-f.sh soak_analyze
+              echo "===== ANALYSIS JSON (truncated) ====="
+              node -e "const p='/var/backups/sahaya/phase-f/soak6h-analysis.json';const j=require(p); const {failureSamples,...rest}=j; console.log(JSON.stringify({...rest, failureSampleCounts:{c401:(j.failureSamples?.['401']||[]).length,c502:(j.failureSamples?.['502']||[]).length,post:(j.failureSamples?.postContention||[]).length}, failureSamples:{'401':(j.failureSamples?.['401']||[]).slice(0,8),'502':j.failureSamples?.['502']||[]}},null,2))"
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_account_audit" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_activation_fixture" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              # TEST capture path; DRY_RUN must stay true — no real email.
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f1_post_soak" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_analyze
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              bash scripts/phase-f/run-phase-f.sh session
+              bash scripts/phase-f/run-phase-f.sh security
+              bash scripts/phase-f/run-phase-f.sh passwords
+              bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f2_reconcile" ]; then
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== F.2 SAFETY ====="
+              curl -sS http://127.0.0.1:4100/health || true; echo
+              grep -E '^(S3_FE_PROOFS_ENABLED|S3_FE_PROOFS_BUCKET|DB_MODE|DATABASE_URL|PASSWORD_RESET_DRY_RUN|MAIL_DRY_RUN|RATE_LIMIT_LOGIN_MAX)=' /var/www/apps/sahaya-final-aws-monorepo/backend/.env 2>/dev/null | sed -E 's/(DATABASE_URL=).+/\1***localhost:5436***/' || true
+              docker ps --format '{{.Names}} {{.Status}} {{.Ports}}' | grep -i sahaya || true
+              echo "===== F.2 ACCOUNT RECONCILIATION ====="
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              echo "===== F.2 ACTIVATION FIXTURE ====="
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              echo "===== F.2 SESSION ====="
+              bash scripts/phase-f/run-phase-f.sh session
+              echo "===== F.2 SECURITY ====="
+              bash scripts/phase-f/run-phase-f.sh security
+              echo "===== F.2 OBSERVABILITY ====="
+              bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_historical_audit" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh historical_audit
+              # Also list pre-migration backup presence (no overwrite)
+              echo "===== PRE-MIGRATION BACKUP MARKERS ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -30 || true
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_historical_api_probe" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_convergence_gate" ]; then
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh scripts/acceptance-backup-restore.sh scripts/acceptance-full-platform.sh
+              echo "===== CONVERGENCE: historical DB audit ====="
+              bash scripts/phase-f/run-phase-f.sh historical_audit
+              echo "===== CONVERGENCE: historical API probe ====="
+              bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              echo "===== CONVERGENCE: fresh backup+restore validation ====="
+              if [ "${{ github.event.inputs.confirm }}" != "CONFIRM" ]; then
+                echo "Refusing backup_restore without CONFIRM" >&2
+                exit 1
+              fi
+              bash scripts/acceptance-backup-restore.sh
+              echo "===== CONVERGENCE: full platform acceptance ====="
+              bash scripts/acceptance-full-platform.sh
+              echo "===== CONVERGENCE: supabase zero unit ====="
+              npm test -- tests/unit/phaseESupabaseZero.test.js
+              echo "===== PRE-MIGRATION BACKUP MARKERS (untouched) ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
+              echo "===== ACCEPTANCE BACKUPS ====="
+              ls -lt /var/backups/sahaya/acceptance 2>/dev/null | head -10 || true
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_load" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh load
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_security" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh security
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_session" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh session
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_passwords" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh passwords
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_observability" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_dr" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing phase_f_dr without CONFIRM" >&2
+                exit 1
+              fi
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh dr
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_bundle" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              SOAK_HOURS=6 bash scripts/phase-f/run-phase-f.sh soak_start
+              bash scripts/phase-f/run-phase-f.sh passwords
+              bash scripts/phase-f/run-phase-f.sh session
+              bash scripts/phase-f/run-phase-f.sh security
+              bash scripts/phase-f/run-phase-f.sh load
+              bash scripts/phase-f/run-phase-f.sh observability
+              # Dense soak ~60m inside 120m budget; long soak continues in background
+              SOAK_DURATION_SEC=3600 SOAK_INTERVAL_SEC=8 bash scripts/phase-f/run-phase-f.sh soak_dense
               exit 0
             fi
 
@@ -164,30 +357,22 @@ jobs:
               lines.push(`ROLE_${role}_USER_ID=${user.id}`);
               lines.push(`ROLE_${role}_ORG=${user.organisationId || ""}`);
               const [local, domain] = user.email.split("@");
-              console.log(`SET role=${role} email=${local.slice(0, 2)}***@${domain}`);
+              console.log(`SET role=${role} email=${local.slice(0,2)}***@${domain}`);
             }
+            lines.push("");
             lines.push(`AUTH_SET_PASSWORD=${password}`);
             fs.writeFileSync(credsPath, lines.join("\n") + "\n", { mode: 0o600 });
+            console.log("BOOTSTRAP_DONE");
             await prisma.$disconnect();
             NODE
-              echo "Wrote credentials on EC2 (path not containing secrets in logs beyond role redaction)."
               exit 0
             fi
 
             if [ "$MODE" = "smoke_login" ] || [ "$MODE" = "smoke_extended" ]; then
-              if [ -f scripts/smoke-auth-extended.sh ]; then
-                chmod +x scripts/smoke-auth-extended.sh
-                if [ "$MODE" = "smoke_extended" ]; then
-                  bash scripts/smoke-auth-extended.sh
-                else
-                  bash scripts/smoke-auth-extended.sh | sed -n '1,/EXTENDED/p' | sed '$d'
-                fi
-              else
-                echo "smoke script missing — deploy develop first" >&2
-                exit 1
-              fi
+              chmod +x scripts/acceptance-e2e.sh
+              bash scripts/acceptance-e2e.sh
               exit 0
             fi
 
-            echo "Unknown mode: $MODE" >&2
+            echo "Unknown MODE=$MODE" >&2
             exit 1

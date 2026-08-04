@@ -4,6 +4,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { optionalPostmarkWebhookSecret } from "./middleware/postmarkWebhookAuth.js";
@@ -36,6 +37,7 @@ import dataApiRouter from "./routes/dataApi.js";
 import fePublicRouter from "./routes/fePublic.js";
 import authProvisionRouter from "./routes/authProvision.js";
 import publicAuthRouter from "./routes/publicAuth.js";
+import localAuthRouter from "./routes/localAuth.js";
 import feMeRouter from "./routes/feMe.js";
 import fieldExecutivesRouter from "./routes/fieldExecutives.js";
 import complaintPointsRouter from "./routes/complaintPoints.js";
@@ -176,18 +178,21 @@ async function resolveInboundOrganisationId(toEmail) {
    GLOBAL MIDDLEWARE
 ====================================================== */
 
-// CORS: allow frontend app origin (APP_BASE_URL) + dev origins
+// CORS: APP_BASE_URL + AUTH_CORS_ORIGINS (comma-separated). Prefer TEST SPA only on TEST.
+const extraCors = String(process.env.AUTH_CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const corsOrigins = [
   APP_BASE_URL,
-  "https://opsxbypariskq.vercel.app",
+  ...extraCors,
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",
   "http://127.0.0.1:3000",
   "http://127.0.0.1:8080",
   "http://127.0.0.1:5173",
-  "https://sahaya.pariskq.in",
-].filter((o, i, a) => a.indexOf(o) === i);
+].filter((o, i, a) => o && a.indexOf(o) === i);
 
 const corsOptions = {
   origin: corsOrigins,
@@ -211,6 +216,7 @@ const corsOptions = {
 app.options(/.*/, cors(corsOptions));
 
 app.use(cors(corsOptions));
+app.use(cookieParser());
 
 // Minimal hardening; CSP disabled for JSON API (avoid breaking unknown clients).
 app.use(
@@ -237,7 +243,7 @@ app.use(debugAirtelRouter);
 // Tickets
 app.use("/tickets", ticketsRouter);
 
-// Additive data APIs for frontend migration (Supabase DB -> backend)
+// Additive data APIs for frontend migration (direct DB → backend)
 app.use("/data", dataApiRouter);
 
 // Public magic-link proof upload — MUST be registered BEFORE any app.use("/fe", ...) so POST /fe/proof
@@ -250,10 +256,13 @@ app.use("/fe", fePublicRouter);
 // FE authenticated APIs (remove frontend direct DB writes)
 app.use("/fe", feMeRouter);
 
-// Public auth helpers (no JWT) — login/signup org list
+// Public auth helpers (no JWT) — org list, forgot/reset password, legacy access-token lookup
 app.use("/auth/public", publicAuthRouter);
 
-// Auth provisioning APIs (remove browser-side users inserts)
+// Local Sahaya auth (login/refresh/logout/signup/change-password)
+app.use("/auth", localAuthRouter);
+
+// Auth provisioning APIs (admin provision + /me compatibility)
 app.use("/auth", authProvisionRouter);
 
 // Field Executives (write APIs for frontend migration)
@@ -416,8 +425,52 @@ app.get("/health", (req, res) => {
   return jsonRes(res, 200, {
     status: "ok",
     /** Bump when audit log list query execution changes (verify EC2 image after deploy). */
-    auditLogsListFix: 2,
+    auditLogsListFix: 3,
+    dbMode: "prisma",
   });
+});
+
+/**
+ * Phase A only: prove API → Prisma → sahaya-migration-db write path.
+ * Enabled solely when PHASE_A_DB_PROBE_ENABLED=true on TEST. Disable after gate.
+ */
+app.post("/internal/phase-a-db-probe", async (req, res) => {
+  if (String(process.env.PHASE_A_DB_PROBE_ENABLED || "").toLowerCase() !== "true") {
+    return jsonRes(res, 404, { error: "Not found" });
+  }
+  try {
+    const marker = `PHASE_A_VALIDATION_${Date.now()}`;
+    const { insertAuditLogRow } = await import("./repositories/auditLogRepository.js");
+    const { prisma } = await import("./db/prisma.js");
+    const org = await prisma.organisation.findFirst({
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!org?.id) {
+      return jsonRes(res, 500, { error: "No organisation available for probe" });
+    }
+    const { error } = await insertAuditLogRow({
+      entity_type: "phase_a_probe",
+      entity_id: org.id,
+      organisation_id: org.id,
+      action: marker,
+      metadata: { purpose: "phase_a_dataplane_proof" },
+      summary: marker,
+    });
+    if (error) return jsonRes(res, 500, { error: error.message || "insert failed" });
+    const found = await prisma.auditLog.findFirst({
+      where: { action: marker },
+      select: { id: true, action: true, createdAt: true },
+    });
+    return jsonRes(res, 200, {
+      ok: true,
+      marker,
+      found: Boolean(found),
+      id: found?.id ?? null,
+    });
+  } catch (err) {
+    return jsonRes(res, 500, { error: err?.message || "probe failed" });
+  }
 });
 
 /* ======================================================
@@ -727,13 +780,6 @@ function startAllBackgroundJobs() {
 if (PROCESS_ROLE === "worker") {
   console.log("⚙️ PROCESS_ROLE=worker — HTTP server disabled; background workers only");
   logSecurityStartup();
-  if (process.env.NODE_ENV === "development" && process.env.SUPABASE_URL) {
-    try {
-      console.log("SUPABASE_URL host:", new URL(process.env.SUPABASE_URL).host);
-    } catch {
-      /* ignore */
-    }
-  }
   startAllBackgroundJobs();
 } else {
   const roleForLog = ["all", "api"].includes(PROCESS_ROLE) ? PROCESS_ROLE : "all";
@@ -744,13 +790,6 @@ if (PROCESS_ROLE === "worker") {
   app.listen(PORT, () => {
     console.log(`🚀 Backend running on port ${PORT} (PROCESS_ROLE=${roleForLog})`);
     logSecurityStartup();
-    if (process.env.NODE_ENV === "development" && process.env.SUPABASE_URL) {
-      try {
-        console.log("SUPABASE_URL host:", new URL(process.env.SUPABASE_URL).host);
-      } catch {
-        /* ignore */
-      }
-    }
     if (roleForLog === "all") {
       startAllBackgroundJobs();
     } else {

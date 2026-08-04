@@ -125,7 +125,7 @@ async function runAutoTicketWorkerForScope(tenantId = null) {
   if (error) {
     const msg = error.message || '';
     if (msg.includes('525') || msg.includes('SSL handshake') || msg.trimStart().startsWith('<!')) {
-      console.error('Failed to fetch pending raw emails: Supabase unreachable (e.g. 525 SSL handshake). Check network and status.supabase.com');
+      console.error('Failed to fetch pending raw emails: database unreachable. Check network and DATABASE_URL.');
     } else {
       console.error('Failed to fetch pending raw emails:', msg);
     }

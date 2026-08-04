@@ -1,4 +1,5 @@
 import express from "express";
+import { prisma } from "../db/prisma.js";
 import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import {
   attachTenantContext,
@@ -61,8 +62,6 @@ import {
   listSlaBreachesByTicketIdsScoped,
   listSlaAssignmentDeadlinesByTicketIds,
   listAllSlaRowsScoped,
-  listAllSlaTicketIds,
-  listTicketStatusesByIds,
   listSlaBreachRowsGlobal,
 } from "../repositories/slaRepository.js";
 import {
@@ -71,7 +70,7 @@ import {
   listAssignmentsByFeIdsWithTickets,
   listAllAssignmentsScoped,
 } from "../repositories/assignmentRepository.js";
-import { insertComment, listCommentsForTicket } from "../repositories/commentRepository.js";
+import { insertComment, listCommentsForTicket, getCommentById } from "../repositories/commentRepository.js";
 import {
   listUsersScoped,
   listUsersOrganisationIds,
@@ -81,6 +80,7 @@ import {
   listOrganisations,
   getOrganisationById,
   insertOrganisation,
+  updateOrganisation,
 } from "../repositories/organisationRepository.js";
 import {
   listFieldExecutivesScoped,
@@ -555,7 +555,7 @@ router.post("/tickets-row-supplement", async (req, res) => {
 
 router.get("/tickets", async (req, res) => {
   const startedAt = Date.now();
-  const limit = toInt(req.query.limit, { defaultValue: 100, min: 1, max: 500 });
+  const limit = toInt(req.query.limit, { defaultValue: 100, min: 1, max: 5000 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
 
   const status = safeTrim(req.query.status);
@@ -567,6 +567,8 @@ router.get("/tickets", async (req, res) => {
   const organisationIdFilter = safeTrim(req.query.organisationId);
   const scopeAllOrganisations = String(req.query.scopeAllOrganisations || "").toLowerCase() === "true";
   const unassignedOnly = String(req.query.unassignedOnly || "").toLowerCase() === "true";
+  const needsReview = String(req.query.needsReview || "").toLowerCase() === "true";
+  const reviewQueue = String(req.query.reviewQueue || "").toLowerCase() === "true";
 
   try {
     const { data, error } = await listTicketsScoped(req, {
@@ -582,6 +584,8 @@ router.get("/tickets", async (req, res) => {
         scopeAllOrganisations,
         unassignedOnly,
         search,
+        needsReview: needsReview || undefined,
+        reviewQueue: reviewQueue || undefined,
       },
     });
     if (error) return jsonError(res, 500, error.message);
@@ -806,6 +810,59 @@ router.get("/tickets/:id/comments", async (req, res) => {
   }
 });
 
+/**
+ * Short-lived presigned GET for a proof object stored on TEST S3.
+ * Key is resolved from comment.attachments.proof_storage_paths[index] — never trusted from the client.
+ */
+router.get("/tickets/:id/comments/:commentId/proofs/:index/url", async (req, res) => {
+  const startedAt = Date.now();
+  const ticketId = safeTrim(req.params.id);
+  const commentId = safeTrim(req.params.commentId);
+  const index = toInt(req.params.index, { defaultValue: 0, min: 0, max: 50 });
+  if (!ticketId || !commentId) return jsonError(res, 400, "ticket id and comment id required");
+
+  try {
+    const { data: ticket, error: tErr } = await getTicketOrgCheckScoped(req, ticketId);
+    if (tErr) return jsonError(res, 500, tErr.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+
+    const { data: comment, error: cErr } = await getCommentById(commentId, "attachments, ticket_id");
+    if (cErr) return jsonError(res, 500, cErr.message);
+    if (!comment) return jsonError(res, 404, "Comment not found");
+    if (String(comment.ticket_id) !== String(ticketId)) {
+      return jsonError(res, 404, "Comment not found on ticket");
+    }
+
+    const att =
+      comment.attachments && typeof comment.attachments === "object" && !Array.isArray(comment.attachments)
+        ? comment.attachments
+        : {};
+    const paths = Array.isArray(att.proof_storage_paths) ? att.proof_storage_paths : [];
+    const key = paths[index];
+    if (!key || typeof key !== "string") {
+      return jsonError(res, 404, "Proof object not available (historical proofs may use DB base64 only)");
+    }
+
+    const { getProofDownloadUrl } = await import("../services/proofStorageService.js");
+    const signed = await getProofDownloadUrl({ key, expiresInSeconds: 120 });
+    logEvent("dataApi.tickets.proofUrl", {
+      tenantId: req.tenantId ?? null,
+      ticketId,
+      commentId,
+      index,
+      ms: Date.now() - startedAt,
+    });
+    return jsonOk(res, {
+      url: signed.url,
+      expiresIn: signed.expiresIn,
+      index,
+      key: signed.key,
+    });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to create proof download URL");
+  }
+});
+
 router.get("/tickets/:id/assignments", async (req, res) => {
   const startedAt = Date.now();
   const id = req.params.id;
@@ -1012,14 +1069,99 @@ router.delete("/clients/:id", requireTenantClientsEnabled, requireRole(CLIENT_WR
 
 router.get("/organisations", async (req, res) => {
   const startedAt = Date.now();
-  if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
   try {
-    const { data, error } = await listOrganisations();
+    let organisationId = null;
+    if (!req.isSuperAdmin) {
+      if (!req.tenantId) return jsonError(res, 403, "Forbidden");
+      organisationId = req.tenantId;
+    }
+    const { data, error } = await listOrganisations({ organisationId });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.organisations.list", { ms: Date.now() - startedAt, count: (data || []).length });
     return jsonOk(res, { items: data || [] });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to list organisations");
+  }
+});
+
+router.get("/organisations/stats", async (req, res) => {
+  const startedAt = Date.now();
+  if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
+
+  const orgStatsCap = toInt(process.env.ORG_STATS_MAX_ROWS, { defaultValue: 20000, min: 1000, max: 200000 });
+
+  try {
+    const [ticketsRes, usersRes, feRes, slaRes] = await Promise.all([
+      listTicketOrgStatsRows(orgStatsCap, req),
+      listUsersOrganisationIds(orgStatsCap),
+      listFieldExecutivesOrganisationIds(orgStatsCap),
+      listSlaBreachRowsGlobal(orgStatsCap),
+    ]);
+    if (ticketsRes.error) return jsonError(res, 500, ticketsRes.error.message);
+    if (usersRes.error) return jsonError(res, 500, usersRes.error.message);
+    if (feRes.error) return jsonError(res, 500, feRes.error.message);
+    if (slaRes.error) return jsonError(res, 500, slaRes.error.message);
+
+    const cap = (rows) => {
+      const r = rows ?? [];
+      const truncated = r.length > orgStatsCap;
+      return { rows: truncated ? r.slice(0, orgStatsCap) : r, truncated };
+    };
+    const tCap = cap(ticketsRes.data);
+    const uCap = cap(usersRes.data);
+    const feCap = cap(feRes.data);
+    const sCap = cap(slaRes.data);
+    const orgStatsTruncated = tCap.truncated || uCap.truncated || feCap.truncated || sCap.truncated;
+
+    const tickets = tCap.rows;
+    const users = uCap.rows;
+    const fes = feCap.rows;
+    const sla = sCap.rows;
+
+    const breachedTicketIds = new Set(
+      sla
+        .filter((s) => s.assignment_breached || s.onsite_breached || s.resolution_breached)
+        .map((s) => s.ticket_id)
+    );
+
+    const out = {};
+    for (const t of tickets) {
+      const orgId = t.organisation_id ?? "__none__";
+      if (!out[orgId]) {
+        out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
+      }
+      out[orgId].totalTickets++;
+      if (t.status !== "RESOLVED" && t.status !== "REJECTED") out[orgId].openTickets++;
+      if (t.client_slug) {
+        if (!out[orgId]._clients) out[orgId]._clients = new Set();
+        out[orgId]._clients.add(t.client_slug);
+      }
+      if (breachedTicketIds.has(t.id)) out[orgId].slaBreached++;
+    }
+    for (const u of users) {
+      const orgId = u.organisation_id ?? "__none__";
+      if (!out[orgId]) out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
+      out[orgId].userCount++;
+    }
+    for (const fe of fes) {
+      const orgId = fe.organisation_id ?? "__none__";
+      if (!out[orgId]) out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
+      out[orgId].feCount++;
+    }
+    for (const [orgId, stats] of Object.entries(out)) {
+      stats.distinctClients = stats._clients ? stats._clients.size : 0;
+      delete stats._clients;
+    }
+
+    logEvent("dataApi.organisations.stats", {
+      ms: Date.now() - startedAt,
+      orgs: Object.keys(out).length,
+      orgStatsTruncated,
+      orgStatsCap,
+    });
+    return jsonOk(res, { items: out, orgStatsTruncated, orgStatsCap });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to compute org stats");
   }
 });
 
@@ -1030,10 +1172,7 @@ router.get("/organisations/:id", async (req, res) => {
   const tenantMayRead = req.tenantId && id === req.tenantId;
   if (!req.isSuperAdmin && !tenantMayRead) return jsonError(res, 403, "Forbidden");
   try {
-    const { data, error } = await getOrganisationById(
-      id,
-      "id, name, slug, status, review_field_label, review_field_helper_text"
-    );
+    const { data, error } = await getOrganisationById(id);
     if (error) return jsonError(res, 500, error.message);
     if (!data) return jsonError(res, 404, "Organisation not found");
     logEvent("dataApi.organisations.get", { ms: Date.now() - startedAt, orgId: id });
@@ -1054,12 +1193,48 @@ router.post("/organisations", async (req, res) => {
     const insert = { name, slug, status: "active" };
     const email = safeTrim(req.body?.email);
     if (email) insert.email = email;
+    if (Array.isArray(req.body?.incoming_emails)) insert.incoming_emails = req.body.incoming_emails;
+    if (Array.isArray(req.body?.outgoing_emails)) insert.outgoing_emails = req.body.outgoing_emails;
     const { data, error } = await insertOrganisation(insert);
     if (error) return jsonError(res, 400, error.message);
     logEvent("dataApi.organisations.create", { ms: Date.now() - startedAt, orgId: data?.id });
     return jsonOk(res, data);
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to create organisation");
+  }
+});
+
+router.patch("/organisations/:id", async (req, res) => {
+  const startedAt = Date.now();
+  const id = safeTrim(req.params.id);
+  if (!id) return jsonError(res, 400, "id required");
+  const tenantMayWrite = req.tenantId && id === req.tenantId;
+  if (!req.isSuperAdmin && !tenantMayWrite) return jsonError(res, 403, "Forbidden");
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const patch = {};
+    for (const key of [
+      "name",
+      "status",
+      "email",
+      "spoc_name",
+      "spoc_email",
+      "spoc_phone",
+      "incoming_emails",
+      "outgoing_emails",
+      "review_field_label",
+      "review_field_helper_text",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
+    }
+    if (typeof patch.name === "string") patch.name = patch.name.trim();
+    const { data, error } = await updateOrganisation(id, patch);
+    if (error) return jsonError(res, 400, error.message);
+    if (!data) return jsonError(res, 404, "Organisation not found");
+    logEvent("dataApi.organisations.patch", { ms: Date.now() - startedAt, orgId: id });
+    return jsonOk(res, data);
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to update organisation");
   }
 });
 
@@ -1226,91 +1401,6 @@ router.post("/audit-logs/backfill", async (req, res) => {
     return jsonOk(res, result);
   } catch (err) {
     return jsonError(res, 500, err?.message || "Backfill failed");
-  }
-});
-
-/* ======================================================
-   Organisations stats (read)
-====================================================== */
-
-router.get("/organisations/stats", async (req, res) => {
-  const startedAt = Date.now();
-  if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
-
-  const orgStatsCap = toInt(process.env.ORG_STATS_MAX_ROWS, { defaultValue: 20000, min: 1000, max: 200000 });
-
-  try {
-    const [ticketsRes, usersRes, feRes, slaRes] = await Promise.all([
-      listTicketOrgStatsRows(orgStatsCap, req),
-      listUsersOrganisationIds(orgStatsCap),
-      listFieldExecutivesOrganisationIds(orgStatsCap),
-      listSlaBreachRowsGlobal(orgStatsCap),
-    ]);
-    if (ticketsRes.error) return jsonError(res, 500, ticketsRes.error.message);
-    if (usersRes.error) return jsonError(res, 500, usersRes.error.message);
-    if (feRes.error) return jsonError(res, 500, feRes.error.message);
-    if (slaRes.error) return jsonError(res, 500, slaRes.error.message);
-
-    const cap = (rows) => {
-      const r = rows ?? [];
-      const truncated = r.length > orgStatsCap;
-      return { rows: truncated ? r.slice(0, orgStatsCap) : r, truncated };
-    };
-    const tCap = cap(ticketsRes.data);
-    const uCap = cap(usersRes.data);
-    const feCap = cap(feRes.data);
-    const sCap = cap(slaRes.data);
-    const orgStatsTruncated = tCap.truncated || uCap.truncated || feCap.truncated || sCap.truncated;
-
-    const tickets = tCap.rows;
-    const users = uCap.rows;
-    const fes = feCap.rows;
-    const sla = sCap.rows;
-
-    const breachedTicketIds = new Set(
-      sla
-        .filter((s) => s.assignment_breached || s.onsite_breached || s.resolution_breached)
-        .map((s) => s.ticket_id)
-    );
-
-    const out = {};
-    for (const t of tickets) {
-      const orgId = t.organisation_id ?? "__none__";
-      if (!out[orgId]) {
-        out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
-      }
-      out[orgId].totalTickets++;
-      if (t.status === "OPEN") out[orgId].openTickets++;
-      if (t.client_slug) {
-        if (!out[orgId]._clients) out[orgId]._clients = new Set();
-        out[orgId]._clients.add(t.client_slug);
-      }
-      if (breachedTicketIds.has(t.id)) out[orgId].slaBreached++;
-    }
-    for (const u of users) {
-      const orgId = u.organisation_id ?? "__none__";
-      if (!out[orgId]) out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
-      out[orgId].userCount++;
-    }
-    for (const fe of fes) {
-      const orgId = fe.organisation_id ?? "__none__";
-      if (!out[orgId]) out[orgId] = { totalTickets: 0, openTickets: 0, feCount: 0, userCount: 0, distinctClients: 0, slaBreached: 0 };
-      out[orgId].feCount++;
-    }
-    for (const [orgId, stats] of Object.entries(out)) {
-      stats.distinctClients = stats._clients ? stats._clients.size : 0;
-      delete stats._clients;
-    }
-
-    logEvent("dataApi.organisations.stats", {
-      ms: Date.now() - startedAt,
-      orgs: Object.keys(out).length,
-      orgStatsTruncated,
-      orgStatsCap,
-    });
-    return jsonOk(res, { items: out, orgStatsTruncated, orgStatsCap });
-  } catch (err) {
-    return jsonError(res, 500, err?.message || "Failed to compute org stats");
   }
 });
 
@@ -1528,19 +1618,45 @@ router.get("/sla/tracked-count", async (req, res) => {
   if (!req.isSuperAdmin) return jsonError(res, 403, "Forbidden");
 
   try {
-    const { data: rows, error } = await listAllSlaTicketIds();
-    if (error) return jsonError(res, 500, error.message);
-    const list = rows ?? [];
-    if (list.length === 0) return jsonOk(res, { count: 0 });
-
-    const ticketIds = [...new Set(list.map((r) => r.ticket_id).filter(Boolean))];
-    const { data: tickets, error: ticketErr } = await listTicketStatusesByIds(ticketIds);
-    if (ticketErr) return jsonError(res, 500, ticketErr.message);
-
-    const rejectedIds = new Set((tickets ?? []).filter((t) => t.status === "REJECTED").map((t) => t.id));
-    const count = list.filter((r) => !rejectedIds.has(r.ticket_id)).length;
-    logEvent("dataApi.sla.trackedCount", { ms: Date.now() - startedAt, count });
-    return jsonOk(res, { count });
+    // Authoritative SQL: same source of truth as direct PostgreSQL probes.
+    // `count` = SLA rows joined to a non-REJECTED ticket (dashboard tracked metric).
+    // `totalSlaRows` = raw COUNT(*) FROM sla_tracking (must equal PG).
+    const [aggRows, byStatusRows] = await Promise.all([
+      prisma.$queryRawUnsafe(`
+        SELECT
+          COUNT(*)::int AS total_sla_rows,
+          COUNT(*) FILTER (WHERE t.id IS NULL)::int AS orphan_sla_rows,
+          COUNT(*) FILTER (WHERE t.status = 'REJECTED')::int AS rejected_sla_rows,
+          COUNT(*) FILTER (
+            WHERE t.id IS NOT NULL AND t.status IS DISTINCT FROM 'REJECTED'
+          )::int AS tracked_count
+        FROM sla_tracking s
+        LEFT JOIN tickets t ON t.id = s.ticket_id
+      `),
+      prisma.$queryRawUnsafe(`
+        SELECT COALESCE(t.status, '__ORPHAN__') AS status, COUNT(*)::int AS cnt
+        FROM sla_tracking s
+        LEFT JOIN tickets t ON t.id = s.ticket_id
+        GROUP BY COALESCE(t.status, '__ORPHAN__')
+        ORDER BY 1
+      `),
+    ]);
+    const row = aggRows?.[0] || {};
+    const count = Number(row.tracked_count || 0);
+    /** @type {Record<string, number>} */
+    const byStatus = {};
+    for (const r of byStatusRows || []) {
+      byStatus[String(r.status)] = Number(r.cnt || 0);
+    }
+    const payload = {
+      count,
+      totalSlaRows: Number(row.total_sla_rows || 0),
+      orphanSlaRows: Number(row.orphan_sla_rows || 0),
+      rejectedSlaRows: Number(row.rejected_sla_rows || 0),
+      byStatus,
+    };
+    logEvent("dataApi.sla.trackedCount", { ms: Date.now() - startedAt, count, totalSlaRows: payload.totalSlaRows });
+    return jsonOk(res, payload);
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to compute SLA tracked count");
   }

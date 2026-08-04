@@ -55,6 +55,23 @@ Do not restart unrelated PM2 apps. Do not touch production. Do not change Supaba
 
 | Field | Value |
 |-------|--------|
-| Verdict | *in progress — AWS inspect* |
-| RDS endpoint | *pending* |
-| Cutover | *not started* |
+| Verdict | **BLOCKED — NO RDS CUTOVER** (2026-08-01) |
+| RDS endpoint | *not created* |
+| Cutover | *not started* — `DATABASE_URL` still `localhost:5436/sahaya` |
+| Freeze | still enabled on TEST |
+
+### Blocker (permissions)
+
+| Actor | Finding |
+|-------|---------|
+| Local IAM `sreeparvathy` | Can `sts:GetCallerIdentity` + limited S3; **denied** `rds:*` and `ec2:Describe*` |
+| TEST EC2 `i-0ee303af16930921a` | **No instance IAM role** (`iam/info` → 404); AWS CLI installed for ops but **NoCredentials** |
+| VPC (metadata) | `vpc-0e4c5fc6d94f767df` / `subnet-03346bbecad8a2878` / `sg-05370b87ea55fdddc` / AZ `ap-south-1a` |
+
+### Unblock requirements (operator)
+
+1. Attach an IAM instance profile to TEST EC2 **or** provide a dedicated TEST IAM user/role with: `rds:*` (scoped), `ec2:Describe*`, `ec2:CreateSecurityGroup`, `ec2:AuthorizeSecurityGroupIngress` (for EC2→RDS:5432), `rds:CreateDBSubnetGroup`, etc.
+2. Confirm RDS PostgreSQL **18** (or approved compatible version) in `ap-south-1`.
+3. Re-run workflow `Phase 1 TEST RDS Ops` mode=`inspect`, then `provision` / `restore` / `cutover` with `confirm=CONFIRM`.
+
+Do **not** use production Supabase or production RDS.

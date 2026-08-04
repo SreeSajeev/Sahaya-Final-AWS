@@ -1,5 +1,5 @@
 /**
- * SPA URL for Supabase recovery redirect_to (forgot-password API).
+ * SPA URL for Sahaya backend password-reset redirect_to (forgot-password API).
  * Prefer VITE_APP_BASE_URL so production builds never send localhost to the API.
  */
 

@@ -37,7 +37,7 @@ import { fetchJson } from "@/lib/backendDataApi";
 import { createAdminUser } from "@/lib/createAdminUser";
 import {
   fetchOrganisationById,
-  fetchTicketsByOrganisationSlug,
+  fetchTicketsByOrganisationId,
   fetchBreachedTicketIds,
   deriveDashboardStatsFromTickets,
   distinctClientSlugsFromTickets,
@@ -129,9 +129,9 @@ export default function TenantView() {
     isError: ticketsError,
     error: ticketsQueryError,
   } = useQuery({
-    queryKey: ["tenant-tickets", org?.slug],
-    enabled: Boolean(org?.slug && session?.access_token),
-    queryFn: async () => fetchTicketsByOrganisationSlug(org!.slug),
+    queryKey: ["tenant-tickets", orgId],
+    enabled: Boolean(orgId && session?.access_token),
+    queryFn: async () => fetchTicketsByOrganisationId(orgId!),
   });
 
   const tenantTickets = tenantTicketsRaw;

@@ -423,6 +423,29 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     return { ok: false, statusCode: 403, error: "Tenant mismatch", tenantMismatch: true };
   }
 
+  const { data: feRow, error: feLookupErr } = await getFieldExecutiveById(
+    feId,
+    "id, organisation_id, active"
+  );
+  if (feLookupErr || !feRow) {
+    return { ok: false, statusCode: 404, error: "Field executive not found" };
+  }
+  if (feRow.active === false) {
+    return { ok: false, statusCode: 400, error: "Field executive is inactive" };
+  }
+  if (
+    ticket.organisation_id &&
+    feRow.organisation_id &&
+    String(ticket.organisation_id) !== String(feRow.organisation_id)
+  ) {
+    return {
+      ok: false,
+      statusCode: 403,
+      error: "Field executive does not belong to this ticket's organisation",
+      tenantMismatch: true,
+    };
+  }
+
   if (stateInput !== undefined) {
     const normalizedState = normalizeTicketState(stateInput);
     const { error: stateUpdateError } = await updateTicketById(ticketId, {
@@ -446,6 +469,7 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
   const { data: assignment, error: assignmentError } = await insertAssignment({
     ticket_id: ticketId,
     fe_id: feId,
+    ...(ticket.organisation_id ? { organisation_id: ticket.organisation_id } : {}),
     ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
   });
 
@@ -600,6 +624,29 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     };
   }
 
+  const { data: feRowRe, error: feLookupReErr } = await getFieldExecutiveById(
+    feId,
+    "id, organisation_id, active"
+  );
+  if (feLookupReErr || !feRowRe) {
+    return { ok: false, statusCode: 404, error: "Field executive not found" };
+  }
+  if (feRowRe.active === false) {
+    return { ok: false, statusCode: 400, error: "Field executive is inactive" };
+  }
+  if (
+    ticket.organisation_id &&
+    feRowRe.organisation_id &&
+    String(ticket.organisation_id) !== String(feRowRe.organisation_id)
+  ) {
+    return {
+      ok: false,
+      statusCode: 403,
+      error: "Field executive does not belong to this ticket's organisation",
+      tenantMismatch: true,
+    };
+  }
+
   const hasAssignmentDueAt = await hasPublicColumn("ticket_assignments", "assignment_due_at");
   const priorSelect = hasAssignmentDueAt
     ? "id, fe_id, assignment_due_at, field_executives(id, name)"
@@ -657,6 +704,7 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
   const { data: assignment, error: assignmentError } = await insertAssignment({
     ticket_id: ticketId,
     fe_id: feId,
+    ...(ticket.organisation_id ? { organisation_id: ticket.organisation_id } : {}),
     ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
   });
 

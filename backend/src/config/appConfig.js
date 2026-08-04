@@ -67,16 +67,17 @@ const FE_ACTION_TOKEN_EXPIRY_HOURS = Math.min(
 
 /**
  * Database access mode for repositories.
- * Only `prisma` is active; `supabase` is accepted for compatibility but treated as prisma.
+ * Only `prisma` is active. Legacy `DB_MODE=supabase` is accepted and treated as prisma.
  *
- * @typedef {"supabase"|"prisma"} DbMode
+ * @typedef {"prisma"} DbMode
  */
 
 /** @returns {DbMode} */
 export function resolveDbMode() {
   const raw = String(process.env.DB_MODE || "").trim().toLowerCase();
-  if (raw === "supabase" || raw === "prisma") {
-    return /** @type {DbMode} */ (raw);
+  if (raw === "supabase") {
+    // Compatibility: former dual-write mode is gone; always Prisma → EC2 PostgreSQL.
+    return "prisma";
   }
   return "prisma";
 }

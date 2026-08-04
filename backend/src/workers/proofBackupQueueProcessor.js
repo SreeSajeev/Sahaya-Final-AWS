@@ -1,11 +1,10 @@
 /**
- * Processes fe_proof_backup_queue: uploads proof images to Supabase Storage and updates proof_storage_path.
- * Called periodically from the worker loop. Additive only; does not change proof submission flow.
+ * Processes fe_proof_backup_queue: retries TEST S3 uploads and updates proof_storage_path.
+ * Supabase Storage is no longer used.
  */
 
-import { supabaseAuth } from "../supabaseAuthClient.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
-import { replicateProofToS3 } from "../services/s3ProofReplication.js";
+import { replicateProofsToS3, isProofS3Enabled } from "../services/s3ProofReplication.js";
 import { WORKER_TENANT_ISOLATION_ENABLED } from "../config/appConfig.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactStoragePath } from "../utils/redact.js";
@@ -43,15 +42,22 @@ async function processProofBackupQueueForScope(tenantId = null) {
   }
   if (!rows || rows.length === 0) return;
 
+  if (!isProofS3Enabled()) {
+    console.warn("[Proof Backup Queue] S3 disabled — leaving queue rows for later retry");
+    return;
+  }
+
   for (const row of rows) {
     try {
-      console.log(JSON.stringify({
-        worker: "proofBackupQueueProcessor",
-        tenantId,
-        jobId: row.id,
-        ticketId: row.ticket_id,
-        event: "processing_backup_job",
-      }));
+      console.log(
+        JSON.stringify({
+          worker: "proofBackupQueueProcessor",
+          tenantId,
+          jobId: row.id,
+          ticketId: row.ticket_id,
+          event: "processing_backup_job",
+        })
+      );
       const { data: comment, error: commentError } = await getCommentById(
         row.ticket_comment_id,
         "attachments"
@@ -64,13 +70,11 @@ async function processProofBackupQueueForScope(tenantId = null) {
       }
 
       const att = comment.attachments || {};
-      const images =
-        Array.isArray(att?.images)
-          ? att.images
-              .map((it) => it?.image_base64)
-              .filter((v) => typeof v === "string" && v.trim() !== "")
-          : [];
-      const legacy = typeof att?.image_base64 === "string" && att.image_base64.trim() !== "" ? [att.image_base64] : [];
+      const images = Array.isArray(att?.images)
+        ? att.images.map((it) => it?.image_base64).filter((v) => typeof v === "string" && v.trim() !== "")
+        : [];
+      const legacy =
+        typeof att?.image_base64 === "string" && att.image_base64.trim() !== "" ? [att.image_base64] : [];
       const base64List = images.length > 0 ? images : legacy;
 
       if (!base64List || base64List.length === 0) {
@@ -78,45 +82,32 @@ async function processProofBackupQueueForScope(tenantId = null) {
         continue;
       }
 
-      const actionType = row.action_type || "ON_SITE";
-      const basePath = `${row.ticket_id}/${actionType}/${row.ticket_comment_id}`;
-      const firstFilePath = `${basePath}/0.jpg`;
+      const { data: ticketRow } = await getTicketByIdUnscoped(
+        row.ticket_id,
+        "current_assignment_id, organisation_id"
+      );
+      const organisationId =
+        row.organisation_id || ticketRow?.organisation_id || tenantId || "unknown";
 
-      let allOk = true;
-      for (let idx = 0; idx < base64List.length; idx++) {
-        const imageBase64 = base64List[idx];
-        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-        const buffer = Buffer.from(base64Data, "base64");
-        const filePath = `${basePath}/${idx}.jpg`;
-
-        const { error: uploadError } = await supabaseAuth.storage
-          .from("fe-proofs")
-          .upload(filePath, buffer, {
-            contentType: "image/jpeg",
-            upsert: false,
-          });
-
-        if (uploadError) {
-          const statusCode = uploadError?.statusCode ?? uploadError?.status;
-          const msg = String(uploadError?.message ?? "");
-          const isConflict = statusCode === 409 || /already exists/i.test(msg);
-          if (!isConflict) {
-            console.warn("[Proof Backup Queue] Upload failed:", msg, "path:", redactStoragePath(filePath));
-            allOk = false;
-            break;
-          }
-        }
-
-        await replicateProofToS3({
-          storagePath: filePath,
-          buffer,
-          contentType: "image/jpeg",
+      let uploadResult;
+      try {
+        uploadResult = await replicateProofsToS3({
+          ticketId: row.ticket_id,
+          actionType: row.action_type || "ON_SITE",
+          commentId: row.ticket_comment_id,
+          attachments: att,
+          organisationId,
         });
+      } catch (err) {
+        console.warn("[Proof Backup Queue] S3 upload failed:", err?.message || err);
+        continue;
       }
 
-      if (!allOk) continue;
-
-      const storagePaths = base64List.map((_, idx) => `${basePath}/${idx}.jpg`);
+      const storagePaths = uploadResult?.keys || [];
+      if (storagePaths.length === 0) {
+        console.warn("[Proof Backup Queue] No S3 keys produced; will retry");
+        continue;
+      }
 
       const { data: commentRow, error: commentAttachErr } = await getCommentById(
         row.ticket_comment_id,
@@ -124,7 +115,9 @@ async function processProofBackupQueueForScope(tenantId = null) {
       );
       if (!commentAttachErr && commentRow) {
         const prev =
-          commentRow.attachments && typeof commentRow.attachments === "object" && !Array.isArray(commentRow.attachments)
+          commentRow.attachments &&
+          typeof commentRow.attachments === "object" &&
+          !Array.isArray(commentRow.attachments)
             ? commentRow.attachments
             : {};
         const merged = { ...prev, proof_storage_paths: storagePaths };
@@ -142,18 +135,16 @@ async function processProofBackupQueueForScope(tenantId = null) {
         }
       }
 
-      const { data: ticketRow } = await getTicketByIdUnscoped(row.ticket_id, "current_assignment_id");
-
       const assignmentId = ticketRow?.current_assignment_id;
       if (assignmentId) {
-        await updateAssignmentById(assignmentId, { proof_storage_path: firstFilePath });
+        await updateAssignmentById(assignmentId, { proof_storage_path: storagePaths[0] });
       }
 
       await deleteProofBackupQueueRow(row.id, { tenantId, hasOrgOnQueue });
       console.log(
-        "📦 Proof uploaded to Supabase:",
-        redactStoragePath(firstFilePath),
-        base64List.length > 1 ? `(and ${base64List.length - 1} more)` : ""
+        "📦 Proof uploaded to TEST S3:",
+        redactStoragePath(storagePaths[0]),
+        storagePaths.length > 1 ? `(and ${storagePaths.length - 1} more)` : ""
       );
     } catch (err) {
       console.warn("[Proof Backup Queue] Failed row", row.id, err?.message || err);
