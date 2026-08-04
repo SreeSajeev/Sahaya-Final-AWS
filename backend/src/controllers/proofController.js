@@ -1,5 +1,4 @@
 // src/controllers/proofController.js
-import { supabaseAuth } from "../supabaseAuthClient.js";
 import {
   setOnsiteDeadline,
   setResolutionDeadline,
@@ -19,11 +18,10 @@ import {
 } from "../repositories/feActionTokenRepository.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { insertAuditLog } from "../services/auditLogService.js";
-import { replicateProofsToS3 } from "../services/s3ProofReplication.js";
-import { redactStoragePath } from "../utils/redact.js";
+import { replicateProofsToS3, isProofS3Enabled } from "../services/s3ProofReplication.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
 import { getAssignmentById, updateAssignmentById } from "../repositories/assignmentRepository.js";
-import { insertCommentReturning } from "../repositories/commentRepository.js";
+import { insertCommentReturning, updateCommentById, getCommentById } from "../repositories/commentRepository.js";
 import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
 
 function countProofImages(attachments) {
@@ -67,6 +65,57 @@ function normalizeProofAttachmentsForStorage(raw) {
       ? { image_base64: firstB64 }
       : {}),
   };
+}
+
+/**
+ * Persist proof binaries to dedicated TEST S3 and record keys on the comment.
+ * When S3 is enabled, failures are returned to the caller (do not claim silent success).
+ * Base64 remains in PostgreSQL for historical/compat display.
+ */
+async function persistProofsToTestS3({
+  ticketId,
+  organisationId,
+  commentId,
+  actionType,
+  attachments,
+  videoAttachmentMeta,
+  assignmentId = null,
+}) {
+  if (!isProofS3Enabled()) {
+    return { keys: [], skipped: true };
+  }
+  const result = await replicateProofsToS3({
+    ticketId,
+    actionType,
+    commentId,
+    attachments,
+    videoAttachmentMeta,
+    organisationId,
+  });
+  const keys = result?.keys || [];
+  if (keys.length === 0 && !result?.skipped) {
+    const err = new Error("TEST S3 proof upload produced no object keys");
+    err.code = "S3_PROOF_UPLOAD_EMPTY";
+    throw err;
+  }
+  if (keys.length > 0) {
+    const { data: commentRow } = await getCommentById(commentId, "attachments");
+    if (commentRow) {
+      const prev =
+        commentRow.attachments &&
+        typeof commentRow.attachments === "object" &&
+        !Array.isArray(commentRow.attachments)
+          ? commentRow.attachments
+          : {};
+      await updateCommentById(commentId, {
+        attachments: { ...prev, proof_storage_paths: keys },
+      });
+    }
+    if (assignmentId) {
+      await updateAssignmentById(assignmentId, { proof_storage_path: keys[0] });
+    }
+  }
+  return { keys, skipped: Boolean(result?.skipped) };
 }
 
 export async function uploadFeProof(req, res) {
@@ -237,19 +286,24 @@ export async function uploadFeProof(req, res) {
         });
 
         if (!failedProofCommentErr && failedProofComment?.id && hasAnyProof) {
-          console.error("[s3-proof-upload] schedule detached replication (resolution failed)", {
-            ticketId,
-            commentId: failedProofComment.id,
-          });
-          void replicateProofsToS3({
-            ticketId,
-            actionType: "RESOLUTION",
-            commentId: failedProofComment.id,
-            attachments: attachmentsToStore,
-            videoAttachmentMeta,
-          }).catch((err) =>
-            console.error("[s3-proof-upload] detached replication failed", err?.message || err)
-          );
+          try {
+            await persistProofsToTestS3({
+              ticketId,
+              organisationId:
+                ticketLifecycleRow?.organisation_id ?? actionToken.organisation_id ?? null,
+              commentId: failedProofComment.id,
+              actionType: "RESOLUTION",
+              attachments: attachmentsToStore,
+              videoAttachmentMeta,
+              assignmentId,
+            });
+          } catch (s3Err) {
+            console.error("[s3-proof-upload] required upload failed (resolution failed)", s3Err?.message || s3Err);
+            return res.status(502).json({
+              error: "Proof saved to database but TEST S3 object storage failed",
+              code: "S3_PROOF_UPLOAD_FAILED",
+            });
+          }
         }
 
         await updateTicketById(ticketId, {
@@ -261,7 +315,14 @@ export async function uploadFeProof(req, res) {
           console.error("[SLA] clearOnsiteAndResolutionDeadlines", ticketId, err.message)
         );
 
-        await markTokenUsed(token);
+        try {
+          await markTokenUsed(token);
+        } catch (markErr) {
+          console.error("[proof] markTokenUsed failed after successful FAILED proof persist", {
+            ticketId,
+            error: markErr?.message || markErr,
+          });
+        }
 
         return res.json({
           success: true,
@@ -301,20 +362,24 @@ export async function uploadFeProof(req, res) {
           commentError: commentError?.message ?? null,
         });
       } else if (resolutionComment?.id) {
-        console.error("[s3-proof-upload] schedule detached replication (resolution success)", {
-          ticketId,
-          commentId: resolutionComment.id,
-          actionType: actionToken.action_type || "RESOLUTION",
-        });
-        void replicateProofsToS3({
-          ticketId,
-          actionType: actionToken.action_type || "RESOLUTION",
-          commentId: resolutionComment.id,
-          attachments: resolutionAttachments,
-          videoAttachmentMeta,
-        }).catch((err) =>
-          console.error("[s3-proof-upload] detached replication failed", err?.message || err)
-        );
+        try {
+          await persistProofsToTestS3({
+            ticketId,
+            organisationId:
+              ticketLifecycleRow?.organisation_id ?? actionToken.organisation_id ?? null,
+            commentId: resolutionComment.id,
+            actionType: actionToken.action_type || "RESOLUTION",
+            attachments: resolutionAttachments,
+            videoAttachmentMeta,
+            assignmentId,
+          });
+        } catch (s3Err) {
+          console.error("[s3-proof-upload] required upload failed (resolution success)", s3Err?.message || s3Err);
+          return res.status(502).json({
+            error: "Proof saved to database but TEST S3 object storage failed",
+            code: "S3_PROOF_UPLOAD_FAILED",
+          });
+        }
       } else {
         console.error("[s3-proof-upload] schedule skipped (resolution success — no comment id)", {
           ticketId,
@@ -357,46 +422,19 @@ export async function uploadFeProof(req, res) {
         console.error("[SLA] setResolutionDeadline after proof", ticketId, err.message)
       );
 
-      await markTokenUsed(token);
-      console.log(JSON.stringify({
-        event: "resolution_token_used",
-        ticket_id: ticketId,
-        token_id: maskTokenForLog(token),
-        outcome: resolvedOutcome,
-      }));
-
-      /* Optional: backup proof to Supabase Storage (does not block; base64 remains in ticket_comments)
-         Backward-compatible:
-         - If attachments.images[] exists, use the first image_base64
-         - Else fall back to attachments.image_base64
-      */
-      const imageBase64 =
-        resolutionAttachments &&
-        typeof resolutionAttachments === "object" &&
-        (Array.isArray(resolutionAttachments.images) && resolutionAttachments.images[0]?.image_base64
-          ? resolutionAttachments.images[0].image_base64
-          : resolutionAttachments.image_base64);
-      if (imageBase64 && typeof imageBase64 === "string") {
-        try {
-          const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-          const buffer = Buffer.from(base64Data, "base64");
-          const actionType = actionToken.action_type || "RESOLUTION";
-          const filePath = `${ticketId}/${actionType}/${Date.now()}.jpg`;
-          const { error: uploadError } = await supabaseAuth.storage
-            .from("fe-proofs")
-            .upload(filePath, buffer, {
-              contentType: "image/jpeg",
-              upsert: false,
-            });
-          if (uploadError) {
-            console.error("[Proof Storage] Upload failed:", uploadError.message);
-          } else {
-            await updateAssignmentById(assignmentId, { proof_storage_path: filePath });
-            console.log("📦 Proof uploaded to Supabase:", redactStoragePath(filePath));
-          }
-        } catch (err) {
-          console.error("[Proof Storage] Failed:", err?.message || err);
-        }
+      try {
+        await markTokenUsed(token);
+        console.log(JSON.stringify({
+          event: "resolution_token_used",
+          ticket_id: ticketId,
+          token_id: maskTokenForLog(token),
+          outcome: resolvedOutcome,
+        }));
+      } catch (markErr) {
+        console.error("[proof] markTokenUsed failed after successful RESOLUTION proof persist", {
+          ticketId,
+          error: markErr?.message || markErr,
+        });
       }
 
       return res.json({
@@ -433,20 +471,24 @@ export async function uploadFeProof(req, res) {
     if (commentError) {
       console.error("Comment Insert Error:", commentError?.message || commentError);
     } else if (ticketComment?.id) {
-      console.error("[s3-proof-upload] schedule detached replication (on_site)", {
-        ticketId,
-        commentId: ticketComment.id,
-        actionType: actionToken.action_type || "ON_SITE",
-      });
-      void replicateProofsToS3({
-        ticketId,
-        actionType: actionToken.action_type || "ON_SITE",
-        commentId: ticketComment.id,
-        attachments: onsiteAttachments,
-        videoAttachmentMeta,
-      }).catch((err) =>
-        console.error("[s3-proof-upload] detached replication failed", err?.message || err)
-      );
+      try {
+        await persistProofsToTestS3({
+          ticketId,
+          organisationId:
+            ticketLifecycleRow?.organisation_id ?? actionToken.organisation_id ?? null,
+          commentId: ticketComment.id,
+          actionType: actionToken.action_type || "ON_SITE",
+          attachments: onsiteAttachments,
+          videoAttachmentMeta,
+          assignmentId: ticketLifecycleRow?.current_assignment_id ?? null,
+        });
+      } catch (s3Err) {
+        console.error("[s3-proof-upload] required upload failed (on_site)", s3Err?.message || s3Err);
+        return res.status(502).json({
+          error: "Proof saved to database but TEST S3 object storage failed",
+          code: "S3_PROOF_UPLOAD_FAILED",
+        });
+      }
     } else if (!commentError) {
       console.error("[s3-proof-upload] schedule skipped (on_site — no comment id)", { ticketId });
     }
@@ -504,7 +546,15 @@ export async function uploadFeProof(req, res) {
       );
     }
 
-    await markTokenUsed(token);
+    try {
+      await markTokenUsed(token);
+    } catch (markErr) {
+      // Proof + S3 already persisted; do not fail the client after successful storage.
+      console.error("[proof] markTokenUsed failed after successful ON_SITE proof persist", {
+        ticketId,
+        error: markErr?.message || markErr,
+      });
+    }
 
     if (actionToken.action_type === "ON_SITE") {
       const hasOnSiteConfirmedAt = await hasPublicColumn("ticket_assignments", "on_site_confirmed_at");
@@ -512,25 +562,36 @@ export async function uploadFeProof(req, res) {
       const assignmentMetaPayload = {};
       if (hasOnSiteConfirmedAt) assignmentMetaPayload.on_site_confirmed_at = nowIso;
       if (hasOnSiteProofCommentId) assignmentMetaPayload.on_site_proof_comment_id = ticketComment?.id ?? null;
-      if (Object.keys(assignmentMetaPayload).length > 0) {
-        await updateAssignmentById(
-          ticketLifecycleRow?.current_assignment_id ?? null,
-          assignmentMetaPayload
-        );
+      const assignmentId = ticketLifecycleRow?.current_assignment_id ?? null;
+      if (Object.keys(assignmentMetaPayload).length > 0 && assignmentId) {
+        const { error: assignMetaErr } = await updateAssignmentById(assignmentId, assignmentMetaPayload);
+        if (assignMetaErr) {
+          console.error("[proof] assignment metadata update failed", assignMetaErr?.message || assignMetaErr);
+        }
+      } else if (Object.keys(assignmentMetaPayload).length > 0 && !assignmentId) {
+        console.warn("[proof] assignment metadata skipped (no current_assignment_id)");
       } else {
         console.warn("[proof] assignment metadata columns missing; skipping safe write");
       }
 
-      const activatedTokenId = await activateResolutionTokenAfterOnSiteProof({
-        ticketId,
-        feId: actionToken.fe_id,
-      });
-      console.log(JSON.stringify({
-        event: "resolution_token_activated",
-        ticket_id: ticketId,
-        token_id: maskTokenForLog(activatedTokenId),
-        trigger_token_id: maskTokenForLog(token),
-      }));
+      try {
+        const activatedTokenId = await activateResolutionTokenAfterOnSiteProof({
+          ticketId,
+          feId: actionToken.fe_id,
+        });
+        console.log(JSON.stringify({
+          event: "resolution_token_activated",
+          ticket_id: ticketId,
+          token_id: maskTokenForLog(activatedTokenId),
+          trigger_token_id: maskTokenForLog(token),
+        }));
+      } catch (activateErr) {
+        // Proof + S3 already persisted; do not fail the client after successful storage.
+        console.error("[proof] resolution token activate failed after successful proof", {
+          ticketId,
+          error: activateErr?.message || activateErr,
+        });
+      }
     }
 
     return res.json({
@@ -539,9 +600,11 @@ export async function uploadFeProof(req, res) {
       demo: true,
     });
   } catch (err) {
-    console.error("[DEMO uploadFeProof ERROR]", err?.message || err);
+    const message = err?.message || (typeof err === "object" && err?.message) || String(err);
+    console.error("[DEMO uploadFeProof ERROR]", message, err?.code || err?.meta || "");
     return res.status(500).json({
       error: "Demo proof upload failed",
+      code: err?.code || "PROOF_UPLOAD_FAILED",
     });
   }
 }

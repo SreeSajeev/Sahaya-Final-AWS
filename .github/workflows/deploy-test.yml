@@ -34,6 +34,97 @@ jobs:
 
             git reset --hard origin/develop
 
+            # TEST-only shared-Supabase mutation freeze (app flags; does not touch Supabase dashboard).
+            # Exact string "true" required. Safe to re-run: upserts if present, appends if missing.
+            ensure_env_flag() {
+              local file="$1"
+              local key="$2"
+              local value="$3"
+              if [ ! -f "$file" ]; then
+                echo "Missing env file: $file" >&2
+                exit 1
+              fi
+              if grep -q "^${key}=" "$file"; then
+                sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file"
+                rm -f "${file}.bak"
+              else
+                printf '\n%s=%s\n' "$key" "$value" >> "$file"
+              fi
+              echo "Set ${key}=${value} in ${file}"
+            }
+
+            # Phase A: Prisma → EC2 Postgres is authoritative.
+            ensure_env_flag backend/.env DB_MODE prisma
+            # Phase C: dedicated TEST proof bucket (never crm-pariskq).
+            ensure_env_flag backend/.env S3_FE_PROOFS_BUCKET sahaya-test-fe-proofs
+            ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED true
+            ensure_env_flag backend/.env AWS_REGION ap-south-1
+            # Temporary Phase A write-path probe (disable after gate PASS).
+            ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
+
+            # Phase D: Sahaya local auth (no Supabase Auth at runtime).
+            ensure_env_flag backend/.env APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag frontend/.env VITE_APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN .test-sahaya.pariskq.in
+            ensure_env_flag backend/.env AUTH_COOKIE_SECURE true
+            ensure_env_flag backend/.env AUTH_COOKIE_SAMESITE lax
+            ensure_env_flag backend/.env AUTH_CORS_ORIGINS https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env JWT_ACCESS_TTL_SEC 900
+            ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
+            ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
+            ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
+            ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
+            ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
+            # TEST acceptance suites share role sample logins; keep limiter above suite volume.
+            ensure_env_flag backend/.env RATE_LIMIT_LOGIN_MAX 200
+
+            # Phase E: remove obsolete Supabase / freeze keys from TEST env only (never print values).
+            remove_env_key() {
+              local file="$1"
+              local key="$2"
+              if [ ! -f "$file" ]; then
+                return 0
+              fi
+              if grep -q "^${key}=" "$file"; then
+                sed -i.bak "/^${key}=/d" "$file"
+                rm -f "${file}.bak"
+                echo "Removed ${key} from ${file}"
+              fi
+            }
+            remove_env_key backend/.env SUPABASE_URL
+            remove_env_key backend/.env SUPABASE_ANON_KEY
+            remove_env_key backend/.env SUPABASE_SERVICE_ROLE_KEY
+            remove_env_key backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED
+            remove_env_key frontend/.env VITE_SUPABASE_URL
+            remove_env_key frontend/.env VITE_SUPABASE_ANON_KEY
+            remove_env_key frontend/.env VITE_SUPABASE_PUBLISHABLE_KEY
+            remove_env_key frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED
+
+            # Generate JWT secrets once if missing (never echo values).
+            ensure_secret_once() {
+              local file="$1"
+              local key="$2"
+              if [ ! -f "$file" ]; then
+                echo "Missing env file: $file" >&2
+                exit 1
+              fi
+              if grep -q "^${key}=.\+" "$file"; then
+                echo "Keeping existing ${key}"
+              else
+                local val
+                val="$(openssl rand -base64 48 | tr -d '\n')"
+                if grep -q "^${key}=" "$file"; then
+                  sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file"
+                  rm -f "${file}.bak"
+                else
+                  printf '\n%s=%s\n' "$key" "$val" >> "$file"
+                fi
+                echo "Generated ${key} in ${file}"
+              fi
+            }
+            ensure_secret_once backend/.env JWT_ACCESS_SECRET
+            ensure_secret_once backend/.env JWT_REFRESH_SECRET
+
             echo "===== FRONTEND ====="
 
             cd frontend
@@ -52,7 +143,18 @@ jobs:
 
             npm install
 
-            pm2 restart sahaya-final-aws-monorepo-api
+            npx prisma generate
+
+            # Existing TEST DB was created outside Prisma Migrate (P3005 if we deploy cold).
+            # Apply Phase D DDL idempotently, then baseline that migration so future deploys use migrate deploy.
+            if ! npx prisma migrate deploy; then
+              echo "migrate deploy failed — baselining existing DB for Phase D auth migration"
+              npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
+              npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth
+              npx prisma migrate deploy
+            fi
+
+            pm2 restart sahaya-final-aws-monorepo-api --update-env
 
             systemctl reload nginx
 

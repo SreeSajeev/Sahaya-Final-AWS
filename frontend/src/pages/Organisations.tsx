@@ -24,12 +24,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Ticket, Users, Truck, UserCheck, ChevronRight, Plus, UserPlus, Pencil } from "lucide-react";
 import { Organisation } from "@/lib/types";
-import {
-  normalizeOrgSlug,
-  fetchTicketStubsForOrganisationSlugs,
-  aggregateTicketCountsByNormalizedSlug,
-  fetchBreachedTicketIds,
-} from "@/lib/tenantTicketsSupabase";
 import { fetchJson } from "@/lib/backendDataApi";
 import { createAdminUser } from "@/lib/createAdminUser";
 
@@ -78,118 +72,43 @@ export default function Organisations() {
       >
     > => {
       const orgsList = organisations as Organisation[];
-      let legacy: Record<
+      const res = await fetchJson<{
+        items: Record<
+          string,
+          {
+            totalTickets: number;
+            openTickets: number;
+            feCount: number;
+            userCount: number;
+            distinctClients: number;
+            slaBreached: number;
+          }
+        >;
+      }>(`/data/organisations/stats`);
+      const items = res.items ?? {};
+      const out: Record<
         string,
         {
-          totalTickets?: number;
-          openTickets?: number;
+          totalTickets: number;
+          openTickets: number;
           feCount: number;
           userCount: number;
           distinctClients: number;
-          slaBreached?: number;
+          slaBreached: number;
         }
       > = {};
-      try {
-        const res = await fetchJson<{
-          items: Record<
-            string,
-            {
-              totalTickets: number;
-              openTickets: number;
-              feCount: number;
-              userCount: number;
-              distinctClients: number;
-              slaBreached: number;
-            }
-          >;
-        }>(`/data/organisations/stats`);
-        legacy = res.items ?? {};
-      } catch {
-        /* optional: FE / user counts from API */
+      for (const org of orgsList) {
+        const row = items[org.id];
+        out[org.id] = {
+          totalTickets: row?.totalTickets ?? 0,
+          openTickets: row?.openTickets ?? 0,
+          feCount: row?.feCount ?? 0,
+          userCount: row?.userCount ?? 0,
+          distinctClients: row?.distinctClients ?? 0,
+          slaBreached: row?.slaBreached ?? 0,
+        };
       }
-
-      try {
-        const stubs = await fetchTicketStubsForOrganisationSlugs(orgsList.map((o) => o.slug));
-        const bySlug = aggregateTicketCountsByNormalizedSlug(stubs);
-        const breachIds = await fetchBreachedTicketIds(stubs.map((s) => s.id));
-
-        const out: Record<
-          string,
-          {
-            totalTickets: number;
-            openTickets: number;
-            feCount: number;
-            userCount: number;
-            distinctClients: number;
-            slaBreached: number;
-          }
-        > = {};
-
-        for (const org of orgsList) {
-          const slugKey = normalizeOrgSlug(org.slug);
-          const legacyRow = legacy[org.id];
-          const b = slugKey ? bySlug[slugKey] : undefined;
-          let slaBreached = 0;
-          if (b) {
-            for (const tid of b.ticketIds) {
-              if (breachIds.has(tid)) slaBreached += 1;
-            }
-          }
-
-          const distinctClients =
-            (b?.distinctClientSlugs.size ?? 0) > 0
-              ? b!.distinctClientSlugs.size
-              : (legacyRow?.distinctClients ?? 0);
-
-          out[org.id] = {
-            totalTickets: b?.total ?? legacyRow?.totalTickets ?? 0,
-            openTickets: b?.open ?? legacyRow?.openTickets ?? 0,
-            feCount: legacyRow?.feCount ?? 0,
-            userCount: legacyRow?.userCount ?? 0,
-            distinctClients,
-            slaBreached: slaBreached,
-          };
-        }
-
-        if (import.meta.env.DEV) {
-          const sample = orgsList[0];
-          if (sample) {
-            const b0 = bySlug[normalizeOrgSlug(sample.slug)];
-            // eslint-disable-next-line no-console
-            console.info("[OrganisationsTicketStats]", "sample org.slug:", sample.slug, "matched tickets:", b0?.total ?? 0);
-          }
-        }
-
-        return out;
-      } catch (err) {
-        if (import.meta.env.DEV) {
-          // eslint-disable-next-line no-console
-          console.error("[OrganisationsTicketStats] Supabase aggregation failed:", err instanceof Error ? err.message : err);
-        }
-        const fallback: Record<
-          string,
-          {
-            totalTickets: number;
-            openTickets: number;
-            feCount: number;
-            userCount: number;
-            distinctClients: number;
-            slaBreached: number;
-          }
-        > = {};
-        for (const org of orgsList) {
-          const row = legacy[org.id];
-          fallback[org.id] = {
-            totalTickets: row?.totalTickets ?? 0,
-            openTickets: row?.openTickets ?? 0,
-            feCount: row?.feCount ?? 0,
-            userCount: row?.userCount ?? 0,
-            distinctClients: row?.distinctClients ?? 0,
-            slaBreached: row?.slaBreached ?? 0,
-          };
-        }
-        return fallback;
-      }
+      return out;
     },
   });
 

@@ -282,7 +282,7 @@ export default function Settings() {
               />
               <ConfigRow 
                 label="Auth Provider" 
-                value="Supabase Auth"
+                value="Local Auth"
                 type="text"
                 systemControlled
               />

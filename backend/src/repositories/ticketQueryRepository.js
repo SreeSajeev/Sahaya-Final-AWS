@@ -64,9 +64,15 @@ function buildListWhere(req, filters = {}) {
     where.organisationId = filters.organisationIdFilter;
   }
   if (filters.status && filters.status !== "all") where.status = filters.status;
-  if (filters.clientSlug) where.clientSlug = filters.clientSlug;
+  if (filters.clientSlug) {
+    where.clientSlug = { equals: filters.clientSlug, mode: "insensitive" };
+  }
   if (filters.stateFilter) where.state = filters.stateFilter;
   if (filters.unassignedOnly) where.currentAssignmentId = null;
+  if (filters.needsReview === true) where.needsReview = true;
+  if (filters.reviewQueue === true) {
+    where.OR = [{ status: "NEEDS_REVIEW" }, { needsReview: true }];
+  }
   if (filters.startDate) where.openedAt = { ...(where.openedAt || {}), gte: new Date(filters.startDate) };
   if (filters.endDate) where.openedAt = { ...(where.openedAt || {}), lte: new Date(filters.endDate) };
   return where;

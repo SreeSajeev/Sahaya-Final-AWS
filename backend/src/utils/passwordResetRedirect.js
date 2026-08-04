@@ -60,7 +60,7 @@ export function getAllowedPasswordResetOrigins() {
 }
 
 /**
- * Resolve redirect URL passed to Supabase generateLink.
+ * Resolve redirect URL for Sahaya password-reset emails.
  * Production: always canonical (ignores client origin — prevents localhost in emails).
  * Development: validated client redirect or canonical fallback.
  */
@@ -86,7 +86,7 @@ export function resolvePasswordResetRedirectTo(clientRedirect) {
 }
 
 /**
- * Ensure Supabase verify link redirects to our SPA /reset-password (not Site URL root).
+ * Legacy helper (unused by Phase D local auth). Kept for Phase E cleanup.
  * Rewrites redirect_to query param without logging tokens.
  */
 export function rewriteActionLinkRedirect(actionLink, redirectTo) {

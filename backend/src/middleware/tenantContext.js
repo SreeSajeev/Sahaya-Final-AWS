@@ -1,31 +1,11 @@
 import { ENFORCE_TENANT_GUARD } from "../config/appConfig.js";
 import { jsonRes } from "../utils/http.js";
-import { findTenantContextUserByAuthId } from "../repositories/userRepository.js";
+import { resolveAppUserFromAccessToken } from "./auth.js";
 
 function getBearerToken(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || typeof authHeader !== "string") return null;
-  return authHeader.replace("Bearer ", "");
-}
-
-async function resolveAppUserFromToken(token) {
-  const base = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
-  const apiKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
-  if (!base || !apiKey) return null;
-
-  const res = await fetch(`${base}/auth/v1/user`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: apiKey,
-    },
-  }).catch(() => null);
-  if (!res || !res.ok) return null;
-  const authUser = await res.json().catch(() => null);
-  if (!authUser?.id) return null;
-
-  const appUser = await findTenantContextUserByAuthId(authUser.id);
-  return appUser ?? null;
+  return authHeader.replace(/^Bearer\s+/i, "").trim();
 }
 
 export function attachTenantContext({ requireAuthenticated = false } = {}) {
@@ -35,7 +15,7 @@ export function attachTenantContext({ requireAuthenticated = false } = {}) {
       if (!appUser) {
         const token = getBearerToken(req);
         if (token) {
-          appUser = await resolveAppUserFromToken(token);
+          appUser = await resolveAppUserFromAccessToken(token);
           if (appUser) req.appUser = appUser;
         }
       }
@@ -104,4 +84,3 @@ export function requireTenantOrSuperAdmin(req, res, next) {
 export function denyTenantMismatch(res) {
   return jsonRes(res, 403, { error: "Forbidden" });
 }
-

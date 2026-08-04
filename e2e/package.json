@@ -7,9 +7,11 @@
     "test": "playwright test",
     "test:e2e": "playwright test",
     "test:ui": "playwright test --ui",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "acceptance": "playwright test --reporter=list,./reporters/acceptance-reporter.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0"
+    "@playwright/test": "^1.51.0",
+    "dotenv": "^16.4.7"
   }
 }

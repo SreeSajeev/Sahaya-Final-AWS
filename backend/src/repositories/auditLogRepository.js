@@ -116,11 +116,10 @@ export async function listAuditLogsPaginated(
 function auditRowToPrismaCreate(row) {
   return {
     entityType: row.entity_type,
-    entityId: row.entity_id ?? null,
+    entityId: row.entity_id,
     action: row.action,
-    metadata: row.metadata ?? undefined,
-    organisationId: row.organisation_id ?? null,
-    performedBy: row.performed_by ?? null,
+    metadata: row.metadata ?? {},
+    organisationId: row.organisation_id,
     actorUserId: row.actor_user_id ?? null,
     actorFeId: row.actor_fe_id ?? null,
     actorRole: row.actor_role ?? null,

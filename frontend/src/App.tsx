@@ -98,7 +98,6 @@ import {
   RequireClient,
   RequireAdmin,
 } from "@/components/auth/AuthGuards";
-import { PasswordRecoveryHashRedirect } from "@/components/auth/PasswordRecoveryHashRedirect";
 import { ClientLayout } from "@/components/layout/ClientLayout";
 
 // Pages
@@ -170,7 +169,6 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <PasswordRecoveryHashRedirect />
         <TooltipProvider>
           <Toaster />
           <Sonner />

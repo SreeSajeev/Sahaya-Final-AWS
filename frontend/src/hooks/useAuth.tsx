@@ -5,12 +5,16 @@ import {
   useState,
   ReactNode,
 } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import type { User, Session } from "@supabase/supabase-js";
 import { UserRole } from "@/lib/types";
 import { SignUpSchema, formatZodError } from "@/lib/validation";
 import { z } from "zod";
-import { fetchJson } from "@/lib/backendDataApi";
+import {
+  clearStoredAccessToken,
+  fetchJson,
+  postPublicJson,
+  setStoredAccessToken,
+  crmApiUrl,
+} from "@/lib/backendDataApi";
 
 /* ================= TYPES ================= */
 
@@ -25,9 +29,20 @@ interface UserProfile {
   organisation_id: string | null;
 }
 
+/** Compatibility shape formerly from Supabase User/Session. */
+interface AuthUser {
+  id: string;
+  email?: string | null;
+}
+
+interface AuthSession {
+  access_token: string;
+  user: AuthUser;
+}
+
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  user: AuthUser | null;
+  session: AuthSession | null;
   userProfile: UserProfile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
@@ -73,169 +88,141 @@ const parseUserRole = (role: string): UserRole | null => {
   return null;
 };
 
+function toProfile(data: Record<string, unknown> | null): {
+  profile: UserProfile | null;
+  deactivated: boolean;
+  approvalStatus?: "pending" | "rejected";
+} {
+  if (!data) return { profile: null, deactivated: false };
+
+  const approvalStatus = data.approval_status as string | null | undefined;
+  if (approvalStatus === "pending" || approvalStatus === "rejected") {
+    return { profile: null, deactivated: false, approvalStatus };
+  }
+  if (data.is_active === false) {
+    return { profile: null, deactivated: true };
+  }
+  const role = parseUserRole(String(data.role ?? ""));
+  if (!role) return { profile: null, deactivated: false };
+  const isSuperAdmin = role === "SUPER_ADMIN";
+  if (!isSuperAdmin && (data.organisation_id == null || data.organisation_id === "")) {
+    return { profile: null, deactivated: false };
+  }
+  return {
+    profile: {
+      id: String(data.id),
+      name: String(data.name ?? ""),
+      email: String(data.email ?? ""),
+      role,
+      active: data.active !== false,
+      client_slug: data.client_slug != null ? String(data.client_slug) : null,
+      organisation_id: data.organisation_id != null ? String(data.organisation_id) : null,
+    },
+    deactivated: false,
+  };
+}
+
 /* ================= PROVIDER ================= */
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /* ---------- PROFILE FETCH ---------- */
-
-  const resolveUserProfile = async (
-    authUser: User
-  ): Promise<{ profile: UserProfile | null; deactivated: boolean; approvalStatus?: "pending" | "rejected" }> => {
-    const dataRes = await fetchJson<{ profile: any | null }>(`/auth/me`);
-    const data = dataRes?.profile ?? null;
-    const error = null;
-
-    if (import.meta.env.DEV) {
-      // AUTH DEBUG: DB lookup result
-      // eslint-disable-next-line no-console
-      console.info("[AUTH DEBUG] DB profile lookup", {
-        authUserId: authUser.id,
-        email: authUser.email,
-        error: error ? { message: error.message, code: (error as any).code } : null,
-        found: !!data,
-        row: data
-          ? {
-              id: (data as { id: string }).id,
-              role: (data as { role: string }).role,
-              organisation_id: (data as { organisation_id?: string | null }).organisation_id ?? null,
-              client_slug: (data as { client_slug?: string | null }).client_slug ?? null,
-            }
-          : null,
-      });
+  const applyProfile = (profile: UserProfile | null, accessToken: string | null) => {
+    if (!profile || !accessToken) {
+      setUser(null);
+      setSession(null);
+      setUserProfile(null);
+      return;
     }
-
-    if (error || !data) return { profile: null, deactivated: false };
-
-    // Only block when explicitly pending or rejected. Treat null/undefined as approved (backward compatibility if migration not run).
-    const approvalStatus = (data as { approval_status?: string | null }).approval_status;
-    if (approvalStatus === "pending" || approvalStatus === "rejected") {
-      return { profile: null, deactivated: false, approvalStatus };
-    }
-
-    if (data.is_active === false) {
-      return { profile: null, deactivated: true };
-    }
-
-    const role = parseUserRole(data.role);
-    if (!role) return { profile: null, deactivated: false };
-
-    const isSuperAdmin = role === "SUPER_ADMIN";
-    if (!isSuperAdmin && (data.organisation_id == null || data.organisation_id === "")) {
-      return { profile: null, deactivated: false };
-    }
-
-    return {
-      profile: {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        role,
-        active: data.active,
-        client_slug: data.client_slug ?? null,
-        organisation_id: data.organisation_id ?? null,
-      },
-      deactivated: false,
-    };
+    const authUser = { id: profile.id, email: profile.email };
+    setUser(authUser);
+    setSession({ access_token: accessToken, user: authUser });
+    setUserProfile(profile);
   };
-
-  /* ---------- HYDRATION ---------- */
 
   useEffect(() => {
     let cancelled = false;
 
-    const hydrate = async (sess: Session | null) => {
-      if (cancelled) return;
-
-      setSession(sess);
-      setUser(sess?.user ?? null);
-
-      if (import.meta.env.DEV) {
-        // AUTH DEBUG: initial session / environment
-        // eslint-disable-next-line no-console
-        console.info("[AUTH DEBUG] hydrate", {
-          supabaseUrl: (import.meta as any).env?.VITE_SUPABASE_URL,
-          authUserId: sess?.user?.id ?? null,
-          email: sess?.user?.email ?? null,
-          hasSession: !!sess,
+    const hydrate = async () => {
+      try {
+        const res = await fetch(crmApiUrl("/auth/refresh"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: "{}",
         });
-      }
-
-      if (sess?.user) {
-        let result = await resolveUserProfile(sess.user);
-
-        if (result.deactivated) {
-          await supabase.auth.signOut();
-          if (typeof sessionStorage !== "undefined") {
-            sessionStorage.setItem("auth_deactivated", "1");
-          }
-          if (!cancelled) {
-            setUser(null);
-            setSession(null);
-            setUserProfile(null);
-          }
-          if (!cancelled) setLoading(false);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          clearStoredAccessToken();
+          applyProfile(null, null);
+          setLoading(false);
           return;
         }
-
-        if (result.approvalStatus) {
-          await supabase.auth.signOut();
-          if (typeof sessionStorage !== "undefined") {
-            sessionStorage.setItem("auth_approval_status", result.approvalStatus);
-          }
-          if (!cancelled) {
-            setUser(null);
-            setSession(null);
-            setUserProfile(null);
-          }
-          if (!cancelled) setLoading(false);
-          return;
+        const accessToken = (data as { accessToken?: string }).accessToken ?? null;
+        const profileRaw = (data as { profile?: Record<string, unknown> }).profile ?? null;
+        if (accessToken) setStoredAccessToken(accessToken);
+        const resolved = toProfile(profileRaw);
+        if (resolved.deactivated) {
+          clearStoredAccessToken();
+          sessionStorage.setItem("auth_deactivated", "1");
+          applyProfile(null, null);
+        } else if (resolved.approvalStatus) {
+          clearStoredAccessToken();
+          sessionStorage.setItem("auth_approval_status", resolved.approvalStatus);
+          applyProfile(null, null);
+        } else {
+          applyProfile(resolved.profile, accessToken);
         }
-
-        // Auto-provision profile for newly confirmed users (no row in public.users yet).
-        if (!result.profile && sess.user.email) {
-      await fetchJson<{ profile: unknown }>(`/auth/provision-user`, { method: "POST" });
-      result = await resolveUserProfile(sess.user);
+      } catch {
+        if (!cancelled) {
+          clearStoredAccessToken();
+          applyProfile(null, null);
         }
-
-        if (!cancelled) setUserProfile(result.profile);
-      } else {
-        setUserProfile(null);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      if (!cancelled) setLoading(false);
     };
 
-    // ✅ INITIAL SESSION (CRITICAL FIX)
-    supabase.auth.getSession().then(({ data }) => {
-      hydrate(data.session ?? null);
-    });
-
-    // ✅ ALL FUTURE AUTH CHANGES (INCLUDING REFRESH)
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        hydrate(newSession ?? null);
-      }
-    );
-
+    void hydrate();
     return () => {
       cancelled = true;
-      listener.subscription.unsubscribe();
     };
   }, []);
 
-  /* ---------- ACTIONS ---------- */
-
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    return { error: error as Error | null };
+    try {
+      const res = await fetch(crmApiUrl("/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = (data as { error?: string })?.error || "Login failed";
+        const code = (data as { code?: string })?.code;
+        if (code === "ACCOUNT_DEACTIVATED") sessionStorage.setItem("auth_deactivated", "1");
+        if (code === "APPROVAL_REQUIRED") {
+          sessionStorage.setItem(
+            "auth_approval_status",
+            String((data as { approvalStatus?: string }).approvalStatus || "pending")
+          );
+        }
+        return { error: new Error(msg) };
+      }
+      const accessToken = (data as { accessToken?: string }).accessToken ?? null;
+      const profileRaw = (data as { profile?: Record<string, unknown> }).profile ?? null;
+      if (accessToken) setStoredAccessToken(accessToken);
+      const resolved = toProfile(profileRaw);
+      applyProfile(resolved.profile, accessToken);
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err : new Error("Login failed") };
+    }
   };
 
   const signUp = async (
@@ -247,22 +234,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ): Promise<{ data?: { user: { id: string }; userId?: string }; error: Error | null }> => {
     try {
       SignUpSchema.parse({ email, password, name, role });
-
-      const metadata: Record<string, unknown> = { name, role };
-      if (organisationId && role !== "SUPER_ADMIN") metadata.organisation_id = organisationId;
-
-      const { data: authData, error } = await supabase.auth.signUp({
+      if (role === "SUPER_ADMIN" || role === "ADMIN" || role === "CLIENT") {
+        return {
+          error: new Error("Use admin provisioning for this role (server-side)."),
+        };
+      }
+      if (!organisationId) {
+        return { error: new Error("organisationId is required") };
+      }
+      const data = await postPublicJson<{ userId?: string }>("/auth/signup", {
         email: email.trim(),
         password,
-        options: {
-          data: metadata,
-          emailRedirectTo: window.location.origin,
-        },
+        name: name.trim(),
+        role,
+        organisationId,
       });
-
-      if (error) return { error: error as Error | null };
-
-      return { data: authData?.user ? { user: authData.user } : undefined, error: null };
+      return {
+        data: data.userId ? { user: { id: data.userId }, userId: data.userId } : undefined,
+        error: null,
+      };
     } catch (err) {
       if (err instanceof z.ZodError) {
         return { error: new Error(formatZodError(err)) };
@@ -271,7 +261,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  /** Public signup: creates auth user + users row with approval_status 'pending'. Only STAFF and FIELD_EXECUTIVE. */
   const signUpPublic = async (
     name: string,
     email: string,
@@ -285,13 +274,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!organisationId || !trimmedEmail || !password) {
         return { error: new Error("Name, email, password and tenant are required.") };
       }
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      await postPublicJson("/auth/signup", {
+        name: trimmedName,
         email: trimmedEmail,
         password,
-        options: { data: { name: trimmedName, role, organisation_id: organisationId, approval_status: "pending" } },
+        role,
+        organisationId,
       });
-      if (authError) return { error: authError as Error };
-      if (!authData?.user) return { error: new Error("Account could not be created.") };
       return { error: null };
     } catch (err) {
       return { error: err instanceof Error ? err : new Error("Signup failed") };
@@ -300,17 +289,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     try {
-      await supabase.auth.signOut();
+      await fetch(crmApiUrl("/auth/logout"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: "{}",
+      });
     } catch {
-      // Proceed to clear state and redirect even if signOut fails (e.g. network)
+      /* ignore */
     }
+    clearStoredAccessToken();
     setUser(null);
     setSession(null);
     setUserProfile(null);
     window.location.replace("/");
   };
-
-  /* ---------- DERIVED ROLES ---------- */
 
   const isFieldExecutive = userProfile?.role === "FIELD_EXECUTIVE";
   const isServiceStaff = userProfile?.role === "STAFF";
@@ -343,8 +336,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthContext.Provider>
   );
 }
-
-/* ================= HOOK ================= */
 
 export function useAuth() {
   const ctx = useContext(AuthContext);

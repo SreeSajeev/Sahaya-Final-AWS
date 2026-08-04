@@ -13,6 +13,9 @@ const USER_SNAKE_TO_CAMEL = {
   approval_status: "approvalStatus",
   organisation_id: "organisationId",
   client_slug: "clientSlug",
+  password_hash: "passwordHash",
+  password_changed_at: "passwordChangedAt",
+  last_login_at: "lastLoginAt",
 };
 
 function userPatchToPrisma(patch) {

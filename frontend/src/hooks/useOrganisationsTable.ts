@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Json } from "@/integrations/supabase/types";
 import { Organisation } from "@/lib/types";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchJson } from "@/lib/backendDataApi";
 
 /** Map DB row → app Organisation (email arrays may be absent on older schemas). */
 function mapOrgRow(row: {
@@ -10,13 +9,13 @@ function mapOrgRow(row: {
   slug: string;
   created_at: string | null;
   status: string;
-  incoming_emails?: Json | null;
-  outgoing_emails?: Json | null;
+  incoming_emails?: unknown;
+  outgoing_emails?: unknown;
   spoc_name?: string | null;
   spoc_email?: string | null;
   spoc_phone?: string | null;
 }): Organisation {
-  const toStrArr = (j: Json | undefined | null) =>
+  const toStrArr = (j: unknown) =>
     Array.isArray(j) ? j.filter((x): x is string => typeof x === "string") : [];
 
   const org: Organisation = {
@@ -37,7 +36,7 @@ function mapOrgRow(row: {
 }
 
 /**
- * Organisations — direct Supabase (no `/data` API).
+ * Organisations — backend Prisma API (`/data/organisations`).
  */
 export function useOrganisationsTable(options?: { enabled?: boolean }) {
   const enabled = options?.enabled !== false;
@@ -45,21 +44,10 @@ export function useOrganisationsTable(options?: { enabled?: boolean }) {
     queryKey: ["organisations-table"],
     enabled,
     queryFn: async (): Promise<Organisation[]> => {
-      const { data, error } = await supabase
-        .from("organisations")
-        .select("id,name,slug,created_at,status,incoming_emails,outgoing_emails,spoc_name,spoc_email,spoc_phone")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error("[OrganisationsTable] Supabase organisations query failed:", {
-          message: error.message,
-          code: error.code,
-        });
-        throw new Error(error.message);
-      }
-
-      return (data ?? []).map(mapOrgRow);
+      const res = await fetchJson<{ items: Parameters<typeof mapOrgRow>[0][] }>(
+        "/data/organisations"
+      );
+      return (res.items ?? []).map(mapOrgRow);
     },
   });
 }
@@ -80,7 +68,8 @@ function normalizeEmailArray(list: unknown): string[] {
 }
 
 /**
- * Create a new organisation via Supabase. Super Admin only — requires RLS/policies that allow INSERT for that role (or trusted client).
+ * Create a new organisation via backend Prisma API. Super Admin only.
+ * Does not provision Supabase Auth users (Auth remains frozen separately).
  */
 export function useCreateOrganisation() {
   const queryClient = useQueryClient();
@@ -100,20 +89,17 @@ export function useCreateOrganisation() {
         outgoing = normalizeEmailArray([legacy, ...outgoing]);
       }
 
-      const { data, error } = await supabase
-        .from("organisations")
-        .insert({
+      const data = await fetchJson<Parameters<typeof mapOrgRow>[0]>("/data/organisations", {
+        method: "POST",
+        body: {
           name: payload.name.trim(),
           slug,
-          status: "active",
+          email: legacy || undefined,
           incoming_emails: incoming,
           outgoing_emails: outgoing,
-        })
-        .select("id,name,slug,created_at,status,incoming_emails,outgoing_emails,spoc_name,spoc_email,spoc_phone")
-        .single();
-
-      if (error) throw new Error(error.message);
-      if (!data) throw new Error("Tenant insert returned no row.");
+        },
+      });
+      if (!data) throw new Error("Tenant create returned no row.");
       return mapOrgRow(data);
     },
     onSuccess: (created) => {
@@ -126,7 +112,7 @@ export function useCreateOrganisation() {
 }
 
 /**
- * Update organisation fields via Supabase. Super Admin (or policy that allows UPDATE).
+ * Update organisation fields via backend Prisma API.
  */
 export function useUpdateOrganisation() {
   const queryClient = useQueryClient();
@@ -143,30 +129,29 @@ export function useUpdateOrganisation() {
       const incoming = normalizeEmailArray(payload.incoming_emails);
       const outgoing = normalizeEmailArray(payload.outgoing_emails);
 
-      const { data, error } = await supabase
-        .from("organisations")
-        .update({
-          name: payload.name.trim(),
-          incoming_emails: incoming,
-          outgoing_emails: outgoing,
-          spoc_name:
-            payload.spoc_name != null && String(payload.spoc_name).trim() !== ""
-              ? String(payload.spoc_name).trim()
-              : null,
-          spoc_email:
-            payload.spoc_email != null && String(payload.spoc_email).trim() !== ""
-              ? String(payload.spoc_email).trim()
-              : null,
-          spoc_phone:
-            payload.spoc_phone != null && String(payload.spoc_phone).trim() !== ""
-              ? String(payload.spoc_phone).trim()
-              : null,
-        })
-        .eq("id", payload.id)
-        .select("id,name,slug,created_at,status,incoming_emails,outgoing_emails,spoc_name,spoc_email,spoc_phone")
-        .single();
-
-      if (error) throw new Error(error.message);
+      const data = await fetchJson<Parameters<typeof mapOrgRow>[0]>(
+        `/data/organisations/${encodeURIComponent(payload.id)}`,
+        {
+          method: "PATCH",
+          body: {
+            name: payload.name.trim(),
+            incoming_emails: incoming,
+            outgoing_emails: outgoing,
+            spoc_name:
+              payload.spoc_name != null && String(payload.spoc_name).trim() !== ""
+                ? String(payload.spoc_name).trim()
+                : null,
+            spoc_email:
+              payload.spoc_email != null && String(payload.spoc_email).trim() !== ""
+                ? String(payload.spoc_email).trim()
+                : null,
+            spoc_phone:
+              payload.spoc_phone != null && String(payload.spoc_phone).trim() !== ""
+                ? String(payload.spoc_phone).trim()
+                : null,
+          },
+        }
+      );
       if (!data) throw new Error("Tenant update returned no row.");
       return mapOrgRow(data);
     },

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "inspect | provision | restore | cutover | rollback | smoke | s3_probe | s3_provision"
+        description: "inspect | provision | restore | cutover | rollback | smoke"
         required: true
         default: inspect
         type: choice
@@ -21,8 +21,6 @@ on:
           - smoke
           - schema_probe
           - prove_marker
-          - s3_probe
-          - s3_provision
       rds_identifier:
         description: "RDS instance id (TEST only)"
         required: false
@@ -36,7 +34,7 @@ on:
         required: false
         default: db.t4g.micro
       confirm:
-        description: "Type CONFIRM for mutating modes (provision/restore/cutover/rollback/s3_provision)"
+        description: "Type CONFIRM for mutating modes (provision/restore/cutover/rollback)"
         required: false
         default: ""
 
@@ -209,164 +207,6 @@ jobs:
               docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT count(*) FROM ticket_number_sequences;" 2>&1 || echo missing_table
               echo "===== baseline counts ====="
               docker exec sahaya-migration-db psql -U sahaya -d sahaya -tAc "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'), (SELECT count(*) FROM users), (SELECT count(*) FROM organisations), (SELECT count(*) FROM tickets);"
-              exit 0
-            fi
-
-            if [ "$MODE" = "s3_probe" ] || [ "$MODE" = "s3_provision" ]; then
-              TARGET_BUCKET="sahaya-test-fe-proofs"
-              FORBIDDEN_BUCKET="crm-pariskq"
-              echo "===== PHASE C S3 CAPABILITY ($MODE) ====="
-              echo "target_bucket=$TARGET_BUCKET forbidden_bucket=$FORBIDDEN_BUCKET region=$REGION"
-              if [ ! -f "$BACKEND_ENV" ]; then
-                echo "backend .env missing"
-                exit 2
-              fi
-              grep -E '^(AWS_REGION|S3_FE_PROOFS_ENABLED|S3_FE_PROOFS_BUCKET|SHARED_SUPABASE_MUTATIONS_DISABLED)=' "$BACKEND_ENV" || true
-              echo -n "HAS_AWS_ACCESS_KEY_ID="; grep -q '^AWS_ACCESS_KEY_ID=.' "$BACKEND_ENV" && echo yes || echo no
-              echo -n "HAS_AWS_SECRET_ACCESS_KEY="; grep -q '^AWS_SECRET_ACCESS_KEY=.' "$BACKEND_ENV" && echo yes || echo no
-              echo -n "HAS_AWS_SESSION_TOKEN="; grep -q '^AWS_SESSION_TOKEN=.' "$BACKEND_ENV" && echo yes || echo no
-              TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
-              if [ -n "$TOKEN" ]; then
-                CODE=$(curl -s -o /tmp/iaminfo.txt -w '%{http_code}' -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/info || true)
-                echo "IMDS_IAM_INFO_HTTP=$CODE"
-              fi
-              cd "$MONOREPO/backend"
-              export PHASE_C_MODE="$MODE"
-              export PHASE_C_CONFIRM="$CONFIRM"
-              export PHASE_C_TARGET_BUCKET="$TARGET_BUCKET"
-              export PHASE_C_FORBIDDEN_BUCKET="$FORBIDDEN_BUCKET"
-              node --input-type=module <<'NODE'
-            import dotenv from 'dotenv';
-            import {
-              S3Client,
-              HeadBucketCommand,
-              CreateBucketCommand,
-              PutBucketEncryptionCommand,
-              PutPublicAccessBlockCommand,
-              PutObjectCommand,
-              GetObjectCommand,
-              DeleteObjectCommand,
-            } from '@aws-sdk/client-s3';
-
-            dotenv.config({ path: '.env' });
-            const region = String(process.env.AWS_REGION || 'ap-south-1').trim();
-            const target = String(process.env.PHASE_C_TARGET_BUCKET || 'sahaya-test-fe-proofs').trim();
-            const forbidden = String(process.env.PHASE_C_FORBIDDEN_BUCKET || 'crm-pariskq').trim();
-            const mode = String(process.env.PHASE_C_MODE || 's3_probe');
-            const confirm = String(process.env.PHASE_C_CONFIRM || '');
-            const configured = String(process.env.S3_FE_PROOFS_BUCKET || '').trim();
-
-            console.log(JSON.stringify({
-              region,
-              configuredBucket: configured || null,
-              enabled: process.env.S3_FE_PROOFS_ENABLED || null,
-              hasAccessKey: Boolean(process.env.AWS_ACCESS_KEY_ID),
-              hasSecret: Boolean(process.env.AWS_SECRET_ACCESS_KEY),
-              configuredIsForbidden: configured === forbidden,
-              target,
-            }));
-
-            if (configured === forbidden) {
-              console.log(JSON.stringify({ warning: 'configured_bucket_is_forbidden_crm_pariskq' }));
-            }
-
-            const client = new S3Client({ region });
-            async function head(name) {
-              try {
-                await client.send(new HeadBucketCommand({ Bucket: name }));
-                return { name, exists: true, error: null };
-              } catch (e) {
-                return { name, exists: false, error: e?.name || e?.Code || e?.message || String(e) };
-              }
-            }
-
-            const headTarget = await head(target);
-            const headForbidden = await head(forbidden);
-            console.log(JSON.stringify({ headTarget, headForbiddenExistsOnly: headForbidden }));
-
-            if (mode !== 's3_provision') {
-              console.log(JSON.stringify({ createSkipped: true, reason: 'probe_only' }));
-              process.exit(0);
-            }
-            if (confirm !== 'CONFIRM') {
-              console.log(JSON.stringify({ createSkipped: true, reason: 'need_confirm_CONFIRM' }));
-              process.exit(2);
-            }
-            if (target === forbidden) {
-              console.log(JSON.stringify({ refused: true, reason: 'refuses_forbidden_bucket' }));
-              process.exit(3);
-            }
-
-            if (!headTarget.exists) {
-              try {
-                const cfg = region === 'us-east-1' ? {} : { CreateBucketConfiguration: { LocationConstraint: region } };
-                await client.send(new CreateBucketCommand({ Bucket: target, ...cfg }));
-                console.log(JSON.stringify({ created: true, bucket: target }));
-              } catch (e) {
-                console.log(JSON.stringify({ created: false, error: e?.name || e?.message }));
-                process.exit(4);
-              }
-            } else {
-              console.log(JSON.stringify({ created: false, alreadyExists: true, bucket: target }));
-            }
-
-            try {
-              await client.send(new PutPublicAccessBlockCommand({
-                Bucket: target,
-                PublicAccessBlockConfiguration: {
-                  BlockPublicAcls: true,
-                  IgnorePublicAcls: true,
-                  BlockPublicPolicy: true,
-                  RestrictPublicBuckets: true,
-                },
-              }));
-              console.log(JSON.stringify({ publicAccessBlock: 'applied' }));
-            } catch (e) {
-              console.log(JSON.stringify({ publicAccessBlock: 'failed', error: e?.name || e?.message }));
-            }
-
-            try {
-              await client.send(new PutBucketEncryptionCommand({
-                Bucket: target,
-                ServerSideEncryptionConfiguration: {
-                  Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
-                },
-              }));
-              console.log(JSON.stringify({ encryption: 'AES256_applied' }));
-            } catch (e) {
-              console.log(JSON.stringify({ encryption: 'failed_or_default', error: e?.name || e?.message }));
-            }
-
-            const probeKey = `test/_phase_c_probe/${Date.now()}.txt`;
-            const body = Buffer.from(`phase-c-probe ${new Date().toISOString()}`, 'utf8');
-            try {
-              await client.send(new PutObjectCommand({
-                Bucket: target,
-                Key: probeKey,
-                Body: body,
-                ContentType: 'text/plain',
-              }));
-              const got = await client.send(new GetObjectCommand({ Bucket: target, Key: probeKey }));
-              const chunks = [];
-              for await (const c of got.Body) chunks.push(c);
-              const text = Buffer.concat(chunks).toString('utf8');
-              await client.send(new DeleteObjectCommand({ Bucket: target, Key: probeKey }));
-              console.log(JSON.stringify({
-                putGetDeleteOk: true,
-                bucket: target,
-                keyPrefix: 'test/_phase_c_probe/',
-                bytes: body.length,
-                roundTripOk: text.startsWith('phase-c-probe'),
-              }));
-            } catch (e) {
-              console.log(JSON.stringify({ putGetDeleteOk: false, error: e?.name || e?.message }));
-              process.exit(5);
-            }
-
-            console.log(JSON.stringify({ crmPariskqWrites: 0 }));
-            process.exit(0);
-            NODE
-              echo "===== S3 MODE COMPLETE ====="
               exit 0
             fi
 
