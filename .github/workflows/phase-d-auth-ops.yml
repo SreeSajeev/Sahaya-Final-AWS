@@ -27,6 +27,9 @@ on:
           - phase_f_soak_start
           - phase_f_soak_status
           - phase_f_soak_dense
+          - phase_f_soak_analyze
+          - phase_f_account_audit
+          - phase_f_activation_fixture
           - phase_f_load
           - phase_f_security
           - phase_f_session
@@ -34,6 +37,7 @@ on:
           - phase_f_observability
           - phase_f_dr
           - phase_f_bundle
+          - phase_f1_post_soak
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
@@ -136,6 +140,42 @@ jobs:
             if [ "$MODE" = "phase_f_soak_dense" ]; then
               chmod +x scripts/phase-f/run-phase-f.sh
               SOAK_DURATION_SEC="${SOAK_DURATION_SEC:-3600}" bash scripts/phase-f/run-phase-f.sh soak_dense
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_soak_analyze" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_status
+              bash scripts/phase-f/run-phase-f.sh soak_analyze
+              echo "===== ANALYSIS JSON (truncated) ====="
+              node -e "const p='/var/backups/sahaya/phase-f/soak6h-analysis.json';const j=require(p); const {failureSamples,...rest}=j; console.log(JSON.stringify({...rest, failureSampleCounts:{c401:(j.failureSamples?.['401']||[]).length,c502:(j.failureSamples?.['502']||[]).length,post:(j.failureSamples?.postContention||[]).length}, failureSamples:{'401':(j.failureSamples?.['401']||[]).slice(0,8),'502':j.failureSamples?.['502']||[]}},null,2))"
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_account_audit" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_activation_fixture" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              # TEST capture path; DRY_RUN must stay true — no real email.
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f1_post_soak" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh soak_analyze
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              bash scripts/phase-f/run-phase-f.sh session
+              bash scripts/phase-f/run-phase-f.sh security
+              bash scripts/phase-f/run-phase-f.sh passwords
+              bash scripts/phase-f/run-phase-f.sh observability
               exit 0
             fi
 

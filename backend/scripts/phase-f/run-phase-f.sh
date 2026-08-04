@@ -62,6 +62,15 @@ case "$MODE" in
       fi
     fi
     ;;
+  soak_analyze)
+    node scripts/phase-f/soak-analyze.mjs
+    ;;
+  account_audit)
+    node scripts/phase-f/account-audit.mjs
+    ;;
+  activation_fixture)
+    node scripts/phase-f/validate-activation-fixture.mjs
+    ;;
   load)
     export LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-15}"
     export LOAD_ROUNDS="${LOAD_ROUNDS:-4}"
@@ -93,7 +102,7 @@ case "$MODE" in
     bash "$0" dr
     ;;
   help|*)
-    echo "Usage: $0 {soak_start|soak_dense|soak_status|load|security|session|passwords|observability|dr|all_except_long_soak}"
+    echo "Usage: $0 {soak_start|soak_dense|soak_status|soak_analyze|account_audit|activation_fixture|load|security|session|passwords|observability|dr|all_except_long_soak}"
     exit 1
     ;;
 esac

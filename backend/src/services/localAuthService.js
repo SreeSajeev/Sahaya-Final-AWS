@@ -201,10 +201,12 @@ export async function forgotPassword({ email, redirectTo, req }) {
     message: "If an account exists for that email, we sent a password reset link.",
   };
   const user = await findUserForLogin(email);
-  if (!user?.id || !user.password_hash) {
+  // Anti-enumeration: always return generic. Skip token only when no user or inactive.
+  if (!user?.id || !isUserActive(user)) {
     return generic;
   }
 
+  // First-login setup OR reset: allow tokens when password_hash is null (legacy imports).
   const { data: tokenData, error } = await createPasswordResetToken(user.id);
   if (error || !tokenData?.raw) {
     logEvent("auth.forgotPassword.tokenFailed", { email: redactEmail(email) });
@@ -219,12 +221,23 @@ export async function forgotPassword({ email, redirectTo, req }) {
     String(process.env.PASSWORD_RESET_DRY_RUN || "true").toLowerCase() === "true" ||
     String(process.env.MAIL_DRY_RUN || "").toLowerCase() === "true";
 
+  const purpose = user.password_hash ? "password_reset" : "first_login_password_setup";
+
   if (dryRun) {
     logEvent("auth.forgotPassword.dryRun", {
       email: redactEmail(email),
+      purpose,
       redirectHost: url.host,
       requestId: req?.requestId ?? null,
     });
+    // TEST-only capture: never log raw token; optional secure file when explicitly enabled.
+    if (String(process.env.PASSWORD_RESET_CAPTURE_TOKEN || "").toLowerCase() === "true") {
+      return {
+        ...generic,
+        // Returned only when CAPTURE flag set (TEST harness). Production must leave flag unset.
+        _testCapture: { purpose, expiresAt: tokenData.expiresAt, token: tokenData.raw },
+      };
+    }
     return generic;
   }
 
@@ -239,7 +252,11 @@ export async function forgotPassword({ email, redirectTo, req }) {
     });
     return { ok: false, status: 503, message: "Unable to send reset email. Please try again later." };
   }
-  logEvent("auth.forgotPassword.sent", { email: redactEmail(email), redirectHost: url.host });
+  logEvent("auth.forgotPassword.sent", {
+    email: redactEmail(email),
+    purpose,
+    redirectHost: url.host,
+  });
   return generic;
 }
 
