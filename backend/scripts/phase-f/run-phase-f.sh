@@ -74,6 +74,9 @@ case "$MODE" in
   historical_audit)
     node scripts/phase-f/historical-data-audit.mjs
     ;;
+  historical_api_probe)
+    node scripts/phase-f/historical-api-probe.mjs
+    ;;
   load)
     export LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-15}"
     export LOAD_ROUNDS="${LOAD_ROUNDS:-4}"
