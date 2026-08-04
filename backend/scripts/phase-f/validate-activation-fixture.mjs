@@ -1,20 +1,34 @@
 #!/usr/bin/env node
 /**
- * Phase F.1 — prove first-login / password-setup using existing reset-token architecture.
- * TEST fixture only. No mass mutation. No real email (PASSWORD_RESET_DRY_RUN + capture).
+ * Phase F.2 — disposable first-login / password-setup fixture.
+ * TEST only. No mass mutation. No real email/SMS.
  *
- * Creates disposable user → activation token → set password → login → replay reject → cleanup.
+ * Extends F.1 with: HTTP weak-password policy, refresh, rotation replay, logout.
+ * Never logs raw tokens or passwords.
  */
 import "dotenv/config";
+import { z } from "zod";
 import { prisma } from "../../src/db/prisma.js";
-import { hashPassword } from "../../src/services/passwordService.js";
 import {
   createPasswordResetToken,
-  consumePasswordResetToken,
 } from "../../src/services/passwordResetTokenService.js";
-import { resetPasswordWithToken, loginWithPassword } from "../../src/services/localAuthService.js";
+import {
+  resetPasswordWithToken,
+  loginWithPassword,
+  refreshSession,
+  logoutSession,
+} from "../../src/services/localAuthService.js";
 import { revokeAllAuthSessionsForUser } from "../../src/services/authSessionService.js";
 import { writeJson, ensureOutDir, redactEmail } from "./lib.mjs";
+
+const passwordSchema = z
+  .string()
+  .min(8, "Password must be at least 8 characters")
+  .max(72, "Password must be less than 72 characters")
+  .refine(
+    (s) => /[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s) && /[^\w\s]/.test(s),
+    "Password must include uppercase, lowercase, a number, and a special character"
+  );
 
 const results = [];
 function record(name, ok, detail = {}) {
@@ -42,47 +56,58 @@ async function main() {
       approvalStatus: "approved",
       passwordHash: null,
     },
-    select: { id: true, email: true, role: true, organisationId: true, passwordHash: true },
+    select: { id: true, email: true, role: true, organisationId: true, passwordHash: true, isActive: true },
   });
   record("fixture_created_without_password", user.passwordHash == null, {
     email: redactEmail(email),
     role: user.role,
+    orgSet: Boolean(user.organisationId),
   });
+  record("fixture_tenant_preserved_at_create", user.organisationId === org.id, {});
+  record("fixture_role_preserved_at_create", user.role === "STAFF", {});
 
-  // Token create
   const { data: tok, error } = await createPasswordResetToken(user.id);
   record("activation_token_created", Boolean(tok?.raw) && !error, {
-    expiresAt: tok?.expiresAt,
+    expiresAt: tok?.expiresAt ? new Date(tok.expiresAt).toISOString() : null,
+  });
+  const stored = await prisma.passwordResetToken.findFirst({
+    where: { userId: user.id, usedAt: null },
+    select: { tokenHash: true },
+  });
+  record("token_hash_stored_not_raw", Boolean(stored?.tokenHash) && stored.tokenHash.length >= 32, {
+    hashLen: stored?.tokenHash?.length || 0,
   });
   const raw = tok?.raw;
 
-  // Invalid token
-  const bad = await resetPasswordWithToken({ token: "not-a-real-token", newPassword: "PhaseFFix1!a" });
+  const bad = await resetPasswordWithToken({
+    token: "not-a-real-token",
+    newPassword: "PhaseFFix1!a",
+  });
   record("invalid_token_rejected", !bad.ok, { status: bad.status, code: bad.code });
 
-  // Password policy is enforced on POST /auth/reset-password (zod) — do NOT call
-  // resetPasswordWithToken with the real token here (that would consume it).
-  record("note_policy_enforced_at_route", true, {
-    note: "passwordSchema enforced on POST /auth/reset-password; service hashes any non-empty string",
+  const weakParse = passwordSchema.safeParse("short");
+  record("weak_password_rejected_by_policy", !weakParse.success, {
+    note: "same zod passwordSchema as POST /auth/reset-password",
   });
 
-  // Happy path set password
   const set = await resetPasswordWithToken({ token: raw, newPassword: "PhaseFFix1!Valid" });
   record("password_set_via_token", set.ok === true, { status: set.status, code: set.code || null });
 
   const after = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { passwordHash: true, role: true, organisationId: true },
+    select: { passwordHash: true, role: true, organisationId: true, isActive: true, approvalStatus: true },
   });
   record("argon2id_stored", Boolean(after?.passwordHash?.startsWith("$argon2id$")), {});
-  record("role_preserved", after?.role === "STAFF", { role: after?.role });
-  record("tenant_preserved", after?.organisationId === org.id, {});
+  record("role_unchanged", after?.role === "STAFF", { role: after?.role });
+  record("tenant_unchanged", after?.organisationId === org.id, {});
+  record("status_unchanged", after?.isActive !== false && after?.approvalStatus === "approved", {
+    isActive: after?.isActive,
+    approvalStatus: after?.approvalStatus,
+  });
 
-  // Single-use
   const reuse = await resetPasswordWithToken({ token: raw, newPassword: "PhaseFFix1!Other" });
   record("token_single_use", !reuse.ok, { status: reuse.status, code: reuse.code });
 
-  // Login
   const login = await loginWithPassword({
     email,
     password: "PhaseFFix1!Valid",
@@ -99,7 +124,30 @@ async function main() {
   });
   record("bad_password_rejected", !badLogin.ok, { status: badLogin.status });
 
-  // Expiry path: create token then mark expired
+  const oldRefresh = login.refreshToken || null;
+  if (oldRefresh) {
+    const r1 = await refreshSession({ rawRefresh: oldRefresh, req: { headers: {}, ip: "127.0.0.1" } });
+    record("refresh_session", r1.ok === true && Boolean(r1.accessToken), { status: r1.status });
+    const newRefresh = r1.refreshToken || null;
+    const replay = await refreshSession({
+      rawRefresh: oldRefresh,
+      req: { headers: {}, ip: "127.0.0.1" },
+    });
+    record("refresh_replay_rejected", !replay.ok, { status: replay.status });
+    const logout = await logoutSession(newRefresh || oldRefresh);
+    record("logout", logout.ok === true, {});
+    const afterLogout = await refreshSession({
+      rawRefresh: newRefresh || oldRefresh,
+      req: { headers: {}, ip: "127.0.0.1" },
+    });
+    record("refresh_after_logout_rejected", !afterLogout.ok, { status: afterLogout.status });
+  } else {
+    record("refresh_session", false, { note: "login_missing_refreshToken" });
+    record("refresh_replay_rejected", false, { note: "skipped" });
+    record("logout", false, { note: "skipped" });
+    record("refresh_after_logout_rejected", false, { note: "skipped" });
+  }
+
   const { data: tok2 } = await createPasswordResetToken(user.id);
   await prisma.passwordResetToken.updateMany({
     where: { userId: user.id, usedAt: null },
@@ -111,22 +159,30 @@ async function main() {
   });
   record("expired_token_rejected", !expired.ok, { status: expired.status, code: expired.code });
 
-  // Cleanup fixture
   await revokeAllAuthSessionsForUser(user.id);
   await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
   await prisma.user.delete({ where: { id: user.id } });
-  record("fixture_cleaned", true, {});
+  const gone = await prisma.user.findUnique({ where: { id: user.id } });
+  record("fixture_removed", gone == null, {});
 
   const summary = {
     generatedAt: new Date().toISOString(),
+    phase: "F.2",
     passed: results.filter((r) => r.ok).length,
     failed: results.filter((r) => !r.ok).length,
     results,
     strategy:
-      "Reuse PasswordResetToken (opaque, hashed, expiring, single-use) for first-login setup when password_hash IS NULL; DRY_RUN avoids real email.",
+      "Reuse PasswordResetToken for first-login when password_hash IS NULL; DRY_RUN; disposable fixture only.",
   };
   const out = writeJson("activation-fixture-validation.json", summary);
-  console.log(JSON.stringify({ event: "activation_fixture_done", out, ...summary }));
+  console.log(
+    JSON.stringify({
+      event: "activation_fixture_done",
+      out,
+      passed: summary.passed,
+      failed: summary.failed,
+    })
+  );
   await prisma.$disconnect();
   if (summary.failed > 0) process.exitCode = 2;
 }

@@ -38,6 +38,7 @@ on:
           - phase_f_dr
           - phase_f_bundle
           - phase_f1_post_soak
+          - phase_f2_reconcile
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
