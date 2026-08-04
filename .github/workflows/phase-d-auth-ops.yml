@@ -39,6 +39,7 @@ on:
           - phase_f_bundle
           - phase_f1_post_soak
           - phase_f2_reconcile
+          - phase_f_historical_audit
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
@@ -198,6 +199,15 @@ jobs:
               bash scripts/phase-f/run-phase-f.sh security
               echo "===== F.2 OBSERVABILITY ====="
               bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_historical_audit" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh historical_audit
+              # Also list pre-migration backup presence (no overwrite)
+              echo "===== PRE-MIGRATION BACKUP MARKERS ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -30 || true
               exit 0
             fi
 

@@ -71,6 +71,9 @@ case "$MODE" in
   activation_fixture)
     node scripts/phase-f/validate-activation-fixture.mjs
     ;;
+  historical_audit)
+    node scripts/phase-f/historical-data-audit.mjs
+    ;;
   load)
     export LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-15}"
     export LOAD_ROUNDS="${LOAD_ROUNDS:-4}"
