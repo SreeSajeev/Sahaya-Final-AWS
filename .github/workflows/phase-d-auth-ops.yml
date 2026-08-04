@@ -180,6 +180,27 @@ jobs:
               exit 0
             fi
 
+            if [ "$MODE" = "phase_f2_reconcile" ]; then
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== F.2 SAFETY ====="
+              curl -sS http://127.0.0.1:4100/health || true; echo
+              grep -E '^(S3_FE_PROOFS_ENABLED|S3_FE_PROOFS_BUCKET|DB_MODE|DATABASE_URL|PASSWORD_RESET_DRY_RUN|MAIL_DRY_RUN|RATE_LIMIT_LOGIN_MAX)=' /var/www/apps/sahaya-final-aws-monorepo/backend/.env 2>/dev/null | sed -E 's/(DATABASE_URL=).+/\1***localhost:5436***/' || true
+              docker ps --format '{{.Names}} {{.Status}} {{.Ports}}' | grep -i sahaya || true
+              echo "===== F.2 ACCOUNT RECONCILIATION ====="
+              bash scripts/phase-f/run-phase-f.sh account_audit
+              echo "===== F.2 ACTIVATION FIXTURE ====="
+              export PASSWORD_RESET_DRY_RUN=true
+              bash scripts/phase-f/run-phase-f.sh activation_fixture
+              echo "===== F.2 SESSION ====="
+              bash scripts/phase-f/run-phase-f.sh session
+              echo "===== F.2 SECURITY ====="
+              bash scripts/phase-f/run-phase-f.sh security
+              echo "===== F.2 OBSERVABILITY ====="
+              bash scripts/phase-f/run-phase-f.sh observability
+              exit 0
+            fi
+
             if [ "$MODE" = "phase_f_load" ]; then
               chmod +x scripts/phase-f/run-phase-f.sh
               bash scripts/phase-f/run-phase-f.sh load
