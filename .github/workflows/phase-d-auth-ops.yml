@@ -44,8 +44,9 @@ on:
           - phase_f_convergence_gate
           - phase_f_classify_test_orgs
           - phase_f_classify_marker_rows
+          - phase_f_cleanup_test_fixtures_2a2b
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr / phase_f_cleanup_test_fixtures_2a2b"
         required: false
         default: ""
 
@@ -233,6 +234,28 @@ jobs:
               echo "===== READ-ONLY: TEST marker rows inside HISTORICAL orgs (no deletes) ====="
               bash scripts/phase-f/run-phase-f.sh classify_test_orgs
               bash scripts/phase-f/run-phase-f.sh classify_marker_rows
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_cleanup_test_fixtures_2a2b" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing Phase 2A+2B cleanup without confirm=CONFIRM" >&2
+                exit 1
+              fi
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh scripts/acceptance-full-platform.sh
+              echo "===== PHASE 2A+2B: backup + delete TEST orgs + marker tickets (TEST EC2 only) ====="
+              export CLEANUP_CONFIRM=DELETE_TEST_FIXTURES_2A_2B
+              bash scripts/phase-f/run-phase-f.sh cleanup_test_fixtures_2a2b
+              echo "===== CLEANUP REPORT ====="
+              cat /var/backups/sahaya/phase-f/test-fixture-cleanup-2a2b-report.json | head -c 200000 || true
+              echo
+              echo "===== CLEANUP BACKUPS ====="
+              ls -lt /var/backups/sahaya/cleanup 2>/dev/null | head -10 || true
+              echo "===== PRE-MIGRATION BACKUP MARKERS (must remain untouched) ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
+              echo "===== ACCEPTANCE REGRESSION AFTER CLEANUP ====="
+              bash scripts/acceptance-full-platform.sh
               exit 0
             fi
 
