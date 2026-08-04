@@ -43,6 +43,7 @@ on:
           - phase_f_historical_api_probe
           - phase_f_convergence_gate
           - phase_f_classify_test_orgs
+          - phase_f_classify_marker_rows
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
@@ -224,6 +225,14 @@ jobs:
               chmod +x scripts/phase-f/run-phase-f.sh
               echo "===== READ-ONLY: classify TEST vs HISTORICAL orgs (no deletes) ====="
               bash scripts/phase-f/run-phase-f.sh classify_test_orgs
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_classify_marker_rows" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== READ-ONLY: TEST marker rows inside HISTORICAL orgs (no deletes) ====="
+              bash scripts/phase-f/run-phase-f.sh classify_test_orgs
+              bash scripts/phase-f/run-phase-f.sh classify_marker_rows
               exit 0
             fi
 

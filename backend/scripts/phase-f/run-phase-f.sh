@@ -80,6 +80,9 @@ case "$MODE" in
   classify_test_orgs)
     node scripts/phase-f/classify-test-orgs.mjs
     ;;
+  classify_marker_rows)
+    node scripts/phase-f/classify-marker-rows-in-historical.mjs
+    ;;
   load)
     export LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-15}"
     export LOAD_ROUNDS="${LOAD_ROUNDS:-4}"
