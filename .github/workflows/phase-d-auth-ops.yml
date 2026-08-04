@@ -42,6 +42,7 @@ on:
           - phase_f_historical_audit
           - phase_f_historical_api_probe
           - phase_f_convergence_gate
+          - phase_f_classify_test_orgs
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
@@ -216,6 +217,13 @@ jobs:
             if [ "$MODE" = "phase_f_historical_api_probe" ]; then
               chmod +x scripts/phase-f/run-phase-f.sh
               bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_classify_test_orgs" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== READ-ONLY: classify TEST vs HISTORICAL orgs (no deletes) ====="
+              bash scripts/phase-f/run-phase-f.sh classify_test_orgs
               exit 0
             fi
 
