@@ -1,7 +1,7 @@
-# Sahaya TEST — Final Production Readiness (Phase F / F.1)
+# Sahaya TEST — Final Production Readiness (Phase F / F.1 / F.2)
 
 **Environment:** TEST only (`https://test-sahaya.pariskq.in` / `https://api.test-sahaya.pariskq.in`)  
-**Develop SHA:** `5f3c1ba` (F.1 fixture fix; prior F.1 deploy `1ddc9e0`)  
+**Develop SHA:** `f98091e`  
 **Date (UTC):** 2026-08-04  
 **Scope:** TEST validation only — no production changes, no real Supabase, no RDS, no architecture redesign  
 
@@ -9,21 +9,105 @@
 
 ## Executive summary
 
-The 6-hour soak **completed** (21600s, 760 cycles). All **42** non-2xx responses are explained: **36×401** = soak harness stale Bearer (no `/auth/refresh`, age ≥ JWT TTL≈900s); **6×502** = overlap with deliberate acceptance/API restart (last failure `2026-08-03T14:38:18Z`). **Zero** failures after that window for ~5h. No memory/connection leak, no unexplained PM2 restarts, no unhandled exceptions, no latency degradation.
+The 6-hour soak **completed** and was classified in F.1 (harness 401s + restart 502s only). F.2 reconciled all **34** TEST users: **C = 0** (no login-required account lacks an activation path), **D = 0** unknowns. First-login fixture **21/0**. Session **29/0**. Security **0 Crit / 0 High**. API **76/0**. Playwright **22 passed / 2 skipped**.
 
-F.1 delivered and deployed to TEST: first-login via existing `PasswordResetToken` when `password_hash` is null; account audit; activation fixture **13/0**; session **29/0**; security **0 Critical / 0 High**; API acceptance **76/0**; Playwright **22 passed**.
-
-**Remaining cutover blocker:** **28** active users still have null `password_hash` (migration **path** proven; mass activation intentionally not run). Plus Medium prod rate-limit / monitoring wiring.
+**Technical local-auth readiness:** PASS (activation-ready for all login-required accounts).  
+**Organizational cutover:** still needs ops to run first-login activation for the **29** null-hash login-required accounts (no mass email in F.2 by design), plus Medium rate-limit / monitoring.
 
 ### Go / No-Go
 
-**No-Go for production cutover** until ACTIVE_PASSWORD_MISSING is driven to 0 (or unused accounts deactivated) via the proven first-login flow, and production rate-limit + alert thresholds are applied outside TEST.
+**No-Go for production user cutover** until ops completes first-login activation (or deactivation) for required accounts, and production rate-limit + alerts are applied. Platform technical gate for local-auth lifecycle is closed (`C == 0`).
 
 ---
 
 ## Verdict
 
-**NOT PRODUCTION READY**
+**NOT PRODUCTION READY** (operational activation rollout + Medium observability/rate-limit remain)
+
+**Phase F.2 technical verdict:** `PASS — LOCAL AUTH TECHNICALLY RECONCILED`
+
+---
+
+## PHASE F.2 — LOCAL AUTH ACCOUNT RECONCILIATION
+
+**Run:** GH `30883073824` (`phase_f2_reconcile`) · Deploy `30882881603` · FA `30883138951` · Playwright `30883188088`
+
+### Safety check
+
+| Check | Result |
+|-------|--------|
+| Environment | TEST |
+| Health `dbMode` | `prisma` |
+| `DATABASE_URL` | localhost:**5436** (redacted) |
+| Docker | `sahaya-migration-db` Up, `0.0.0.0:5436->5432` |
+| FE / API | test-sahaya.pariskq.in / api.test-sahaya.pariskq.in |
+| S3 bucket | `sahaya-test-fe-proofs` (not crm-pariskq) |
+| `PASSWORD_RESET_DRY_RUN` | true |
+| Branch | `develop` @ `f98091e` |
+
+### Account inventory (live count = 34)
+
+| Classification | Count |
+|----------------|------:|
+| READY_WITH_PASSWORD | **4** |
+| ACTIVE_PASSWORD_MISSING | **29** |
+| INTENTIONALLY_DISABLED | **1** |
+| TEST_FIXTURE | 0 |
+| DUPLICATE_OR_STALE | 0 |
+| NON_LOGIN_ACCOUNT | 0 |
+| UNKNOWN_REQUIRES_REVIEW | **0** |
+| **classified_count** | **34 = total** |
+
+### Login eligibility
+
+| Eligibility | Count |
+|-------------|------:|
+| LOGIN_REQUIRED | **33** |
+| LOGIN_NOT_REQUIRED | **1** (disabled) |
+| UNKNOWN | **0** |
+
+### Readiness gate
+
+| Metric | Value |
+|--------|------:|
+| A — login-required with password | 4 |
+| B — login-required missing + activation-ready | 29 |
+| **C — login-required missing + NOT ready** | **0** |
+| D — unknown / review | 0 |
+| technicalReadiness | **PASS** |
+
+Null `password_hash` is **intentional** pending secure first-login (no default passwords, no mass email).
+
+### Activation fixture
+
+**21 passed / 0 failed** — create passwordless STAFF → token (hash-only stored) → invalid/weak/expired/reuse reject → Argon2id set → login → refresh → replay reject → logout → refresh reject → role/tenant/status preserved → fixture removed. No external sends.
+
+### Role / session / security / acceptance
+
+| Suite | Result | Evidence |
+|-------|--------|----------|
+| Roles SA/ADMIN/STAFF/FE | PASS | session 29/0 |
+| Tenant isolation | PASS | FA TENANT_* + SEC-TENANT-001 |
+| API acceptance | **76/0** | `30883138951` |
+| Playwright | **22 passed, 2 skipped** | `30883188088` |
+| Security | 0 Crit / 0 High; 1 Medium OPEN | SEC-RATE-001 |
+| Prisma/PG | PASS | users 34; port 5436; no P2022 in FA |
+| S3 proofs | PASS | test bucket; cleanup OK |
+| Supabase zero | PASS | FA SUPABASE_ZERO + hasSupabaseUrl false |
+
+### Observability (unchanged Medium)
+
+- No `/metrics`
+- No in-repo alerting
+- `RATE_LIMIT_LOGIN_MAX=200` on TEST
+
+### F.2 remaining
+
+| Severity | Item |
+|----------|------|
+| OPERATIONAL | Activate 29 LOGIN_REQUIRED null-hash accounts via first-login when cutover approved (DRY_RUN/capture on TEST; real mail only with approval) |
+| Medium | Prod login rate limit ≪ 200; wire alert thresholds |
+| Low | Soak harness refresh (F.1 note) |
 
 ---
 
@@ -33,7 +117,7 @@ F.1 delivered and deployed to TEST: first-login via existing `PasswordResetToken
 |------|--------|----------|----------|
 | Auth | PASS | Session + FA local login; F.1 first-login fixture | No |
 | Sessions | PASS | `30880965759` — 29/0 all 4 roles | No |
-| Passwords | PARTIAL | Fixture 13/0; coverage still 4/34 with hash | **Yes** — 28 ACTIVE_PASSWORD_MISSING |
+| Passwords | PASS* | F.2 C=0; 4 hashed; 29 activation-ready | Ops activation |
 | Tenant isolation | PASS | FA TENANT_* + SEC-TENANT-001 | No |
 | Prisma | PASS | FA prisma contract + dbMode prisma | No |
 | PostgreSQL | PASS | Soak PG 7→6 peak 7; Docker PG18 :5436 | No |
@@ -44,11 +128,11 @@ F.1 delivered and deployed to TEST: first-login via existing `PasswordResetToken
 | S3 | PASS | `sahaya-test-fe-proofs` presign/fetch | No |
 | SLA | PASS | FA SLA reconcile | No |
 | Organisations | PASS | FA + Playwright orgs | No |
-| Playwright | PASS | `30881087871` — 22 passed, Verdict PASS | No |
-| API acceptance | PASS | `30881034253` — 76/0 | No |
-| Security | PASS* | `30881002348` — 0 Crit/High; 1 Medium OPEN (rate) | Medium only |
+| Playwright | PASS | `30883188088` — 22 passed | No |
+| API acceptance | PASS | `30883138951` — 76/0 | No |
+| Security | PASS* | 0 Crit/High; Medium rate OPEN | Medium |
 | Load | PASS | Prior Phase F load 0% errors | No |
-| 6h soak | PASS† | Completed; failures explained (harness/restart) | No |
+| 6h soak | PASS† | F.1 completed; failures explained | No |
 | Backup/restore | PASS | Prior `30818473578` DR | No |
 | Restart recovery | PASS | Prior API/PG restart; soak PM2 +2 explained | No |
 | Monitoring | GAP | Thresholds documented; no `/metrics` / alerts deployed | Medium |
