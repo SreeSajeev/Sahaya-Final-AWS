@@ -235,7 +235,7 @@ jobs:
               echo "===== CONVERGENCE: full platform acceptance ====="
               bash scripts/acceptance-full-platform.sh
               echo "===== CONVERGENCE: supabase zero unit ====="
-              npm test -- --testPathPattern=phaseESupabaseZero || npx node --test tests/unit/phaseESupabaseZero.test.js || node --test tests/unit/phaseESupabaseZero.test.js
+              npm test -- tests/unit/phaseESupabaseZero.test.js
               echo "===== PRE-MIGRATION BACKUP MARKERS (untouched) ====="
               ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
               echo "===== ACCEPTANCE BACKUPS ====="
