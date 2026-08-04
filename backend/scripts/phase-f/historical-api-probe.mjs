@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
- * TEST probe: historical ticket graph via Data API + light new lifecycle.
+ * TEST probe: historical ticket graph via Prisma ID resolve + Data API.
  * Uses known working local-auth accounts. Does not mass-reset passwords.
  * Does not delete data. Does not touch Supabase.
+ *
+ * Note: /data/tickets?search= applies search AFTER limit/offset on newest rows,
+ * so exact ticket-number search of old tickets via list is unreliable. This probe
+ * resolves IDs via Prisma (same DB the API uses), then proves API read paths.
  */
 import "dotenv/config";
+import { prisma } from "../../src/db/prisma.js";
 import { http, loadCreds, writeJson, ensureOutDir, redactEmail } from "./lib.mjs";
 
 const HIST_TICKET_NUMBERS = [
@@ -42,24 +47,29 @@ async function main() {
 
   const session = await login(email, password);
   const token = session.token;
-
   const me = await http("GET", "/auth/me", { token });
+
   const historical = [];
   for (const num of HIST_TICKET_NUMBERS) {
-    const search = await http(
-      "GET",
-      `/data/tickets?search=${encodeURIComponent(num)}&limit=50&scopeAllOrganisations=true`,
-      { token }
-    );
-    const sarr = itemsOf(search.json);
-    let ticket = sarr.find((t) => (t.ticket_number || t.ticketNumber) === num);
-
-    if (!ticket?.id) {
-      historical.push({ ticketNumber: num, found: false, listStatus: search.status });
+    const row = await prisma.ticket.findFirst({
+      where: { ticketNumber: num },
+      select: {
+        id: true,
+        ticketNumber: true,
+        status: true,
+        organisationId: true,
+        shortDescription: true,
+        priorityLevel: true,
+        createdAt: true,
+        openedByEmail: true,
+      },
+    });
+    if (!row?.id) {
+      historical.push({ ticketNumber: num, foundInDb: false, found: false });
       continue;
     }
 
-    const id = ticket.id;
+    const id = row.id;
     const detail = await http("GET", `/data/tickets/${id}`, { token });
     const comments = await http("GET", `/data/tickets/${id}/comments`, { token });
     const assignments = await http("GET", `/data/tickets/${id}/assignments`, { token });
@@ -72,41 +82,58 @@ async function main() {
       `/data/audit-logs?ticketNumber=${encodeURIComponent(num)}&limit=10`,
       { token }
     );
-    const orgId = ticket.organisation_id || ticket.organisationId || detail.json?.organisation_id;
-    const org = orgId
-      ? await http("GET", `/data/organisations/${orgId}`, { token })
+    const org = row.organisationId
+      ? await http("GET", `/data/organisations/${row.organisationId}`, { token })
       : { status: null, json: null };
+
+    // Tenant filter proof: list with organisationId should include this ticket when limit high enough
+    // Prefer contains search via DB for filterability evidence
+    const dbSearchCount = await prisma.ticket.count({
+      where: { ticketNumber: { contains: num.slice(0, 12), mode: "insensitive" } },
+    });
 
     const crows = itemsOf(comments.json);
     const arows = itemsOf(assignments.json);
     const srows = itemsOf(sla.json);
 
+    let feOk = null;
+    if (arows[0]) {
+      const feId = arows[0].fe_id || arows[0].feId;
+      if (feId) {
+        const fe = await http("GET", `/data/field-executives/${feId}`, { token }).catch(() => null);
+        feOk = fe ? { status: fe.status, id: feId } : { status: null, id: feId };
+      }
+    }
+
     historical.push({
       ticketNumber: num,
-      found: true,
+      foundInDb: true,
+      found: detail.status === 200 && Boolean(detail.json?.id || detail.json?.ticket_number),
       id,
-      status: ticket.status || detail.json?.status,
-      organisationId: orgId || null,
+      status: row.status,
+      organisationId: row.organisationId,
       orgSlug: org.json?.slug || null,
       orgStatus: org.status,
-      shortDescription: String(ticket.short_description || ticket.shortDescription || "").slice(0, 80),
+      shortDescription: String(row.shortDescription || "").slice(0, 80),
+      createdAt: row.createdAt,
       detailStatus: detail.status,
       commentsStatus: comments.status,
       commentsCount: crows.length,
       assignmentsStatus: assignments.status,
       assignmentsCount: arows.length,
       assignmentFeIds: arows.map((a) => a.fe_id || a.feId).filter(Boolean).slice(0, 5),
+      feLookup: feOk,
       slaStatus: sla.status,
       slaCount: srows.length,
       auditStatus: audit.status,
       auditCount: itemsOf(audit.json).length,
-      hasProofMeta: crows.some(
-        (c) =>
-          c.attachments &&
-          (c.attachments.proof_storage_paths ||
-            JSON.stringify(c.attachments).includes("base64") ||
-            JSON.stringify(c.attachments).includes("data:image"))
-      ),
+      dbSearchHitCount: dbSearchCount,
+      hasProofMeta: crows.some((c) => {
+        const att = c.attachments;
+        if (!att) return false;
+        const s = typeof att === "string" ? att : JSON.stringify(att);
+        return s.includes("proof_storage_paths") || s.includes("base64") || s.includes("data:image");
+      }),
     });
   }
 
@@ -142,9 +169,13 @@ async function main() {
     if (created.id) {
       const comment = await http("POST", `/data/tickets/${created.id}/comments`, {
         token,
-        body: { body: "convergence probe comment", source: "INTERNAL" },
+        body: { body: "convergence probe comment", source: "STAFF" },
       });
       created.commentStatus = comment.status;
+      created.commentError =
+        comment.status >= 400
+          ? String(comment.json?.error || comment.json?.message || "").slice(0, 160)
+          : null;
     }
   }
 
@@ -158,28 +189,36 @@ async function main() {
     body: {},
   });
 
+  const foundOk = historical.filter((h) => h.found).length;
   const report = {
     generatedAt: new Date().toISOString(),
     actor: redactEmail(email),
     meStatus: me.status,
     historical,
-    historicalFound: historical.filter((h) => h.found).length,
+    historicalFound: foundOk,
     created,
     refreshStatus: refresh.status,
     logoutStatus: logout.status,
     pass:
-      historical.filter((h) => h.found).length >= 2 &&
+      foundOk >= 2 &&
       me.status === 200 &&
       refresh.status === 200 &&
-      logout.status < 500,
+      logout.status < 500 &&
+      (created == null || (created.status === 200 && created.id)),
   };
 
   const out = writeJson("historical-api-probe.json", report);
   console.log(JSON.stringify({ event: "historical_api_probe_done", out, report }, null, 2));
+  await prisma.$disconnect();
   if (!report.pass) process.exit(2);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error(e);
+  try {
+    await prisma.$disconnect();
+  } catch {
+    /* ignore */
+  }
   process.exit(1);
 });
