@@ -27,7 +27,7 @@ describeIfDb("rawEmailsRepository", () => {
     expect(data?.id).toBeTruthy();
 
     const { data: found } = await findRawEmailByMessageId(messageId);
-    expect(found?.message_id).toBe(messageId);
+    expect(found?.id).toBe(data.id);
   });
 
   it("updates processing status", async () => {

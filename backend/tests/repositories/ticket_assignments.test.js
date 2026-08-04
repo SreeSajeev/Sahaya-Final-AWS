@@ -52,7 +52,9 @@ describeIfDb("ticketAssignmentRepository", () => {
       ended_at: new Date().toISOString(),
     });
     expect(error).toBeNull();
-    expect(data?.outcome).toBe("SUCCESS");
+    expect(data).toBeUndefined();
+    const { data: loaded } = await getAssignmentById(created.id);
+    expect(loaded?.outcome).toBe("SUCCESS");
   });
 
   it("lists assignments by ticket ids within tenant scope", async () => {
