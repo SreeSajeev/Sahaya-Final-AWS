@@ -60,16 +60,15 @@ async function main() {
   const bad = await resetPasswordWithToken({ token: "not-a-real-token", newPassword: "PhaseFFix1!a" });
   record("invalid_token_rejected", !bad.ok, { status: bad.status, code: bad.code });
 
-  // Weak password
-  const weak = await resetPasswordWithToken({ token: raw, newPassword: "short" });
-  // resetPasswordWithToken may not validate policy — route does; call hash path with consume
+  // Password policy is enforced on POST /auth/reset-password (zod) — do NOT call
+  // resetPasswordWithToken with the real token here (that would consume it).
   record("note_policy_enforced_at_route", true, {
-    note: "passwordSchema enforced on POST /auth/reset-password",
+    note: "passwordSchema enforced on POST /auth/reset-password; service hashes any non-empty string",
   });
 
   // Happy path set password
   const set = await resetPasswordWithToken({ token: raw, newPassword: "PhaseFFix1!Valid" });
-  record("password_set_via_token", set.ok === true, { status: set.status });
+  record("password_set_via_token", set.ok === true, { status: set.status, code: set.code || null });
 
   const after = await prisma.user.findUnique({
     where: { id: user.id },
