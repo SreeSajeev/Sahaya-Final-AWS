@@ -30,8 +30,9 @@ async function upsertOrganisation() {
         name: "Test Seed Organisation",
         slug: SEED_ORG_SLUG,
         status: "active",
-        email: "seed-org@test.sahaya.local",
+        // Live organisations have no `email` column — use spoc/incoming emails.
         spocEmail: "spoc@test.sahaya.local",
+        incomingEmails: ["seed-org@test.sahaya.local"],
       },
     });
     console.log("[seed] created organisation", org.id);
