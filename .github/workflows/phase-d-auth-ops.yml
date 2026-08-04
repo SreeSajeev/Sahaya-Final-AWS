@@ -40,6 +40,8 @@ on:
           - phase_f1_post_soak
           - phase_f2_reconcile
           - phase_f_historical_audit
+          - phase_f_historical_api_probe
+          - phase_f_convergence_gate
       confirm:
         description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
         required: false
@@ -208,6 +210,36 @@ jobs:
               # Also list pre-migration backup presence (no overwrite)
               echo "===== PRE-MIGRATION BACKUP MARKERS ====="
               ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -30 || true
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_historical_api_probe" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_convergence_gate" ]; then
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh scripts/acceptance-backup-restore.sh scripts/acceptance-full-platform.sh
+              echo "===== CONVERGENCE: historical DB audit ====="
+              bash scripts/phase-f/run-phase-f.sh historical_audit
+              echo "===== CONVERGENCE: historical API probe ====="
+              bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              echo "===== CONVERGENCE: fresh backup+restore validation ====="
+              if [ "${{ github.event.inputs.confirm }}" != "CONFIRM" ]; then
+                echo "Refusing backup_restore without CONFIRM" >&2
+                exit 1
+              fi
+              bash scripts/acceptance-backup-restore.sh
+              echo "===== CONVERGENCE: full platform acceptance ====="
+              bash scripts/acceptance-full-platform.sh
+              echo "===== CONVERGENCE: supabase zero unit ====="
+              npm test -- --testPathPattern=phaseESupabaseZero || npx node --test tests/unit/phaseESupabaseZero.test.js || node --test tests/unit/phaseESupabaseZero.test.js
+              echo "===== PRE-MIGRATION BACKUP MARKERS (untouched) ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
+              echo "===== ACCEPTANCE BACKUPS ====="
+              ls -lt /var/backups/sahaya/acceptance 2>/dev/null | head -10 || true
               exit 0
             fi
 
