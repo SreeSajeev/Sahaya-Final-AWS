@@ -552,24 +552,32 @@ export async function listTicketsForDashboardStats(req, filters, maxScan) {
     }
 }
 
+/**
+ * Resolved KPI date semantics (prod parity):
+ * - Scope by tenant / client / state like other dashboard counts
+ * - Apply startDate/endDate to `resolvedAt` only (not also `openedAt`)
+ */
 export async function countResolvedTicketsWithDateFilter(req, filters) {
-  
-    try {
-      const where = {
-        status: "RESOLVED",
-        ...buildDashboardTicketWhere(req, filters),
-      };
-      if (filters.startDate) {
-        where.resolvedAt = { ...(where.resolvedAt || {}), gte: new Date(filters.startDate) };
-      }
-      if (filters.endDate) {
-        where.resolvedAt = { ...(where.resolvedAt || {}), lte: new Date(filters.endDate) };
-      }
-      const count = await prisma.ticket.count({ where });
-      return { count, error: null };
-    } catch (err) {
-      return { count: null, error: toSupabaseStyleError(err) };
+  try {
+    const where = {
+      status: "RESOLVED",
+      ...buildPrismaOrgWhere(req),
+    };
+    if (req?.isSuperAdmin && filters.organisationIdOverride) {
+      where.organisationId = filters.organisationIdOverride;
     }
+    if (filters.clientSlug) where.clientSlug = filters.clientSlug;
+    if (filters.stateFilter) where.state = filters.stateFilter;
+    if (filters.startDate || filters.endDate) {
+      where.resolvedAt = {};
+      if (filters.startDate) where.resolvedAt.gte = new Date(filters.startDate);
+      if (filters.endDate) where.resolvedAt.lte = new Date(filters.endDate);
+    }
+    const count = await prisma.ticket.count({ where });
+    return { count, error: null };
+  } catch (err) {
+    return { count: null, error: toSupabaseStyleError(err) };
+  }
 }
 
 export async function listTicketClientSlugsGlobal() {

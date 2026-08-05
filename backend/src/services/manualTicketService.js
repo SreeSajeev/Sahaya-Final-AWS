@@ -32,7 +32,11 @@ export const createTicketBodySchema = z.object({
   vehicle_number: optionalTrimmedString(80),
   category: optionalTrimmedString(200),
   issue_type: optionalTrimmedString(200),
-  location: optionalTrimmedString(500),
+  location: z
+    .string({ required_error: "Location is required" })
+    .trim()
+    .min(1, { message: "Location is required" })
+    .max(500),
   state: optionalTrimmedString(100),
   complaint_id: optionalTrimmedString(120),
   priority: z.boolean().optional(),

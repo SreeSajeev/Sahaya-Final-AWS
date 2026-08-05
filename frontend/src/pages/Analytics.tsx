@@ -58,8 +58,46 @@ import {
   buildTicketExportEnrichmentMaps,
   getAppendedTicketExportValues,
 } from "@/lib/ticketExportEnrichment";
+import { formatResolutionCategoryDisplay } from "@/lib/resolutionDisplay";
+import {
+  computeFeScorecards,
+  computeServiceManagerScorecards,
+  computeOperationalHealth,
+  computeTeamOperationsSummary,
+  computeExecutiveSummary,
+  computeFeLeaderboards,
+  computeManagementHighlights,
+  feScorecardsToCsvRows,
+  smScorecardsToCsvRows,
+  type AnalyticsStaffUser,
+} from "@/lib/analyticsMetrics";
+import {
+  downloadOperationsReport,
+  downloadFePerformanceReport,
+  downloadSlaReport,
+  downloadResolutionReport,
+  downloadVerificationReport,
+} from "@/lib/operationsReportExport";
+import {
+  downloadCompleteOperationsReportExcel,
+  downloadOperationsWorkbookExcel,
+  downloadExecutivePerformanceExcel,
+  downloadSlaReportExcel,
+  downloadResolutionReportExcel,
+  downloadVerificationReportExcel,
+} from "@/lib/operationsExcelExport";
+import { AnalyticsOpsSections } from "@/components/analytics/AnalyticsOpsSections";
+import { AnalyticsManagementPolish } from "@/components/analytics/AnalyticsManagementPolish";
 import { cn } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/indianStates';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const COLORS = ['#6B21A8', '#F97316', '#0EA5E9', '#22C55E', '#EAB308', '#EF4444'];
 
@@ -146,12 +184,14 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
         sla: Record<string, unknown>[];
         field_executives: Record<string, unknown>[];
         ticket_assignments: Record<string, unknown>[];
+        staff_users?: AnalyticsStaffUser[];
       }>(`/data/analytics/summary?${params.toString()}`);
 
       const ticketList = raw.tickets || [];
       const slaList = raw.sla || [];
       const feList = raw.field_executives || [];
       const assignmentList = raw.ticket_assignments || [];
+      const staffUsers = raw.staff_users || [];
 
       const statusByTicketId = new Map<string, string>(
         ticketList.map((t: Record<string, unknown>) => [String(t.id), String(t.status ?? '')])
@@ -176,8 +216,12 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
         categoryCounts[category] = (categoryCounts[category] || 0) + 1;
         const resolutionCategory = (ticket.resolution_category as string) || '';
         if (resolutionCategory.trim()) {
-          resolutionCategoryCounts[resolutionCategory] =
-            (resolutionCategoryCounts[resolutionCategory] || 0) + 1;
+          const displayCat = formatResolutionCategoryDisplay(
+            resolutionCategory,
+            ticket.verification_remarks as string | null | undefined
+          );
+          resolutionCategoryCounts[displayCat] =
+            (resolutionCategoryCounts[displayCat] || 0) + 1;
         }
         const location = (ticket.location as string) || 'Unknown';
         locationCounts[location] = (locationCounts[location] || 0) + 1;
@@ -423,11 +467,85 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
           sla: slaList as Record<string, unknown>[],
           ticket_assignments: assignmentList as Record<string, unknown>[],
           field_executives: feList as Record<string, unknown>[],
+          staff_users: staffUsers,
         },
       };
     },
     refetchInterval: 60000,
   });
+
+  const feScorecards = useMemo(() => {
+    const tickets = (analyticsData?.tickets ?? []) as Record<string, unknown>[];
+    const ctx = analyticsData?.exportContext;
+    if (!tickets.length || !ctx) return [];
+    return computeFeScorecards(
+      tickets,
+      (ctx.ticket_assignments ?? []) as Record<string, unknown>[],
+      (ctx.sla ?? []) as Record<string, unknown>[],
+      (ctx.field_executives ?? []) as Record<string, unknown>[]
+    );
+  }, [analyticsData?.tickets, analyticsData?.exportContext]);
+
+  const smScorecards = useMemo(() => {
+    const tickets = (analyticsData?.tickets ?? []) as Record<string, unknown>[];
+    const ctx = analyticsData?.exportContext;
+    if (!tickets.length || !ctx) return [];
+    return computeServiceManagerScorecards(
+      tickets,
+      (ctx.ticket_assignments ?? []) as Record<string, unknown>[],
+      (ctx.sla ?? []) as Record<string, unknown>[],
+      (ctx.staff_users ?? []) as AnalyticsStaffUser[]
+    );
+  }, [analyticsData?.tickets, analyticsData?.exportContext]);
+
+  const opsHealth = useMemo(() => {
+    const tickets = (analyticsData?.tickets ?? []) as Record<string, unknown>[];
+    const ctx = analyticsData?.exportContext;
+    if (!ctx) return null;
+    return computeOperationalHealth(
+      tickets,
+      (ctx.ticket_assignments ?? []) as Record<string, unknown>[],
+      (ctx.sla ?? []) as Record<string, unknown>[],
+      (ctx.field_executives ?? []) as Record<string, unknown>[]
+    );
+  }, [analyticsData?.tickets, analyticsData?.exportContext]);
+
+  const teamOps = useMemo(() => {
+    const tickets = (analyticsData?.tickets ?? []) as Record<string, unknown>[];
+    const ctx = analyticsData?.exportContext;
+    if (!ctx) return null;
+    return computeTeamOperationsSummary(
+      tickets,
+      (ctx.ticket_assignments ?? []) as Record<string, unknown>[],
+      (ctx.sla ?? []) as Record<string, unknown>[]
+    );
+  }, [analyticsData?.tickets, analyticsData?.exportContext]);
+
+  const executiveSummary = useMemo(() => {
+    const tickets = (analyticsData?.tickets ?? []) as Record<string, unknown>[];
+    const ctx = analyticsData?.exportContext;
+    if (!ctx) return null;
+    return computeExecutiveSummary(
+      tickets,
+      (ctx.ticket_assignments ?? []) as Record<string, unknown>[],
+      (ctx.sla ?? []) as Record<string, unknown>[],
+      (ctx.field_executives ?? []) as Record<string, unknown>[]
+    );
+  }, [analyticsData?.tickets, analyticsData?.exportContext]);
+
+  const leaderboards = useMemo(() => {
+    if (!feScorecards.length) return null;
+    return computeFeLeaderboards(feScorecards, 5);
+  }, [feScorecards]);
+
+  const managementHighlights = useMemo(() => {
+    if (!opsHealth) return null;
+    return computeManagementHighlights(
+      feScorecards,
+      opsHealth,
+      (analyticsData?.tickets ?? []) as Record<string, unknown>[]
+    );
+  }, [feScorecards, opsHealth, analyticsData?.tickets]);
 
   const handleExportTickets = useCallback(() => {
     const tickets = analyticsData?.tickets as Record<string, unknown>[] | undefined;
@@ -445,10 +563,18 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
       (ctx?.field_executives ?? []) as Parameters<typeof buildTicketExportEnrichmentMaps>[2]
     );
 
-    const rows = tickets.map((t) => [
-      ...baseHeaders.map((h) => (t[h] != null ? String(t[h]) : '')),
-      ...getAppendedTicketExportValues(t, maps),
-    ]);
+    const rows = tickets.map((t) => {
+      const baseValues = baseHeaders.map((h) => {
+        if (h === 'resolution_category') {
+          return formatResolutionCategoryDisplay(
+            t.resolution_category as string | null | undefined,
+            t.verification_remarks as string | null | undefined
+          );
+        }
+        return t[h] != null ? String(t[h]) : '';
+      });
+      return [...baseValues, ...getAppendedTicketExportValues(t, maps)];
+    });
     const csv = rowsToCsv([headerDisplay, ...rows]);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -558,6 +684,67 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
       sections.push('\nField Executive Workload\nFE Name,Active,Total\n' + feWorkload.map((r) => `${escape(r.name)},${r.active},${r.total}`).join('\n'));
     }
 
+    // 8) Field Executive scorecards
+    if (feScorecards.length > 0) {
+      const feRows = feScorecardsToCsvRows(feScorecards);
+      sections.push(
+        '\nField Executive Performance\n' +
+          feRows.map((r) => r.map(escape).join(',')).join('\n')
+      );
+    }
+
+    // 9) Service Manager scorecards
+    if (smScorecards.length > 0) {
+      const smRows = smScorecardsToCsvRows(smScorecards);
+      sections.push(
+        '\nService Manager Performance\n' +
+          smRows.map((r) => r.map(escape).join(',')).join('\n')
+      );
+    }
+
+    // 10) Operational health summary
+    if (opsHealth) {
+      sections.push(
+        '\nOperational Health\nMetric,Value\n' +
+          [
+            ['Pending Assignment', opsHealth.pendingAssignment],
+            ['Awaiting Approval', opsHealth.awaitingApproval],
+            ['Pending Verification', opsHealth.pendingVerification],
+            ['On Site', opsHealth.onSite],
+            ['En Route', opsHealth.enRoute],
+            ['Reopened', opsHealth.reopened],
+            ['Attempt Failed', opsHealth.attemptFailed],
+            ['SLA Breach Tickets', opsHealth.slaBreachTickets],
+            ['Team Utilization %', opsHealth.teamUtilizationPct],
+            ['Org SLA Compliance %', opsHealth.orgSlaCompliancePct],
+            ['Operational Health Score', opsHealth.operationalHealthScore],
+            ['Avg Assignment Hours', opsHealth.avgAssignmentHours ?? ''],
+            ['Avg Verification Wait Hours', opsHealth.avgVerificationWaitHours ?? ''],
+          ]
+            .map(([k, v]) => `${escape(String(k))},${v}`)
+            .join('\n')
+      );
+    }
+
+    if (teamOps) {
+      sections.push(
+        '\nTeam Operations (org-level)\nMetric,Value\n' +
+          [
+            ['Team Productivity %', teamOps.teamProductivityPct],
+            ['Pending Approvals', teamOps.pendingApproval],
+            ['Verification Queue', teamOps.pendingVerification],
+            ['Team Workload', teamOps.teamWorkload],
+            ['Avg Assignment Hours', teamOps.avgAssignmentHours ?? ''],
+            ['Avg Closure Hours', teamOps.avgClosureHours ?? ''],
+            ['Team SLA %', teamOps.teamSlaCompliancePct],
+            ['Assigned By Coverage %', teamOps.assignedByCoveragePct],
+            ['Attribution Note', teamOps.attributionNote],
+          ]
+            .map(([k, v]) => `${escape(String(k))},${escape(String(v))}`)
+            .join('\n')
+      );
+    }
+
     const csv = sections.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -566,7 +753,100 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
     a.download = `analytics-metrics-${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [analyticsData]);
+  }, [analyticsData, feScorecards, smScorecards, opsHealth, teamOps]);
+
+  const exportCtx = analyticsData?.exportContext;
+  const hasTickets = (analyticsData?.tickets?.length ?? 0) > 0;
+
+  const handleOpsExport = useCallback(() => {
+    if (!analyticsData?.tickets?.length || !exportCtx) return;
+    downloadOperationsReport(analyticsData.tickets as Record<string, unknown>[], exportCtx);
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const handleFeExport = useCallback(() => {
+    if (!feScorecards.length) return;
+    downloadFePerformanceReport(feScorecards);
+  }, [feScorecards]);
+
+  const handleSlaExport = useCallback(() => {
+    if (!analyticsData?.tickets?.length || !exportCtx) return;
+    downloadSlaReport(analyticsData.tickets as Record<string, unknown>[], exportCtx);
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const handleResolutionExport = useCallback(() => {
+    if (!analyticsData?.tickets?.length) return;
+    downloadResolutionReport(
+      analyticsData.tickets as Record<string, unknown>[],
+      exportCtx ?? undefined
+    );
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const handleVerificationExport = useCallback(() => {
+    if (!analyticsData?.tickets?.length || !exportCtx) return;
+    downloadVerificationReport(analyticsData.tickets as Record<string, unknown>[], exportCtx);
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const completeReportInput = useMemo(
+    () =>
+      analyticsData?.tickets?.length && exportCtx
+        ? {
+            tickets: analyticsData.tickets as Record<string, unknown>[],
+            ctx: exportCtx,
+            feScorecards,
+            opsHealth,
+            executiveSummary,
+            teamOps,
+            smScorecards,
+            managementHighlights,
+          }
+        : null,
+    [
+      analyticsData?.tickets,
+      exportCtx,
+      feScorecards,
+      opsHealth,
+      executiveSummary,
+      teamOps,
+      smScorecards,
+      managementHighlights,
+    ]
+  );
+
+  const handleCompleteOpsReport = useCallback(async () => {
+    if (!completeReportInput) return;
+    await downloadCompleteOperationsReportExcel(completeReportInput);
+  }, [completeReportInput]);
+
+  const handleOpsExcel = useCallback(async () => {
+    if (!completeReportInput) return;
+    await downloadOperationsWorkbookExcel(completeReportInput);
+  }, [completeReportInput]);
+
+  const handleFeExcel = useCallback(async () => {
+    if (!feScorecards.length) return;
+    await downloadExecutivePerformanceExcel(feScorecards);
+  }, [feScorecards]);
+
+  const handleSlaExcel = useCallback(async () => {
+    if (!analyticsData?.tickets?.length || !exportCtx) return;
+    await downloadSlaReportExcel(analyticsData.tickets as Record<string, unknown>[], exportCtx);
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const handleResolutionExcel = useCallback(async () => {
+    if (!analyticsData?.tickets?.length) return;
+    await downloadResolutionReportExcel(
+      analyticsData.tickets as Record<string, unknown>[],
+      exportCtx ?? undefined
+    );
+  }, [analyticsData?.tickets, exportCtx]);
+
+  const handleVerificationExcel = useCallback(async () => {
+    if (!analyticsData?.tickets?.length || !exportCtx) return;
+    await downloadVerificationReportExcel(
+      analyticsData.tickets as Record<string, unknown>[],
+      exportCtx
+    );
+  }, [analyticsData?.tickets, exportCtx]);
 
   /* Derived series for charts (from existing data, no new fetch) */
   const resolutionTimeByDay = useMemo(() => {
@@ -670,9 +950,16 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
           icon={BarChart3}
           actions={
             <>
-              <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
-                <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                Refresh
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetch()}
+                disabled={isLoading}
+                aria-label="Refresh"
+                title="Refresh"
+                className="px-2"
+              >
+                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </Button>
               <Button variant="outline" size="sm" onClick={handleExportTickets} disabled={!analyticsData?.tickets?.length}>
                 <Download className="h-4 w-4 mr-2" />
@@ -682,6 +969,54 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
                 <Download className="h-4 w-4 mr-2" />
                 Export Metrics
               </Button>
+              <Button size="sm" onClick={() => void handleCompleteOpsReport()} disabled={!completeReportInput}>
+                <Download className="h-4 w-4 mr-2" />
+                Export Report
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={!hasTickets}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Operations Reports
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuLabel>Excel (.xlsx)</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => void handleOpsExcel()}>
+                    Full Operations Workbook
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => void handleFeExcel()}
+                    disabled={!feScorecards.length}
+                  >
+                    Executive Performance
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void handleSlaExcel()}>
+                    SLA Report
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void handleResolutionExcel()}>
+                    Resolution Report
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void handleVerificationExcel()}>
+                    Verification Report
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>CSV (legacy)</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={handleOpsExport}>
+                    Operations Report (CSV)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleFeExport} disabled={!feScorecards.length}>
+                    Executive Performance (CSV)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSlaExport}>SLA Report (CSV)</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleResolutionExport}>
+                    Resolution Report (CSV)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleVerificationExport}>
+                    Verification Report (CSV)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           }
         />
@@ -1045,6 +1380,30 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
           </Card>
         </div>
       </div>
+
+      {/* Section 4 — Management polish (highlights, leaderboards, attention, extras) */}
+      <AnalyticsManagementPolish
+        highlights={managementHighlights}
+        leaderboards={leaderboards}
+        opsHealth={opsHealth}
+        cardSkin={cardSkin}
+        chartGridStroke={chartGridStroke}
+        sectionHeadingClass={sectionHeadingClass}
+      />
+
+      {/* Section 5 — Enterprise ops analytics (additive; preserves sections 1–3) */}
+      <AnalyticsOpsSections
+        feScorecards={feScorecards}
+        smScorecards={smScorecards}
+        opsHealth={opsHealth}
+        teamOps={teamOps}
+        executiveSummary={executiveSummary}
+        isLoading={isLoading}
+        cardSkin={cardSkin}
+        chartGridStroke={chartGridStroke}
+        sectionHeadingClass={sectionHeadingClass}
+        showServiceManagers={!clientReportsMode && !isClientRole}
+      />
     </div>
   );
 

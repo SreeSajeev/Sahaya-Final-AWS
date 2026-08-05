@@ -325,3 +325,25 @@ export async function listUsersByRole(role, selectCols = "id, email, organisatio
     return { data: null, error: toSupabaseStyleError(err) };
   }
 }
+
+/** STAFF + ADMIN users for analytics SM scorecards (tenant-scoped). */
+export async function listStaffUsersForAnalytics(req) {
+  try {
+    const rows = await prisma.user.findMany({
+      where: {
+        ...buildPrismaOrgWhere(req),
+        role: { in: ["STAFF", "ADMIN"] },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        organisationId: true,
+      },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}

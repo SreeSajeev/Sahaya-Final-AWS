@@ -1,22 +1,21 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, expect } from "vitest";
 
 /**
  * Regression: assign must reject FE from a different organisation.
  * Mirrors the guard added in assignmentService.assignOneTicket.
  */
-test("foreign FE org mismatch is rejected", () => {
-  const ticketOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-  const feOrg = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-  const mismatch =
-    ticketOrg && feOrg && String(ticketOrg) !== String(feOrg);
-  assert.equal(mismatch, true);
-});
+describe("assign FE tenant guard", () => {
+  it("foreign FE org mismatch is rejected", () => {
+    const ticketOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const feOrg = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const mismatch = ticketOrg && feOrg && String(ticketOrg) !== String(feOrg);
+    expect(mismatch).toBe(true);
+  });
 
-test("same FE org is allowed", () => {
-  const ticketOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-  const feOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-  const mismatch =
-    ticketOrg && feOrg && String(ticketOrg) !== String(feOrg);
-  assert.equal(mismatch, false);
+  it("same FE org is allowed", () => {
+    const ticketOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const feOrg = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const mismatch = ticketOrg && feOrg && String(ticketOrg) !== String(feOrg);
+    expect(mismatch).toBe(false);
+  });
 });

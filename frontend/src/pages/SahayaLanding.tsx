@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
   Shield,
@@ -214,6 +214,48 @@ function Header() {
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 
+function HeroDemoVideo({ className = "" }: { className?: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isMuted, setIsMuted] = useState(true);
+
+  const toggleMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  };
+
+  return (
+    <div className={className}>
+      <div className="rounded-2xl overflow-hidden relative" style={{ background: "linear-gradient(145deg, hsl(285 40% 18%), hsl(285 45% 14%))", border: "1px solid hsl(285 40% 30% / 0.5)", boxShadow: "0 0 0 1px hsl(285 45% 40% / 0.1), 0 20px 60px hsl(285 45% 10% / 0.8), inset 0 1px 0 hsl(0 0% 100% / 0.06)" }}>
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+          aria-hidden="true"
+          className="w-full h-full object-cover"
+        >
+          <source src="/sahaya-demo.mp4" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        <button
+          type="button"
+          aria-label="Toggle video sound"
+          onClick={toggleMute}
+          className="absolute z-20 flex items-center justify-center rounded-full cursor-pointer transition-opacity hover:opacity-90"
+          style={{ bottom: 16, right: 16, width: 36, height: 36, background: "rgba(0, 0, 0, 0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", boxShadow: "0 4px 12px rgba(0, 0, 0, 0.35)", border: "1px solid rgba(255, 255, 255, 0.12)" }}
+        >
+          {isMuted ? "🔇" : "🔊"}
+        </button>
+        <div className="absolute top-0 right-0 w-40 h-40 pointer-events-none" style={{ background: "radial-gradient(ellipse at top right, hsl(32 95% 52% / 0.08), transparent 70%)" }} />
+      </div>
+    </div>
+  );
+}
+
 function HeroSection() {
   return (
     <section
@@ -227,7 +269,7 @@ function HeroSection() {
       <div className="absolute pointer-events-none" style={{ top: "40%", left: "40%", width: 600, height: 400, background: "radial-gradient(ellipse, hsl(285 45% 45% / 0.06) 0%, transparent 70%)" }} />
 
       <div className="max-w-7xl mx-auto px-6 pt-24 pb-16 relative z-10 w-full">
-        <div className="grid lg:grid-cols-[1fr_420px] gap-12 lg:gap-16 items-center">
+        <div className="grid lg:grid-cols-[1fr_620px] gap-12 lg:gap-16 items-center">
           <div>
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-7 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ background: "hsl(32 95% 52% / 0.10)", border: "1px solid hsl(32 95% 52% / 0.28)", color: "hsl(32 95% 68%)" }}>
               <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse inline-block" />
@@ -251,6 +293,7 @@ function HeroSection() {
             <div className="flex flex-wrap gap-3 mb-8">
               <PrimaryButton asLink to="/enquiry">Request Demo <ArrowRight className="h-4 w-4" /></PrimaryButton>
             </div>
+            <HeroDemoVideo className="lg:hidden w-full max-w-[520px] mx-auto mt-8 mb-8" />
             <div className="flex flex-wrap gap-5 pt-6" style={{ borderTop: "1px solid hsl(285 35% 30% / 0.5)" }}>
               {["100% Structured Workflows", "Real-Time SLA Tracking", "Audit-Ready Traceability"].map((item) => (
                 <div key={item} className="flex items-center gap-2 text-[13px]" style={{ color: "hsl(285 15% 58%)" }}>
@@ -261,62 +304,7 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="hidden lg:block relative">
-            <div className="rounded-2xl overflow-hidden relative" style={{ background: "linear-gradient(145deg, hsl(285 40% 18%), hsl(285 45% 14%))", border: "1px solid hsl(285 40% 30% / 0.5)", boxShadow: "0 0 0 1px hsl(285 45% 40% / 0.1), 0 20px 60px hsl(285 45% 10% / 0.8), inset 0 1px 0 hsl(0 0% 100% / 0.06)" }}>
-              <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid hsl(285 35% 25% / 0.7)", background: "hsl(285 45% 15%)" }}>
-                <div className="flex items-center gap-2">
-                  <div className="flex gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: "hsl(0 72% 51% / 0.7)" }} />
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: "hsl(38 95% 50% / 0.7)" }} />
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: "hsl(145 65% 40% / 0.7)" }} />
-                  </div>
-                  <span className="text-[11px] font-mono text-white/30 ml-2">Ticket Lifecycle — Active View</span>
-                </div>
-                <span className="text-[10px] font-mono" style={{ color: "hsl(32 95% 60%)" }}>● LIVE</span>
-              </div>
-              <div className="p-4 space-y-2">
-                {[
-                  { id: "TKT-2841", status: "OPEN", sla: "4h 12m", label: "hsl(205 85% 55%)" },
-                  { id: "TKT-2840", status: "ON SITE", sla: "0h 47m", label: "hsl(145 65% 45%)" },
-                  { id: "TKT-2839", status: "ASSIGNED", sla: "2h 05m", label: "hsl(285 45% 60%)" },
-                  { id: "TKT-2838", status: "RESOLVED", sla: "Closed", label: "hsl(145 65% 38%)" },
-                  { id: "TKT-2837", status: "NEEDS REVIEW", sla: "SLA Breach", label: "hsl(0 72% 55%)" },
-                ].map((row, i) => (
-                  <div key={row.id} className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ background: i === 0 ? "hsl(285 45% 22% / 0.8)" : "hsl(285 40% 18% / 0.5)", border: i === 0 ? "1px solid hsl(285 45% 38% / 0.5)" : "1px solid hsl(285 35% 25% / 0.4)" }}>
-                    <span className="text-[10px] font-mono text-white/35 shrink-0 w-16">{row.id}</span>
-                    <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide shrink-0" style={{ background: `${row.label}18`, color: row.label, border: `1px solid ${row.label}30` }}>{row.status}</span>
-                    <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: "hsl(285 35% 22%)" }}>
-                      <div className="h-full rounded-full" style={{ width: i === 3 ? "100%" : i === 4 ? "95%" : `${30 + i * 18}%`, background: row.label }} />
-                    </div>
-                    <span className="text-[10px] font-mono shrink-0" style={{ color: row.sla === "SLA Breach" ? "hsl(0 72% 60%)" : "hsl(285 15% 55%)" }}>{row.sla}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-between px-4 py-2.5" style={{ borderTop: "1px solid hsl(285 35% 25% / 0.5)", background: "hsl(285 45% 12%)" }}>
-                <span className="text-[10px] font-mono" style={{ color: "hsl(285 15% 45%)" }}>5 active tickets · 2 SLA critical</span>
-                <Link to="/login" className="text-[10px] hover:underline" style={{ color: "hsl(32 95% 60%)" }}>View All →</Link>
-              </div>
-              <div className="absolute top-0 right-0 w-40 h-40 pointer-events-none" style={{ background: "radial-gradient(ellipse at top right, hsl(32 95% 52% / 0.08), transparent 70%)" }} />
-            </div>
-            <div className="absolute -bottom-4 -left-4 px-4 py-2.5 rounded-xl flex items-center gap-2.5" style={{ background: "hsl(285 45% 18%)", border: "1px solid hsl(285 40% 30% / 0.6)", boxShadow: "0 8px 24px hsl(285 45% 10% / 0.6)" }}>
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, hsl(145 65% 30%), hsl(145 65% 38%))" }}>
-                <CheckCircle2 className="h-4 w-4 text-white" />
-              </div>
-              <div>
-                <p className="text-[10px] text-white/40 font-medium">SLA Compliance</p>
-                <p className="text-sm font-bold text-white leading-tight">98.4%</p>
-              </div>
-            </div>
-            <div className="absolute -top-4 -right-4 px-4 py-2.5 rounded-xl flex items-center gap-2.5" style={{ background: "hsl(285 45% 18%)", border: "1px solid hsl(285 40% 30% / 0.6)", boxShadow: "0 8px 24px hsl(285 45% 10% / 0.6)" }}>
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, hsl(285 45% 28%), hsl(285 50% 38%))" }}>
-                <Shield className="h-4 w-4 text-white" />
-              </div>
-              <div>
-                <p className="text-[10px] text-white/40 font-medium">Audit Events</p>
-                <p className="text-sm font-bold text-white leading-tight">100% Logged</p>
-              </div>
-            </div>
-          </div>
+          <HeroDemoVideo className="hidden lg:block relative" />
         </div>
       </div>
       <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none" style={{ background: "linear-gradient(to bottom, transparent, #3b124d)" }} />

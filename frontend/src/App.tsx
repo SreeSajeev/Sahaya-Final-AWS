@@ -98,6 +98,7 @@ import {
   RequireClient,
   RequireAdmin,
 } from "@/components/auth/AuthGuards";
+import { PasswordResetDeepLinkRedirect } from "@/components/auth/PasswordResetDeepLinkRedirect";
 import { ClientLayout } from "@/components/layout/ClientLayout";
 
 // Pages
@@ -169,6 +170,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <PasswordResetDeepLinkRedirect />
         <TooltipProvider>
           <Toaster />
           <Sonner />

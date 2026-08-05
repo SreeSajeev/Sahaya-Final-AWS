@@ -131,6 +131,7 @@ export default function TicketDetail() {
   const [reviewPriorityLevel, setReviewPriorityLevel] = useState<PriorityLevel>(DEFAULT_PRIORITY_LEVEL);
   const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
   const [clientSlugDraft, setClientSlugDraft] = useState("");
+  const [locationDraft, setLocationDraft] = useState("");
   const reviewFormSynced = useRef(false);
   useEffect(() => {
     if (ticket && canCompleteReview) {
@@ -295,6 +296,34 @@ export default function TicketDetail() {
         onError: (err) =>
           toast({
             title: "Failed to update state",
+            description: err.message,
+            variant: "destructive",
+          }),
+      }
+    );
+  };
+
+  const handleSaveLocation = () => {
+    if (!ticket) return;
+    const trimmed = locationDraft.trim();
+    if (!trimmed) {
+      toast({
+        title: "Location is required",
+        description: "Please enter a location before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateTicket.mutate(
+      {
+        ticketId: ticket.id,
+        updates: { location: trimmed },
+      },
+      {
+        onSuccess: () => setLocationDraft(""),
+        onError: (err) =>
+          toast({
+            title: "Failed to update location",
             description: err.message,
             variant: "destructive",
           }),
@@ -696,7 +725,36 @@ export default function TicketDetail() {
                     <Info label="Vehicle Number" value={ticket.vehicle_number} mono />
                     <Info label="Category" value={ticket.category} />
                     <Info label="Issue Type" value={ticket.issue_type} />
-                    <IconInfo icon={MapPin} label="Location" value={ticket.location} />
+                    {canPerformActions && !ticket.location?.trim() ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="ticket-location" className="text-sm font-medium">
+                          Location <span className="text-destructive">*</span>
+                        </Label>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <Input
+                            id="ticket-location"
+                            placeholder="e.g., Mumbai, Andheri East"
+                            value={locationDraft}
+                            onChange={(e) => setLocationDraft(e.target.value)}
+                            disabled={updateTicket.isPending}
+                            className="w-full"
+                          />
+                          <Button
+                            type="button"
+                            onClick={handleSaveLocation}
+                            disabled={updateTicket.isPending || !locationDraft.trim()}
+                            className="shrink-0"
+                          >
+                            Save
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          This ticket has no location yet. Add one to keep records complete.
+                        </p>
+                      </div>
+                    ) : (
+                      <IconInfo icon={MapPin} label="Location" value={ticket.location} />
+                    )}
                     {canPerformActions ? (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">State</Label>

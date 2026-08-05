@@ -24,6 +24,8 @@ import { getAssignmentById, updateAssignmentById } from "../repositories/assignm
 import { insertCommentReturning, updateCommentById, getCommentById } from "../repositories/commentRepository.js";
 import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
 
+const MAX_PROOF_IMAGES = 10;
+
 function countProofImages(attachments) {
   if (!attachments || typeof attachments !== "object" || Array.isArray(attachments)) return 0;
   if (Array.isArray(attachments.images)) {
@@ -168,6 +170,14 @@ export async function uploadFeProof(req, res) {
       token_id: maskTokenForLog(token),
       bytes: payloadBytes,
     });
+
+    if (imageCount > MAX_PROOF_IMAGES) {
+      return res.status(400).json({
+        error: `Too many images. Maximum ${MAX_PROOF_IMAGES} photos allowed.`,
+        code: "TOO_MANY_IMAGES",
+        max: MAX_PROOF_IMAGES,
+      });
+    }
 
     const { data: ticketLifecycleRow } = await getTicketByIdUnscoped(
       ticketId,

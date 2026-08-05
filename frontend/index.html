@@ -12,6 +12,15 @@
     />
     <meta name="author" content="Sahaya" />
 
+    <!-- PWA installability (Phase 1): manifest + standalone chrome only. No service worker. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#6B3080" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Sahaya" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
     <!-- Content Security Policy: mitigate XSS; adjust if Supabase/analytics need more sources.
          Note: frame-ancestors is not supported in meta; set via HTTP headers (e.g. vercel.json) if needed. -->
     <meta
