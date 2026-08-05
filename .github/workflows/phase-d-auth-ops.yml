@@ -24,6 +24,7 @@ on:
           - backup_restore
           - restart_pg
           - playwright_acceptance
+          - parity_smoke
           - phase_f_soak_start
           - phase_f_soak_status
           - phase_f_soak_dense
@@ -129,6 +130,15 @@ jobs:
               cd "$MONOREPO/e2e"
               chmod +x run-acceptance.sh
               CREDS_FILE="$CREDS_FILE" bash run-acceptance.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "parity_smoke" ]; then
+              chmod +x scripts/acceptance-parity-smoke.sh
+              API_BASE="${API_BASE:-https://api.test-sahaya.pariskq.in}" \
+                FE_BASE="${FE_BASE:-https://test-sahaya.pariskq.in}" \
+                CREDS_FILE="$CREDS_FILE" \
+                bash scripts/acceptance-parity-smoke.sh
               exit 0
             fi
 

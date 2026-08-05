@@ -423,6 +423,7 @@ const emails = {
       priority_level: "LOW",
       status: "OPEN",
       source: "MANUAL",
+      location: "E2E_TEST_LOCATION",
     },
   });
   const ticketId = createT.json?.id;
@@ -548,6 +549,7 @@ const emails = {
             priority_level: "LOW",
             status: "OPEN",
             source: "MANUAL",
+            location: "E2E_TEST_LOCATION",
           },
         });
         if (t2.json?.id) {
@@ -821,6 +823,12 @@ const emails = {
     apiKeys: dash.json ? Object.keys(dash.json).slice(0, 12) : [],
   });
 
+  const analytics = await http("GET", "/data/analytics/summary", { token: ADM });
+  record("ANALYTICS", "staff_users_present", analytics.status === 200 && Array.isArray(analytics.json?.staff_users), {
+    status: analytics.status,
+    staffUsers: Array.isArray(analytics.json?.staff_users) ? analytics.json.staff_users.length : null,
+  });
+
   // Audit recent for our ticket
   if (fixtures.tickets[0]) {
     const audits = await prisma.auditLog.count({
@@ -862,6 +870,7 @@ const emails = {
           priority_level: "LOW",
           status: "OPEN",
           source: "MANUAL",
+          location: "E2E_TEST_LOCATION",
         },
       })
     )
@@ -920,6 +929,31 @@ const emails = {
 
   console.log("===== FIXTURES =====");
   console.log(JSON.stringify(fixtures));
+
+  // Cleanup disposable E2E fixtures created by this run (tickets/orgs only).
+  for (const tid of fixtures.tickets || []) {
+    try {
+      await prisma.ticketComment.deleteMany({ where: { ticketId: tid } });
+      await prisma.ticketAssignment.deleteMany({ where: { ticketId: tid } }).catch(() => {});
+      await prisma.slaTracking.deleteMany({ where: { ticketId: tid } }).catch(() => {});
+      await prisma.feActionToken.deleteMany({ where: { ticketId: tid } }).catch(() => {});
+      await prisma.ticket.delete({ where: { id: tid } }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const oid of fixtures.orgs || []) {
+    try {
+      await prisma.organisation.delete({ where: { id: oid } }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  // Also remove orphan acceptance orgs from prior failed runs
+  await prisma.organisation.deleteMany({
+    where: { slug: { startsWith: "e2e-accept-" } },
+  }).catch(() => {});
+
   console.log("===== RESULTS_SUMMARY =====");
   const failed = results.filter((r) => !r.ok);
   const passed = results.filter((r) => r.ok);
