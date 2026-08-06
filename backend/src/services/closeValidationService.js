@@ -11,9 +11,20 @@ function isProofCheckSkipped() {
   return String(process.env.CLOSE_SKIP_PROOF_VALIDATION || "false").toLowerCase() === "true";
 }
 
+function hasNonEmptyTrimmed(value) {
+  return value != null && String(value).trim() !== "";
+}
+
+/**
+ * Resolution remarks (API: verification_remarks) must be non-empty after trim.
+ */
+export function hasRequiredResolutionRemarks(verification_remarks) {
+  return hasNonEmptyTrimmed(verification_remarks);
+}
+
 function hasClosureRemarks({ verification_remarks, review_notes, resolution_category }) {
   const parts = [verification_remarks, review_notes, resolution_category];
-  return parts.some((p) => p != null && String(p).trim() !== "");
+  return parts.some((p) => hasNonEmptyTrimmed(p));
 }
 
 function countProofImages(attachments) {
@@ -68,6 +79,14 @@ export async function validateTicketClosePreconditions({ ticketId, ticket, body 
       ok: false,
       statusCode: 400,
       error: `Cannot close ticket in status ${status || "unknown"}. Ticket must be ON_SITE or RESOLVED_PENDING_VERIFICATION.`,
+    };
+  }
+
+  if (!hasRequiredResolutionRemarks(body?.verification_remarks)) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: "Resolution remarks are required.",
     };
   }
 

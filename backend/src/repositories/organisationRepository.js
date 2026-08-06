@@ -2,9 +2,15 @@ import { prisma } from "../db/prisma.js";
 import { mapPrismaRowToSnake, mapPrismaRowsToSnake } from "./db/rowMapper.js";
 import { toSupabaseStyleError } from "./db/prismaErrors.js";
 
+export {
+  ORG_SHORT_NAME_MAX_LEN,
+  normalizeOrganisationShortName,
+} from "../utils/organisationShortName.js";
+
 const ORG_SNAKE_TO_CAMEL = {
   name: "name",
   slug: "slug",
+  short_name: "shortName",
   status: "status",
   spoc_name: "spocName",
   spoc_email: "spocEmail",
@@ -37,6 +43,7 @@ export async function listOrganisations(options = {}) {
         id: true,
         name: true,
         slug: true,
+        shortName: true,
         createdAt: true,
         status: true,
         incomingEmails: true,
@@ -142,7 +149,7 @@ export async function listActiveOrganisationsPublic() {
   try {
     const rows = await prisma.organisation.findMany({
       where: { status: "active" },
-      select: { id: true, name: true, slug: true },
+      select: { id: true, name: true, slug: true, shortName: true },
       orderBy: { name: "asc" },
     });
     return { data: mapPrismaRowsToSnake(rows), error: null };

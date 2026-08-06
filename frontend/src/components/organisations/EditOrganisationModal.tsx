@@ -28,6 +28,8 @@ function spocText(v: unknown): string {
 export type EditOrganisationSource = {
   id: string;
   name: string;
+  slug?: string | null;
+  short_name?: string | null;
   incoming_emails?: unknown;
   outgoing_emails?: unknown;
   spoc_name?: string | null;
@@ -46,6 +48,7 @@ export function EditOrganisationModal({ open, onOpenChange, organisation }: Prop
   const updateOrg = useUpdateOrganisation();
 
   const [name, setName] = useState("");
+  const [shortName, setShortName] = useState("");
   const [incomingEmails, setIncomingEmails] = useState<string[]>([""]);
   const [outgoingEmails, setOutgoingEmails] = useState<string[]>([""]);
   const [spocName, setSpocName] = useState("");
@@ -57,6 +60,7 @@ export function EditOrganisationModal({ open, onOpenChange, organisation }: Prop
     const inc = stringListFromJson(organisation.incoming_emails);
     const out = stringListFromJson(organisation.outgoing_emails);
     setName(organisation.name);
+    setShortName(spocText(organisation.short_name));
     setIncomingEmails(inc.length ? inc : [""]);
     setOutgoingEmails(out.length ? out : [""]);
     setSpocName(spocText(organisation.spoc_name));
@@ -75,6 +79,7 @@ export function EditOrganisationModal({ open, onOpenChange, organisation }: Prop
       await updateOrg.mutateAsync({
         id: organisation.id,
         name: trimmedName,
+        short_name: shortName.trim() || null,
         incoming_emails: incomingEmails,
         outgoing_emails: outgoingEmails,
         spoc_name: spocName.trim() || null,
@@ -98,19 +103,38 @@ export function EditOrganisationModal({ open, onOpenChange, organisation }: Prop
         <DialogHeader>
           <DialogTitle>Edit Tenant</DialogTitle>
           <DialogDescription>
-            Update tenant mailbox routing and contact details. Short Name is unchanged.
+            Update tenant details. Slug cannot be changed here.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="edit-org-name">Name</Label>
+            <Label htmlFor="edit-org-name">Official company name</Label>
             <Input
               id="edit-org-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Acme Corp"
+              placeholder="Hitachi Payment Services Private Limited"
             />
           </div>
+          <div className="grid gap-2">
+            <Label htmlFor="edit-org-short-name">Short Name</Label>
+            <Input
+              id="edit-org-short-name"
+              value={shortName}
+              onChange={(e) => setShortName(e.target.value)}
+              placeholder="Hitachi"
+              maxLength={80}
+            />
+            <p className="text-xs text-muted-foreground">
+              Short searchable name used to identify this company. This does not change the official company name or slug.
+            </p>
+          </div>
+          {organisation?.slug ? (
+            <div className="grid gap-2">
+              <Label>Slug</Label>
+              <Input value={organisation.slug} disabled readOnly className="font-mono text-sm" />
+            </div>
+          ) : null}
           <OrganisationEmailArraysEditor
             incomingEmails={incomingEmails}
             outgoingEmails={outgoingEmails}

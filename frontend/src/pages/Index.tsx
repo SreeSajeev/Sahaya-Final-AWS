@@ -1,107 +1,7 @@
-/*
-import { useAuth } from '@/hooks/useAuth';
-import { LoginForm } from '@/components/auth/LoginForm';
-import Dashboard from './Dashboard';
-import FEMyTickets from './FEMyTickets';
-
-const Index = () => {
-  const { user, loading, isFieldExecutive, userProfile } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginForm />;
-  }
-
-  // Route Field Executives to their dedicated portal
-  if (isFieldExecutive) {
-    return <FEMyTickets />;
-  }
-
-  return <Dashboard />;
-};
-
-export default Index;
-
-import { useAuth } from '@/hooks/useAuth';
-import { LoginForm } from '@/components/auth/LoginForm';
-import Dashboard from './Dashboard';
-import FEMyTickets from './FEMyTickets';
-
-const Index = () => {
-  const { user, loading, isFieldExecutive, userProfile } = useAuth();
-
-  // 🔑 Wait for BOTH auth AND profile
-  if (loading || (user && !userProfile)) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginForm />;
-  }
-
-  // Route Field Executives to their portal
-  if (isFieldExecutive) {
-    return <FEMyTickets />;
-  }
-
-  return <Dashboard />;
-};
-
-export default Index;
-
-
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { LoginForm } from "@/components/auth/LoginForm";
-
-export default function Index() {
-  const { user, loading, isFieldExecutive, userProfile } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-muted-foreground">Loading…</div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginForm />;
-  }
-
-  if (!userProfile) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">
-          Setting up your workspace…
-        </div>
-      </div>
-    );
-  }
-
-  // Redirect ONCE, not render dashboards here
-  if (isFieldExecutive) {
-    return <Navigate to="/fe/tickets" replace />;
-  }
-
-  return <Navigate to="/app" replace />;
-}
-
-*/
-import { Navigate } from "react-router-dom";
-import { useAuth } from "@/hooks/useAuth";
-import { LoginForm } from "@/components/auth/LoginForm";
+import { SahayaBootLoading } from "@/components/auth/SahayaBootLoading";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -121,23 +21,10 @@ export default function Index() {
     }
   }, []);
 
-  /* =========================
-     AUTH BOOTSTRAP
-  ========================= */
-
+  /* AUTH BOOTSTRAP — branded loading, never a blank white screen */
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-muted-foreground">
-          Loading…
-        </div>
-      </div>
-    );
+    return <SahayaBootLoading />;
   }
-
-  /* =========================
-     NOT AUTHENTICATED
-  ========================= */
 
   if (!user) {
     return (
@@ -157,10 +44,6 @@ export default function Index() {
     );
   }
 
-  /* =========================
-     PROFILE NOT READY or PENDING ORGANISATION
-  ========================= */
-
   if (!userProfile) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4">
@@ -173,16 +56,6 @@ export default function Index() {
       </div>
     );
   }
-
-  /* =========================
-     ROLE-BASED ROUTING
-     SUPER_ADMIN → super admin dashboard
-     ADMIN → organisation admin dashboard
-     STAFF → ticket dashboard (Service Manager)
-     FIELD_EXECUTIVE → FE dashboard
-     CLIENT → client dashboard
-     Role is read from public.users.role (by auth_id). If staff land on client dashboard, check users.role in DB.
-  ========================= */
 
   if (import.meta.env.DEV && userProfile) {
     // eslint-disable-next-line no-console
@@ -208,11 +81,7 @@ export default function Index() {
     return <Navigate to="/app" replace />;
   }
 
-  /* =========================
-     SAFETY FALLBACK (SHOULD NEVER HAPPEN)
-  ========================= */
-
   console.error("Unknown role detected:", userProfile.role);
   signOut();
-  return null;
+  return <SahayaBootLoading label="Signing out…" />;
 }

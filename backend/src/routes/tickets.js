@@ -94,7 +94,12 @@ const rejectBodySchema = z.object({
 });
 
 const closeBodySchema = z.object({
-  verification_remarks: z.string().max(12000).optional().nullable(),
+  /** UI: Resolution Remarks — required non-empty after trim. Stored as verification_remarks. */
+  verification_remarks: z
+    .string({ required_error: "Resolution remarks are required." })
+    .max(12000)
+    .refine((v) => String(v).trim().length > 0, { message: "Resolution remarks are required." }),
+  /** UI: Location — stored as review_notes (legacy column). */
   review_notes: z.string().max(12000).optional().nullable(),
   resolution_category: z.string().max(500).optional().nullable(),
   /** Required when resolution_category is OTHER; persisted via verification_remarks + audit metadata. */
@@ -740,7 +745,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
 
   try {
     const selectFields =
-      "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, organisation_id, status, current_assignment_id";
+      "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, organisation_id, status, current_assignment_id, client_slug, remarks, short_description";
 
     const { data: existing, error: loadErr } = await getTicketByIdUnscoped(ticketId, selectFields);
 
@@ -881,11 +886,13 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
             toEmail,
             ticketNumber: ticket.ticket_number,
             verificationRemarks: remarksValue,
+            resolutionRemarks: optionalRemarks,
             resolutionCategory: resolutionCategoryValue,
+            reviewNotes: reviewNotesValue,
             complaintId: ticket.complaint_id ?? null,
             vehicleNumber: ticket.vehicle_number ?? null,
             category: ticket.category ?? null,
-            issueType: ticket.issue_type ?? null,
+            issueType: resolutionCategoryValue || ticket.issue_type || null,
             location: ticket.location ?? null,
           });
           attemptedAny = attemptedAny || Boolean(emailResult?.attempted);

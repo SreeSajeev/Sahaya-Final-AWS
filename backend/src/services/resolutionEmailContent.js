@@ -1,0 +1,124 @@
+/**
+ * Pure helpers for client resolution / closure email content.
+ * Keeps HTML escaping and field semantics unit-testable without Postmark.
+ */
+
+export function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Escape HTML then convert newlines to <br/> for safe multiline display. */
+export function textToHtmlPreservingNewlines(value) {
+  return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br/>");
+}
+
+export function formatDetail(value) {
+  if (value == null) return "Not provided";
+  const s = String(value).trim();
+  return s !== "" ? s : "Not provided";
+}
+
+/**
+ * Pick initial remarks for email: ticket.remarks, else short_description.
+ */
+export function pickInitialRemarks(ticket) {
+  const remarks = ticket?.remarks != null ? String(ticket.remarks).trim() : "";
+  if (remarks) return remarks;
+  const short = ticket?.short_description != null ? String(ticket.short_description).trim() : "";
+  return short || null;
+}
+
+/**
+ * Build plain-text resolution details block with corrected field semantics.
+ */
+export function buildResolutionEmailPlainText({
+  ticket,
+  complaintId = null,
+  clientName = null,
+  reportedByDisplay = null,
+  initialRemarks = null,
+  resolutionRemarks = null,
+  resolutionCategory = null,
+  location = null,
+  closureLocation = null,
+  resolvedAt = null,
+}) {
+  const issueType =
+    resolutionCategory != null && String(resolutionCategory).trim() !== ""
+      ? String(resolutionCategory).trim() === "OTHER"
+        ? "Other"
+        : String(resolutionCategory).trim()
+      : ticket?.issue_type;
+
+  const loc =
+    location != null && String(location).trim() !== ""
+      ? String(location).trim()
+      : ticket?.location;
+
+  const lines = [
+    "Ticket Resolved",
+    "---------------------------------",
+    `Ticket: ${formatDetail(ticket?.ticket_number)}`,
+  ];
+
+  const cid =
+    complaintId != null && String(complaintId).trim() !== ""
+      ? String(complaintId).trim()
+      : ticket?.complaint_id != null
+        ? String(ticket.complaint_id).trim()
+        : "";
+  if (cid) lines.push(`Complaint ID: ${cid}`);
+
+  lines.push(`Client: ${formatDetail(clientName)}`);
+  lines.push(`Reported By: ${formatDetail(reportedByDisplay)}`);
+  lines.push(`Issue Type: ${formatDetail(issueType)}`);
+  lines.push(`Location: ${formatDetail(loc)}`);
+  if (closureLocation != null && String(closureLocation).trim() !== "") {
+    lines.push(`Location (closure): ${String(closureLocation).trim()}`);
+  }
+  lines.push(`Status: ${formatDetail(ticket?.status ?? "RESOLVED")}`);
+  if (resolvedAt) lines.push(`Resolved At: ${formatDetail(resolvedAt)}`);
+
+  lines.push("", "Initial Remarks:");
+  lines.push(formatDetail(initialRemarks));
+  lines.push("", "Resolution Remarks:");
+  lines.push(formatDetail(resolutionRemarks));
+  lines.push("---------------------------------");
+
+  return lines.join("\n");
+}
+
+/**
+ * Build HTML fragment for the same fields (escaped).
+ */
+export function buildResolutionEmailHtml({
+  ticket,
+  complaintId = null,
+  clientName = null,
+  reportedByDisplay = null,
+  initialRemarks = null,
+  resolutionRemarks = null,
+  resolutionCategory = null,
+  location = null,
+  closureLocation = null,
+  resolvedAt = null,
+}) {
+  const plain = buildResolutionEmailPlainText({
+    ticket,
+    complaintId,
+    clientName,
+    reportedByDisplay,
+    initialRemarks,
+    resolutionRemarks,
+    resolutionCategory,
+    location,
+    closureLocation,
+    resolvedAt,
+  });
+  return `<div style="font-family:Georgia,serif;font-size:14px;line-height:1.45;color:#111">${textToHtmlPreservingNewlines(plain)}</div>`;
+}
