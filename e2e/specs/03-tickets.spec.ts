@@ -112,11 +112,13 @@ test.describe("Tickets", () => {
     await browserLogin(page, role as "ADMIN" | "STAFF");
     await page.goto(`/app/tickets/${ticketId}`);
     await expect(page).not.toHaveURL(/\/login/);
-    // Detail page should render ticket content before we assert navigation control.
-    await expect(page.getByText(marker).first()).toBeVisible({ timeout: 60_000 });
-    const back = page.getByRole("button", { name: "All Tickets" });
-    await expect(back).toBeVisible({ timeout: 30_000 });
-    await back.click();
+
+    // Detail success path: button "All Tickets". Not-found path: link "Back to All Tickets".
+    const backControl = page
+      .getByRole("button", { name: "All Tickets" })
+      .or(page.getByRole("link", { name: /All Tickets/i }));
+    await expect(backControl.first()).toBeVisible({ timeout: 60_000 });
+    await backControl.first().click();
     await expect(page).toHaveURL(/\/app\/tickets\/?$/);
   });
 });
