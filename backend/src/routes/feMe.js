@@ -388,9 +388,13 @@ router.get("/me/tickets/:ticketId", async (req, res) => {
 router.post("/me/tickets/:ticketId/remarks", async (req, res) => {
   const startedAt = Date.now();
   const ticketId = req.params.ticketId;
-  const body = safeTrim(req.body?.body);
+  const rawRemark = req.body?.remark ?? req.body?.body;
+  const body = safeTrim(rawRemark);
   if (!ticketId) return jsonError(res, 400, "ticket id required");
-  if (!body) return jsonError(res, 400, "Body required");
+  if (!body) return jsonError(res, 400, "Additional remark is required.");
+  if (body.length > 4000) {
+    return jsonError(res, 400, "Additional remark must be 4000 characters or fewer.");
+  }
 
   try {
     const feId = await resolveFeIdFromAppUser(req);
@@ -421,6 +425,11 @@ router.post("/me/tickets/:ticketId/remarks", async (req, res) => {
       source: "FE",
       author_id: authorId,
       organisation_id: ticket.organisation_id ?? null,
+      attachments: {
+        fe_remark: {
+          event_type: "FE_ADDITIONAL_REMARK",
+        },
+      },
     });
     if (insertErr) return jsonError(res, 500, insertErr.message);
 
@@ -433,7 +442,7 @@ router.post("/me/tickets/:ticketId/remarks", async (req, res) => {
       client_slug: ticket.client_slug ?? null,
       actor_fe_id: feId,
       actor_role: "FIELD_EXECUTIVE",
-      metadata: { comment_id: data?.id ?? null },
+      metadata: { comment_id: data?.id ?? null, event_type: "FE_ADDITIONAL_REMARK" },
     });
 
     logEvent("feMe.remarks.create", {
