@@ -3,7 +3,7 @@ import { requireAuth, requireAppUser } from "../middleware/auth.js";
 import { attachTenantContext, isTenantAllowed, requireTenantOrSuperAdmin } from "../middleware/tenantContext.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
-import { jsonError, jsonOk } from "../utils/http.js";
+import { jsonError, jsonOk, safeTrim } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { buildCreatorDisplayByTicketId } from "../utils/ticketDisplayEnrichment.js";
 import { findOrganisationsBySlugs } from "../repositories/organisationRepository.js";
@@ -19,6 +19,7 @@ import {
   getAssignmentWithTicketByFeAndTicket,
 } from "../repositories/assignmentRepository.js";
 import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
+import { insertComment } from "../repositories/commentRepository.js";
 
 const router = express.Router();
 
@@ -42,13 +43,16 @@ async function resolveFeIdFromAppUser(req) {
 
 /**
  * Shared enrichment for FE ticket payloads (list + single).
- * @param {{ ticket: object, assignmentDueAt: string | null }[]} pairs
+ * @param {{ ticket: object, assignmentDueAt: string | null, assignedAt?: string | null }[]} pairs
  */
 async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   const tickets = pairs.map((p) => p.ticket).filter(Boolean);
   const ticketIds = tickets.map((t) => t.id).filter(Boolean);
   const assignmentDueByTicketId = new Map(
     pairs.filter((p) => p.ticket?.id).map((p) => [p.ticket.id, p.assignmentDueAt ?? null])
+  );
+  const assignedAtByTicketId = new Map(
+    pairs.filter((p) => p.ticket?.id).map((p) => [p.ticket.id, p.assignedAt ?? null])
   );
 
   const slaByTicketId = new Map();
@@ -176,8 +180,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
     return ts === "LOCKED";
   };
 
-  const normalizeRemarks = (t) => {
-    const raw = t?.short_description ?? t?.description ?? null;
+  const normalizeText = (raw) => {
     if (raw == null) return null;
     const s = String(raw).trim();
     return s !== "" ? s : null;
@@ -228,6 +231,10 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
     }
 
     const assignment_due = assignmentDueByTicketId.get(t.id) ?? null;
+    const assigned_at = assignedAtByTicketId.get(t.id) ?? null;
+    const ticketRemarks = normalizeText(t?.remarks);
+    const shortDescription =
+      normalizeText(t?.short_description) ?? normalizeText(t?.description);
 
     const emRaw = t?.opened_by_email != null ? String(t.opened_by_email).trim() : "";
     let reporter_display = null;
@@ -257,7 +264,9 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       client_name,
       reporter_display,
       creator_display: creatorByTicketId.get(t.id) ?? null,
-      remarks: normalizeRemarks(t) || "Not provided",
+      // Preserve DB remarks; do not overwrite with short_description.
+      remarks: ticketRemarks,
+      short_description: shortDescription ?? t?.short_description ?? null,
       sla: slaByTicketId.get(t.id) ?? null,
       tokens: {
         onSite: toTokenPayload(onSite, onSiteActionable),
@@ -265,6 +274,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       },
       resolution_locked,
       assignment_due,
+      assigned_at,
     };
   });
 
@@ -308,6 +318,7 @@ router.get("/me/tickets", async (req, res) => {
         assignmentId: a.id,
         ticket: a.tickets,
         assignmentDueAt: hasAssignDue ? (a.assignment_due_at ?? null) : null,
+        assignedAt: a.created_at ?? null,
       }))
       .filter((p) => {
         if (!p.ticket) return false;
@@ -318,6 +329,7 @@ router.get("/me/tickets", async (req, res) => {
       .map((p) => ({
         ticket: p.ticket,
         assignmentDueAt: p.assignmentDueAt,
+        assignedAt: p.assignedAt,
       }));
 
     const enriched = await enrichFeTicketPairs({ pairs, feId, req, startedAt });
@@ -358,12 +370,81 @@ router.get("/me/tickets/:ticketId", async (req, res) => {
       {
         ticket: row.tickets,
         assignmentDueAt: hasAssignDue ? (row.assignment_due_at ?? null) : null,
+        assignedAt: row.created_at ?? null,
       },
     ];
     const enriched = await enrichFeTicketPairs({ pairs, feId, req, startedAt });
     return jsonOk(res, { item: enriched[0] ?? null });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to load FE ticket");
+  }
+});
+
+/**
+ * POST /fe/me/tickets/:ticketId/remarks
+ * Append-only additional/correction remark for the assigned FE (JWT-derived identity).
+ * Reuses ticket_comments; never overwrites tickets.remarks.
+ */
+router.post("/me/tickets/:ticketId/remarks", async (req, res) => {
+  const startedAt = Date.now();
+  const ticketId = req.params.ticketId;
+  const body = safeTrim(req.body?.body);
+  if (!ticketId) return jsonError(res, 400, "ticket id required");
+  if (!body) return jsonError(res, 400, "Body required");
+
+  try {
+    const feId = await resolveFeIdFromAppUser(req);
+    if (!feId) return jsonError(res, 403, "Field executive identity required");
+
+    const { data: row, error } = await getAssignmentWithTicketByFeAndTicket(feId, ticketId);
+    if (error) return jsonError(res, 500, error.message);
+    if (!row?.tickets) return jsonError(res, 404, "Ticket not found or not assigned to you");
+
+    const ticket = row.tickets;
+    const currentId = ticket.current_assignment_id;
+    if (
+      currentId == null ||
+      String(currentId).trim() === "" ||
+      String(currentId) !== String(row.id)
+    ) {
+      return jsonError(res, 403, "Ticket is not currently assigned to you");
+    }
+
+    if (!isTenantAllowed(req, ticket.organisation_id)) {
+      return jsonError(res, 403, "Forbidden");
+    }
+
+    const authorId = req.appUser?.id ? String(req.appUser.id) : null;
+    const { data, error: insertErr } = await insertComment({
+      ticket_id: ticketId,
+      body,
+      source: "FE",
+      author_id: authorId,
+      organisation_id: ticket.organisation_id ?? null,
+    });
+    if (insertErr) return jsonError(res, 500, insertErr.message);
+
+    void insertAuditLog({
+      req,
+      entity_type: "ticket",
+      entity_id: ticketId,
+      action: "fe_additional_remark_added",
+      ticket_organisation_id: ticket.organisation_id ?? null,
+      client_slug: ticket.client_slug ?? null,
+      actor_fe_id: feId,
+      actor_role: "FIELD_EXECUTIVE",
+      metadata: { comment_id: data?.id ?? null },
+    });
+
+    logEvent("feMe.remarks.create", {
+      tenantId: req.tenantId ?? null,
+      ticketId,
+      feId,
+      ms: Date.now() - startedAt,
+    });
+    return jsonOk(res, data);
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to add remark");
   }
 });
 

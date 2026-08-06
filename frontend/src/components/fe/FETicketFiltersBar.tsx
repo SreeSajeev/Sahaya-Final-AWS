@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   FilterBar,
   FILTER_SELECT_WIDTH,
@@ -17,6 +18,7 @@ import {
   type FETicketSortKey,
   type FEWorkTypeFilter,
 } from '@/lib/feTicketList';
+import { formatStateDisplay } from '@/lib/indianStates';
 
 interface FETicketFiltersBarProps {
   searchValue: string;
@@ -27,6 +29,17 @@ interface FETicketFiltersBarProps {
   onWorkTypeChange: (value: FEWorkTypeFilter) => void;
   sortKey: FETicketSortKey;
   onSortKeyChange: (value: FETicketSortKey) => void;
+  state: string;
+  onStateChange: (value: string) => void;
+  location: string;
+  onLocationChange: (value: string) => void;
+  customer: string;
+  onCustomerChange: (value: string) => void;
+  stateOptions: string[];
+  locationOptions: string[];
+  customerOptions: string[];
+  onClearFilters?: () => void;
+  showClearFilters?: boolean;
 }
 
 export function FETicketFiltersBar({
@@ -38,6 +51,17 @@ export function FETicketFiltersBar({
   onWorkTypeChange,
   sortKey,
   onSortKeyChange,
+  state,
+  onStateChange,
+  location,
+  onLocationChange,
+  customer,
+  onCustomerChange,
+  stateOptions,
+  locationOptions,
+  customerOptions,
+  onClearFilters,
+  showClearFilters = false,
 }: FETicketFiltersBarProps) {
   return (
     <FilterBar
@@ -46,7 +70,7 @@ export function FETicketFiltersBar({
         value: searchValue,
         onChange: onSearchChange,
         placeholder:
-          'Search ticket #, complaint, client, location, vehicle, category, remarks…',
+          'Search ticket #, complaint ID, client, location, state, vehicle, issue type…',
         'aria-label': 'Search tickets',
       }}
       secondary={
@@ -66,9 +90,56 @@ export function FETicketFiltersBar({
               ))}
             </SelectContent>
           </Select>
+          {showClearFilters && onClearFilters ? (
+            <Button type="button" variant="ghost" size="sm" onClick={onClearFilters}>
+              Clear Filters
+            </Button>
+          ) : null}
         </div>
       }
     >
+      <Select value={state} onValueChange={onStateChange}>
+        <SelectTrigger className={FILTER_SELECT_WIDTH_WIDE} aria-label="Filter by state">
+          <SelectValue placeholder="State" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All States</SelectItem>
+          {stateOptions.map((s) => (
+            <SelectItem key={s} value={s}>
+              {formatStateDisplay(s)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={location} onValueChange={onLocationChange}>
+        <SelectTrigger className={FILTER_SELECT_WIDTH_WIDE} aria-label="Filter by location">
+          <SelectValue placeholder="Location" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Locations</SelectItem>
+          {locationOptions.map((loc) => (
+            <SelectItem key={loc} value={loc}>
+              {loc}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={customer} onValueChange={onCustomerChange}>
+        <SelectTrigger className={FILTER_SELECT_WIDTH_WIDE} aria-label="Filter by customer">
+          <SelectValue placeholder="Customer" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Customers</SelectItem>
+          {customerOptions.map((c) => (
+            <SelectItem key={c} value={c}>
+              {c}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
       <Select
         value={status}
         onValueChange={(value) => onStatusChange(value as 'all' | TicketStatus)}

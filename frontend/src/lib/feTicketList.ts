@@ -1,4 +1,5 @@
 import type { Ticket, TicketStatus } from '@/lib/types';
+import { formatIST } from '@/lib/dateUtils';
 
 export type FEActionTokenLite = {
   id: string;
@@ -12,6 +13,8 @@ export type FETicketRow = Ticket & {
   remarks?: string | null;
   /** Manager-selected due from ticket_assignments.assignment_due_at (optional). */
   assignment_due?: string | null;
+  /** When this FE was assigned (ticket_assignments.created_at). */
+  assigned_at?: string | null;
   /** Who opened / reported the ticket (staff name + email when available). */
   reporter_display?: string | null;
   sla?: {
@@ -176,6 +179,56 @@ export function matchesFEWorkTypeFilter(
   return true;
 }
 
+function facetValue(raw: string | null | undefined): string {
+  return raw != null ? String(raw).trim() : '';
+}
+
+/** Unique sorted facet options from the FE's accessible tickets. */
+export function collectFETicketFacetOptions(
+  tickets: FETicketRow[],
+): { states: string[]; locations: string[]; customers: string[] } {
+  const states = new Set<string>();
+  const locations = new Set<string>();
+  const customers = new Set<string>();
+  for (const t of tickets) {
+    const state = facetValue(t.state);
+    const location = facetValue(t.location);
+    const customer = facetValue(t.client_name ?? t.client_slug);
+    if (state) states.add(state);
+    if (location) locations.add(location);
+    if (customer) customers.add(customer);
+  }
+  const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+  return {
+    states: [...states].sort(collator.compare),
+    locations: [...locations].sort(collator.compare),
+    customers: [...customers].sort(collator.compare),
+  };
+}
+
+export function matchesFEFacetFilters(
+  ticket: FETicketRow,
+  opts: { state: string; location: string; customer: string },
+): boolean {
+  if (opts.state !== 'all') {
+    if (facetValue(ticket.state) !== opts.state) return false;
+  }
+  if (opts.location !== 'all') {
+    if (facetValue(ticket.location) !== opts.location) return false;
+  }
+  if (opts.customer !== 'all') {
+    const customer = facetValue(ticket.client_name ?? ticket.client_slug);
+    if (customer !== opts.customer) return false;
+  }
+  return true;
+}
+
+/** Display helper: empty/null complaint id → em dash (never "undefined"). */
+export function formatComplaintIdDisplay(complaintId: string | null | undefined): string {
+  const s = complaintId != null ? String(complaintId).trim() : '';
+  return s || '—';
+}
+
 export function compareFETickets(
   a: FETicketRow,
   b: FETicketRow,
@@ -212,12 +265,60 @@ export function filterAndSortFETickets(
     status: 'all' | TicketStatus;
     workType: FEWorkTypeFilter;
     sortKey: FETicketSortKey;
+    state?: string;
+    location?: string;
+    customer?: string;
   },
 ): FETicketRow[] {
+  const state = opts.state ?? 'all';
+  const location = opts.location ?? 'all';
+  const customer = opts.customer ?? 'all';
   const filtered = tickets.filter((t) => {
     if (opts.status !== 'all' && t.status !== opts.status) return false;
     if (!matchesFEWorkTypeFilter(t, opts.workType)) return false;
+    if (!matchesFEFacetFilters(t, { state, location, customer })) return false;
     return matchesFETicketSearch(t, opts.search);
   });
   return [...filtered].sort((a, b) => compareFETickets(a, b, opts.sortKey));
+}
+
+/**
+ * Field-visit date range: prefer assignment date (assigned_at), else created_at / opened_at.
+ * Dates are compared as IST calendar days (inclusive).
+ */
+export function ticketInFEDateRange(
+  ticket: FETicketRow,
+  fromYmd: string,
+  toYmd: string,
+): boolean {
+  const iso =
+    ticket.assigned_at ||
+    ticket.created_at ||
+    ticket.opened_at ||
+    null;
+  if (!iso) return false;
+  const ymd = formatIST(iso, 'yyyy-MM-dd');
+  if (!ymd || ymd.length < 10) return false;
+  return ymd >= fromYmd && ymd <= toYmd;
+}
+
+export function validateFEDateRange(
+  fromYmd: string,
+  toYmd: string,
+): { ok: true } | { ok: false; error: string } {
+  if (!fromYmd || !toYmd) {
+    return { ok: false, error: 'Select both From and To dates.' };
+  }
+  if (fromYmd > toYmd) {
+    return { ok: false, error: 'From date must be on or before To date.' };
+  }
+  return { ok: true };
+}
+
+export function filterFETicketsByDateRange(
+  tickets: FETicketRow[],
+  fromYmd: string,
+  toYmd: string,
+): FETicketRow[] {
+  return tickets.filter((t) => ticketInFEDateRange(t, fromYmd, toYmd));
 }
