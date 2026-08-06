@@ -92,16 +92,30 @@ test.describe("Tickets", () => {
     test.skip(!hasCreds("ADMIN") && !hasCreds("STAFF"), "missing staff creds");
     const role = hasCreds("ADMIN") ? "ADMIN" : "STAFF";
     const sess = await login(role as "ADMIN" | "STAFF");
-    const list = await api("GET", "/data/tickets?limit=1", { token: sess.accessToken });
-    const ticketId = list.json?.items?.[0]?.id as string | undefined;
-    test.skip(!ticketId, "no ticket available for navigation check");
+    const token = sess.accessToken!;
+
+    const marker = `E2E_PW_NAV_${Date.now()}`;
+    const create = await api("POST", "/tickets", {
+      token,
+      body: {
+        short_description: marker,
+        category: "OTHER",
+        issue_type: "OTHER",
+        priority_level: "LOW",
+        location: "E2E_PW_LOCATION",
+      },
+    });
+    expect(create.status).toBe(200);
+    const ticketId = create.json?.id as string;
+    expect(ticketId).toBeTruthy();
 
     await browserLogin(page, role as "ADMIN" | "STAFF");
     await page.goto(`/app/tickets/${ticketId}`);
     await expect(page).not.toHaveURL(/\/login/);
-    // Prefer aria-label so icon-only / responsive text still matches.
-    const back = page.locator('button[aria-label="All Tickets"]');
-    await expect(back).toBeVisible({ timeout: 60_000 });
+    // Detail page should render ticket content before we assert navigation control.
+    await expect(page.getByText(marker).first()).toBeVisible({ timeout: 60_000 });
+    const back = page.getByRole("button", { name: "All Tickets" });
+    await expect(back).toBeVisible({ timeout: 30_000 });
     await back.click();
     await expect(page).toHaveURL(/\/app\/tickets\/?$/);
   });

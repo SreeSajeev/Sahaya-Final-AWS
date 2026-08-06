@@ -185,7 +185,7 @@ export default function TicketDetail() {
         <div className="space-y-2 text-center">
           <h2 className="text-xl font-semibold">Ticket not found</h2>
           <Link to={isClient ? "/app/client" : "/app/tickets"} className="text-primary hover:underline">
-            Back to {isClient ? "dashboard" : "tickets"}
+            Back to {isClient ? "client portal" : "All Tickets"}
           </Link>
         </div>
       </PageContainer>
