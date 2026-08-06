@@ -35,6 +35,7 @@ import { ConfidenceScore } from "@/components/tickets/ConfidenceScore";
 import { getDisplayConfidenceScore } from "@/lib/confidence";
 import { FEAssignmentModal } from "@/components/tickets/FEAssignmentModal";
 import { CloseTicketDialog } from "@/components/tickets/CloseTicketDialog";
+import { RejectTicketDialog } from "@/components/tickets/RejectTicketDialog";
 
 import { ProofImageViewerOverlay } from "@/components/tickets/ProofImageViewerOverlay";
 import { ProofAttachmentGallery } from "@/components/tickets/ProofAttachmentGallery";
@@ -57,17 +58,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { TicketStatus } from "@/lib/types";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -111,7 +101,6 @@ export default function TicketDetail() {
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [closePending, setClosePending] = useState(false);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
-  const [rejectReason, setRejectReason] = useState("");
   const [rejectPending, setRejectPending] = useState(false);
   const [proofViewerOpen, setProofViewerOpen] = useState(false);
   const [proofViewerSources, setProofViewerSources] = useState<string[] | null>(null);
@@ -167,6 +156,27 @@ export default function TicketDetail() {
       ?.assignment_due_at;
     return isoToDatetimeLocalInput(raw ?? null);
   }, [currentAssignment]);
+
+  const rejectionMeta = useMemo(() => {
+    if (!ticket || ticket.status !== "REJECTED") return null;
+    type RejectionAtt = {
+      reason?: string;
+      rejected_by_name?: string;
+      rejected_at?: string;
+      recipients?: string[];
+    };
+    const fromComment = (comments ?? []).find((c) => {
+      const a = c.attachments as { rejection?: RejectionAtt } | null;
+      return a?.rejection != null && typeof a.rejection === "object";
+    });
+    const rej = (fromComment?.attachments as { rejection?: RejectionAtt } | null)?.rejection;
+    return {
+      reason: ticket.rejection_reason?.trim() || rej?.reason?.trim() || null,
+      rejectedAt: ticket.rejected_at || rej?.rejected_at || null,
+      rejectedByName: rej?.rejected_by_name?.trim() || null,
+      recipients: Array.isArray(rej?.recipients) ? rej.recipients : [],
+    };
+  }, [ticket, comments]);
 
   if (isLoading) {
     const content = (
@@ -486,24 +496,57 @@ export default function TicketDetail() {
     }
   };
 
-  const handleReject = async () => {
+  const handleReject = async (payload: {
+    reason: string;
+    recipients: string[];
+    evidence: { commentId: string; proofIndex: number } | null;
+    evidenceUpload: {
+      contentType: string;
+      filename: string;
+      dataBase64: string;
+    } | null;
+  }) => {
     if (isClient) return;
-    const trimmed = rejectReason.trim();
+    const trimmed = payload.reason.trim();
     if (!trimmed) return;
 
     setRejectPending(true);
     try {
-      await fetchJson(`/tickets/${ticket.id}/reject`, {
+      const result = await fetchJson<{
+        success?: boolean;
+        rejection_email_status?: {
+          attempted?: boolean;
+          sent?: boolean;
+          skipped?: boolean;
+          reason?: string | null;
+          recipient_count?: number;
+          sent_count?: number;
+        };
+      }>(`/tickets/${ticket.id}/reject`, {
         method: "POST",
-        body: { reason: trimmed },
+        body: {
+          reason: trimmed,
+          recipients: payload.recipients,
+          evidence: payload.evidence,
+          evidence_upload: payload.evidenceUpload,
+        },
       });
 
       setRejectDialogOpen(false);
-      setRejectReason("");
+
+      const st = result?.rejection_email_status;
+      let emailNote = "";
+      if (st?.skipped && st.reason === "no_recipients") {
+        emailNote = " No rejection email was sent (no recipients selected).";
+      } else if (st?.sent) {
+        emailNote = " Rejection email sent.";
+      } else if (st?.attempted && !st?.sent) {
+        emailNote = " Ticket rejected; email delivery had an issue (check ops logs).";
+      }
 
       toast({
         title: "Ticket rejected",
-        description: `Ticket ${ticket.ticket_number} was rejected.`,
+        description: `Ticket ${ticket.ticket_number} was rejected.${emailNote}`,
       });
 
       queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
@@ -616,10 +659,7 @@ export default function TicketDetail() {
               {(ticket.status === "OPEN" || ticket.status === "NEEDS_REVIEW") && (
                 <Button
                   variant="destructive"
-                  onClick={() => {
-                    setRejectReason("");
-                    setRejectDialogOpen(true);
-                  }}
+                  onClick={() => setRejectDialogOpen(true)}
                   disabled={rejectPending}
                 >
                   <XCircle className="mr-2 h-4 w-4" />
@@ -856,6 +896,37 @@ export default function TicketDetail() {
                     </div>
                   </div>
                 )}
+                {ticket.status === "REJECTED" && (
+                  <div className="sm:col-span-2 space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                    <p className="text-sm font-semibold text-destructive">Rejection</p>
+                    <Info
+                      label="Rejection Reason"
+                      value={rejectionMeta?.reason?.trim() ? rejectionMeta.reason : "Not recorded"}
+                    />
+                    {rejectionMeta?.rejectedAt && (
+                      <Info
+                        label="Rejected At"
+                        value={formatIST(rejectionMeta.rejectedAt, "PPpp")}
+                      />
+                    )}
+                    <Info
+                      label="Rejected By"
+                      value={rejectionMeta?.rejectedByName || "Not recorded"}
+                    />
+                    {rejectionMeta && rejectionMeta.recipients.length > 0 && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Email recipients</p>
+                        <ul className="list-disc pl-5 text-sm">
+                          {rejectionMeta.recipients.map((email) => (
+                            <li key={email} className="break-all">
+                              {email}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
             {/* Attempt Failed: show when FE reported resolution failed */}
@@ -936,7 +1007,20 @@ export default function TicketDetail() {
                     };
                   };
 
-                  const rejection = a.rejection;
+                  const rejection = a.rejection as
+                    | {
+                        reason?: string;
+                        rejected_by_name?: string;
+                        rejected_by_user_id?: string;
+                        rejected_at?: string;
+                        recipients?: string[];
+                        evidence?: {
+                          comment_id?: string;
+                          proof_index?: number;
+                          category?: string;
+                        } | null;
+                      }
+                    | undefined;
                   const images = extractProofImageSources(c.attachments);
                   const proofGpsLine = formatProofGeoLine(extractFirstProofGeo(c.attachments));
                   return (
@@ -946,24 +1030,54 @@ export default function TicketDetail() {
                         {formatIST(c.created_at, "PPp")}
                       </div>
                       {rejection != null && typeof rejection === "object" ? (
-                        <div className="mt-2 space-y-1 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
-                          <p className="font-semibold text-destructive">Ticket rejected</p>
+                        <div className="mt-2 space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                          <p className="font-semibold text-destructive">Ticket Rejected</p>
                           <p>
-                            <span className="text-muted-foreground">Rejected by: </span>
+                            <span className="text-muted-foreground">By: </span>
                             <span className="font-medium">
                               {rejection.rejected_by_name?.trim()
                                 ? rejection.rejected_by_name
                                 : "Unknown"}
                             </span>
                           </p>
-                          <p>
-                            <span className="text-muted-foreground">Reason: </span>
-                            <span className="whitespace-pre-wrap break-words">
+                          {rejection.rejected_at && (
+                            <p>
+                              <span className="text-muted-foreground">Date: </span>
+                              {formatIST(rejection.rejected_at, "PPp")}
+                            </p>
+                          )}
+                          <div>
+                            <p className="text-muted-foreground">Reason:</p>
+                            <p className="whitespace-pre-wrap break-words font-medium">
                               {rejection.reason?.trim()
                                 ? rejection.reason
-                                : (c.body ?? "").replace(/^Ticket rejected:\s*/i, "").trim() || "—"}
-                            </span>
-                          </p>
+                                : (c.body ?? "").replace(/^Ticket rejected:\s*/i, "").trim() ||
+                                  "Not recorded"}
+                            </p>
+                          </div>
+                          {Array.isArray(rejection.recipients) && rejection.recipients.length > 0 && (
+                            <div>
+                              <p className="text-muted-foreground">Email sent to:</p>
+                              <ul className="list-disc pl-5">
+                                {rejection.recipients.map((email) => (
+                                  <li key={email} className="break-all">
+                                    {email}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {rejection.evidence?.comment_id != null && (
+                            <p className="text-muted-foreground">
+                              Evidence:{" "}
+                              {(rejection.evidence as { source?: string }).source ===
+                              "MANAGER_UPLOAD"
+                                ? "Manager rejection photo"
+                                : "FE proof"}{" "}
+                              (comment {String(rejection.evidence.comment_id).slice(0, 8)}…, index{" "}
+                              {rejection.evidence.proof_index ?? 0})
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <p className="mt-1 whitespace-pre-wrap break-words">{c.body}</p>
@@ -1035,50 +1149,13 @@ export default function TicketDetail() {
       )}
 
       {canPerformActions && (
-        <AlertDialog
+        <RejectTicketDialog
+          ticket={ticket}
           open={rejectDialogOpen}
-          onOpenChange={(open) => {
-            if (!open) setRejectReason("");
-            setRejectDialogOpen(open);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle className="flex items-center gap-2">
-                <XCircle className="h-5 w-5 text-destructive" />
-                Reject Ticket
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                Rejecting will move the ticket to terminal status <strong>REJECTED</strong> and stop all SLA and FE workflows.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-
-            <div className="space-y-2">
-              <Label htmlFor="reject-reason">Rejection reason *</Label>
-              <Textarea
-                id="reject-reason"
-                placeholder="Add a clear reason for the rejection..."
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                className="min-h-[100px]"
-              />
-              {rejectReason.trim().length === 0 && (
-                <p className="text-xs text-muted-foreground">A reason is required.</p>
-              )}
-            </div>
-
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={rejectPending}>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleReject}
-                disabled={rejectPending || rejectReason.trim().length === 0}
-                className="bg-destructive hover:bg-destructive/90"
-              >
-                {rejectPending ? "Rejecting…" : "Reject"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          onOpenChange={setRejectDialogOpen}
+          onConfirm={handleReject}
+          isPending={rejectPending}
+        />
       )}
 
       <ProofImageViewerOverlay

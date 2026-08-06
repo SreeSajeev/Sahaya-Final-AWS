@@ -33,6 +33,9 @@ const TICKET_SNAKE_TO_CAMEL = {
   short_description: "shortDescription",
   review_notes: "reviewNotes",
   resolution_category: "resolutionCategory",
+  rejection_reason: "rejectionReason",
+  rejected_at: "rejectedAt",
+  rejected_by: "rejectedBy",
 };
 
 function ticketPatchToPrisma(patch) {
