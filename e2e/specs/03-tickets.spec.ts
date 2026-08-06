@@ -24,6 +24,7 @@ test.describe("Tickets", () => {
         category: "OTHER",
         issue_type: "OTHER",
         priority_level: "LOW",
+        location: "E2E_PW_LOCATION",
       },
     });
     expect(create.status).toBe(200);
