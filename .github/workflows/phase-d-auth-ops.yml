@@ -26,6 +26,7 @@ on:
           - playwright_acceptance
           - parity_smoke
           - rejection_acceptance
+          - sync_develop
           - phase_f_soak_start
           - phase_f_soak_status
           - phase_f_soak_dense
@@ -149,6 +150,38 @@ jobs:
                 FE_BASE="${FE_BASE:-https://test-sahaya.pariskq.in}" \
                 CREDS_FILE="$CREDS_FILE" \
                 bash scripts/acceptance-rejection-workflow.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "sync_develop" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing sync_develop without CONFIRM" >&2
+                exit 1
+              fi
+              cd "$MONOREPO"
+              git fetch origin
+              git checkout develop
+              git reset --hard origin/develop
+              echo "SYNCED=$(git rev-parse HEAD)"
+              cd "$MONOREPO/backend"
+              npm ci --omit=dev || npm install --omit=dev
+              npx prisma generate
+              if ! npx prisma migrate deploy; then
+                echo "migrate deploy failed — baselining Phase D if needed"
+                npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth || true
+                npx prisma migrate deploy
+              fi
+              cd "$MONOREPO/frontend"
+              npm ci || npm install
+              npm run build
+              pm2 restart sahaya-final-aws-monorepo-api --update-env
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                sleep 2
+                if curl -sS -o /tmp/sync_health.json -w '%{http_code}' http://127.0.0.1:4100/health | grep -q 200; then
+                  echo "HEALTH"; cat /tmp/sync_health.json; echo
+                  break
+                fi
+              done
               exit 0
             fi
 
