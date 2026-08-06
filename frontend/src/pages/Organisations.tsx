@@ -39,8 +39,10 @@ export default function Organisations() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createSlug, setCreateSlug] = useState("");
+  const [createShortName, setCreateShortName] = useState("");
   const [createIncomingEmails, setCreateIncomingEmails] = useState<string[]>([""]);
   const [createOutgoingEmails, setCreateOutgoingEmails] = useState<string[]>([""]);
+  const [orgSearch, setOrgSearch] = useState("");
 
   const [createAdminOpen, setCreateAdminOpen] = useState(false);
   const [createAdminOrgId, setCreateAdminOrgId] = useState<string | null>(null);
@@ -122,6 +124,13 @@ export default function Organisations() {
     );
   }
 
+  const filteredOrgs = (organisations as Organisation[]).filter((org) => {
+    const q = orgSearch.trim().toLowerCase();
+    if (!q) return true;
+    return [org.name, org.short_name, org.slug]
+      .some((v) => v != null && String(v).toLowerCase().includes(q));
+  });
+
   return (
     <AppLayoutNew>
       <PageContainer>
@@ -140,13 +149,38 @@ export default function Organisations() {
             }
           />
 
+          <div className="max-w-md">
+            <Label htmlFor="org-search" className="sr-only">
+              Search tenants
+            </Label>
+            <Input
+              id="org-search"
+              value={orgSearch}
+              onChange={(e) => setOrgSearch(e.target.value)}
+              placeholder="Search by name, short name, or slug…"
+            />
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {(organisations as Organisation[]).map((org) => {
+            {filteredOrgs.map((org) => {
               const s = statsLoading ? null : perOrgStats?.[org.id];
+              const short = org.short_name != null ? String(org.short_name).trim() : "";
               return (
                 <Card key={org.id} className="h-full border-border/60 shadow-sm transition-shadow hover:shadow-md flex flex-col">
                   <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-                    <CardTitle className={typography.sectionTitle}>{org.name}</CardTitle>
+                    <div className="min-w-0 pr-2">
+                      <CardTitle className={typography.sectionTitle}>
+                        {short ? `${short}` : org.name}
+                      </CardTitle>
+                      {short ? (
+                        <p className="mt-1 text-xs text-muted-foreground truncate" title={org.name}>
+                          {org.name}
+                        </p>
+                      ) : null}
+                      <p className="mt-0.5 text-[11px] text-muted-foreground/80 font-mono truncate">
+                        {org.slug}
+                      </p>
+                    </div>
                     <Badge variant={org.status === "active" ? "default" : "secondary"}>
                       {org.status}
                     </Badge>
@@ -217,10 +251,10 @@ export default function Organisations() {
             })}
           </div>
 
-          {organisations.length === 0 && (
+          {filteredOrgs.length === 0 && (
             <Card>
               <CardContent className="py-10 text-center text-muted-foreground">
-                No tenants yet.
+                {organisations.length === 0 ? "No tenants yet." : "No tenants match this search."}
               </CardContent>
             </Card>
           )}
@@ -239,33 +273,50 @@ export default function Organisations() {
           if (!o) {
             setCreateIncomingEmails([""]);
             setCreateOutgoingEmails([""]);
+            setCreateShortName("");
           }
         }}>
           <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Tenant</DialogTitle>
               <DialogDescription>
-                Add a new tenant. Name and Short Name are required. Short Name will be stored lowercase with spaces replaced by hyphens.
+                Official name and slug are required. Short Name is an optional operator-friendly label (separate from the slug).
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="org-name">Tenant name</Label>
+                <Label htmlFor="org-name">Official company name</Label>
                 <Input
                   id="org-name"
                   value={createName}
                   onChange={(e) => setCreateName(e.target.value)}
-                  placeholder="Acme Corp"
+                  placeholder="Hitachi Payment Services Private Limited"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="org-slug">Short Name</Label>
+                <Label htmlFor="org-short-name">Short Name</Label>
+                <Input
+                  id="org-short-name"
+                  value={createShortName}
+                  onChange={(e) => setCreateShortName(e.target.value)}
+                  placeholder="Hitachi"
+                  maxLength={80}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Short searchable name used to identify this company. This does not change the official company name or slug.
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="org-slug">Slug</Label>
                 <Input
                   id="org-slug"
                   value={createSlug}
                   onChange={(e) => setCreateSlug(e.target.value.replace(/\s+/g, "-").toLowerCase())}
-                  placeholder="Enter short name"
+                  placeholder="hitachi-payment-services"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Unique URL/key identifier (lowercase, hyphens). Not the same as Short Name.
+                </p>
               </div>
               <OrganisationEmailArraysEditor
                 incomingEmails={createIncomingEmails}
@@ -283,11 +334,13 @@ export default function Organisations() {
                 onClick={async () => {
                   const name = createName.trim();
                   const slug = createSlug.trim().toLowerCase().replace(/\s+/g, "-");
+                  const short_name = createShortName.trim() || null;
                   if (!name || !slug) return;
                   try {
                     await createOrgMutation.mutateAsync({
                       name,
                       slug,
+                      short_name,
                       incoming_emails: createIncomingEmails,
                       outgoing_emails: createOutgoingEmails,
                     });
@@ -295,6 +348,7 @@ export default function Organisations() {
                     setCreateOpen(false);
                     setCreateName("");
                     setCreateSlug("");
+                    setCreateShortName("");
                     setCreateIncomingEmails([""]);
                     setCreateOutgoingEmails([""]);
                   } catch (err) {

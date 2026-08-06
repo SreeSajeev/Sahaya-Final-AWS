@@ -144,7 +144,7 @@ export function buildTicketClientSearchLookup(
  */
 export function resolveTicketSearchHints(
   searchRaw: string,
-  organisations: { id: string; name: string; slug?: string | null }[],
+  organisations: { id: string; name: string; slug?: string | null; short_name?: string | null }[],
   tenantClients: { slug: string; name: string }[]
 ): TicketSearchHints {
   const term = sanitizeTicketSearchInput(searchRaw).toLowerCase();
@@ -163,7 +163,12 @@ export function resolveTicketSearchHints(
   for (const org of organisations) {
     const name = String(org.name ?? "").toLowerCase();
     const slug = String(org.slug ?? "").toLowerCase();
-    if ((name && name.includes(term)) || (slug && slug.includes(term))) {
+    const shortName = String(org.short_name ?? "").toLowerCase();
+    if (
+      (name && name.includes(term)) ||
+      (slug && slug.includes(term)) ||
+      (shortName && shortName.includes(term))
+    ) {
       extraOrganisationIds.add(org.id);
       const slugRaw = String(org.slug ?? "").trim();
       if (slugRaw) extraClientSlugs.add(slugRaw);

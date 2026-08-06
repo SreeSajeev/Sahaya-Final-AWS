@@ -82,6 +82,7 @@ import {
   getOrganisationById,
   insertOrganisation,
   updateOrganisation,
+  normalizeOrganisationShortName,
 } from "../repositories/organisationRepository.js";
 import {
   listFieldExecutivesScoped,
@@ -1190,8 +1191,10 @@ router.post("/organisations", async (req, res) => {
   let slug = safeTrim(req.body?.slug);
   if (!name || !slug) return jsonError(res, 400, "name and slug required");
   slug = slug.toLowerCase().replace(/\s+/g, "-");
+  const shortNorm = normalizeOrganisationShortName(req.body?.short_name);
+  if (!shortNorm.ok) return jsonError(res, 400, shortNorm.error);
   try {
-    const insert = { name, slug, status: "active" };
+    const insert = { name, slug, status: "active", short_name: shortNorm.value };
     const email = safeTrim(req.body?.email);
     if (email) insert.email = email;
     if (Array.isArray(req.body?.incoming_emails)) insert.incoming_emails = req.body.incoming_emails;
@@ -1225,10 +1228,16 @@ router.patch("/organisations/:id", async (req, res) => {
       "outgoing_emails",
       "review_field_label",
       "review_field_helper_text",
+      "short_name",
     ]) {
       if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
     }
     if (typeof patch.name === "string") patch.name = patch.name.trim();
+    if (Object.prototype.hasOwnProperty.call(patch, "short_name")) {
+      const shortNorm = normalizeOrganisationShortName(patch.short_name);
+      if (!shortNorm.ok) return jsonError(res, 400, shortNorm.error);
+      patch.short_name = shortNorm.value;
+    }
     const { data, error } = await updateOrganisation(id, patch);
     if (error) return jsonError(res, 400, error.message);
     if (!data) return jsonError(res, 404, "Organisation not found");

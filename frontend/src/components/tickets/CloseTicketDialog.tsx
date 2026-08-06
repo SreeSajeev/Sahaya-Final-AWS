@@ -3,11 +3,11 @@
  *
  * Confirmation dialog for Service Manager to close/resolve a ticket.
  * Only allows closing tickets that are in appropriate states (ON_SITE, RESOLVED_PENDING_VERIFICATION).
- * Requires Issue Type (stored as resolution_category); includes optional verification remarks (sent to backend and included in resolution email).
+ * Requires Issue Type (stored as resolution_category) and Resolution Remarks
+ * (stored as verification_remarks). Location notes use review_notes (legacy column).
  */
 
 import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,7 +36,6 @@ import {
   RESOLUTION_CATEGORY_OTHER,
 } from "@/constants/complaintCategories";
 import { useOrgTicketConfigForClose } from "@/hooks/useOrgTicketConfigForClose";
-import { fetchJson } from "@/lib/backendDataApi";
 
 interface CloseTicketDialogProps {
   ticket: Ticket;
@@ -86,6 +85,7 @@ export function CloseTicketDialog({
   const canConfirm =
     canClose &&
     resolutionCategory.trim() !== "" &&
+    remarks.trim() !== "" &&
     (!isOtherCategory || resolutionOtherDetails.trim() !== "") &&
     isValidNotificationEmailField(notificationEmail);
 
@@ -98,26 +98,6 @@ export function CloseTicketDialog({
       setNotificationEmail("");
     }
   }, [open]);
-
-  const { data: org } = useQuery({
-    queryKey: ["close-dialog-org", ticket.organisation_id],
-    enabled: Boolean(open && ticket.organisation_id),
-    queryFn: async () => {
-      return await fetchJson<{
-        review_field_label?: string | null;
-        review_field_helper_text?: string | null;
-      }>(`/data/organisations/${encodeURIComponent(ticket.organisation_id ?? "")}`);
-    },
-  });
-
-  const reviewLabel =
-    org?.review_field_label != null && String(org.review_field_label).trim() !== ""
-      ? String(org.review_field_label).trim()
-      : "Review Notes";
-  const reviewHelper =
-    org?.review_field_helper_text != null && String(org.review_field_helper_text).trim() !== ""
-      ? String(org.review_field_helper_text).trim()
-      : "Add review notes before closing this ticket.";
 
   const handleConfirm = () => {
     if (!canConfirm) return;
@@ -205,25 +185,31 @@ export function CloseTicketDialog({
                     </div>
                   )}
                   <div className="space-y-2">
-                    <Label htmlFor="close-remarks">Verification remarks (optional)</Label>
+                    <Label htmlFor="close-remarks">Resolution Remarks *</Label>
                     <Textarea
                       id="close-remarks"
-                      placeholder="Notes for the client..."
+                      placeholder="Describe how the issue was resolved…"
                       value={remarks}
                       onChange={(e) => setRemarks(e.target.value)}
-                      className="min-h-[80px] whitespace-pre-wrap"
+                      className={`min-h-[80px] whitespace-pre-wrap ${!remarks.trim() ? "border-destructive/80" : ""}`}
+                      required
                     />
+                    {!remarks.trim() ? (
+                      <p className="text-xs text-destructive">Resolution remarks are required.</p>
+                    ) : null}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="close-review-notes">{reviewLabel}</Label>
+                    <Label htmlFor="close-review-notes">Location</Label>
                     <Textarea
                       id="close-review-notes"
-                      placeholder={reviewHelper}
+                      placeholder="Site or work location for this resolution (optional)"
                       value={reviewNotes}
                       onChange={(e) => setReviewNotes(e.target.value)}
                       className="min-h-[100px] whitespace-pre-wrap"
                     />
-                    <p className="text-xs text-muted-foreground">{reviewHelper}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Optional location note for this closure. Stored with the ticket; does not replace the ticket site location.
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="close-notification-email">Additional notify email (optional)</Label>

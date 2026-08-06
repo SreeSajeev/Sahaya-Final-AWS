@@ -79,6 +79,7 @@ export default function SuperAdminDashboard() {
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
   const [createOrgName, setCreateOrgName] = useState("");
   const [createOrgSlug, setCreateOrgSlug] = useState("");
+  const [createOrgShortName, setCreateOrgShortName] = useState("");
   const [createOrgIncomingEmails, setCreateOrgIncomingEmails] = useState<string[]>([""]);
   const [createOrgOutgoingEmails, setCreateOrgOutgoingEmails] = useState<string[]>([""]);
 
@@ -210,6 +211,7 @@ export default function SuperAdminDashboard() {
                           <TableRow>
                             <TableHead className={dataTableHeadClassName}>Name</TableHead>
                             <TableHead className={dataTableHeadClassName}>Short Name</TableHead>
+                            <TableHead className={dataTableHeadClassName}>Slug</TableHead>
                             <TableHead className={dataTableHeadClassName}>Status</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -221,6 +223,7 @@ export default function SuperAdminDashboard() {
                               onClick={() => navigate(`/super-admin/org/${encodeURIComponent(org.slug)}`)}
                             >
                               <TableCell className="font-medium">{org.name}</TableCell>
+                              <TableCell>{org.short_name?.trim() || "—"}</TableCell>
                               <TableCell className="font-mono text-sm">{org.slug}</TableCell>
                               <TableCell>
                                 <Badge variant={org.status === "active" ? "default" : "secondary"}>
@@ -350,12 +353,12 @@ export default function SuperAdminDashboard() {
             <DialogHeader>
               <DialogTitle>Create Tenant</DialogTitle>
               <DialogDescription>
-                Add a new tenant. Short Name must be unique (e.g. sreemarketing).
+                Official name and slug are required. Short Name is optional and separate from the slug.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="org-name">Name</Label>
+                <Label htmlFor="org-name">Official company name</Label>
                 <Input
                   id="org-name"
                   value={createOrgName}
@@ -363,16 +366,29 @@ export default function SuperAdminDashboard() {
                     setCreateOrgName(e.target.value);
                     if (!createOrgSlug) setCreateOrgSlug(e.target.value.trim().toLowerCase().replace(/\s+/g, "-"));
                   }}
-                  placeholder="e.g. Sree Marketing"
+                  placeholder="e.g. Hitachi Payment Services Private Limited"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="org-slug">Short Name</Label>
+                <Label htmlFor="org-short-name">Short Name</Label>
+                <Input
+                  id="org-short-name"
+                  value={createOrgShortName}
+                  onChange={(e) => setCreateOrgShortName(e.target.value)}
+                  placeholder="Hitachi"
+                  maxLength={80}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Short searchable name used to identify this company. This does not change the official company name or slug.
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="org-slug">Slug</Label>
                 <Input
                   id="org-slug"
                   value={createOrgSlug}
                   onChange={(e) => setCreateOrgSlug(e.target.value.trim().toLowerCase().replace(/\s+/g, "-"))}
-                  placeholder="Enter short name"
+                  placeholder="hitachi-payment-services"
                 />
               </div>
               <OrganisationEmailArraysEditor
@@ -393,6 +409,7 @@ export default function SuperAdminDashboard() {
                     await createOrgMutation.mutateAsync({
                       name: createOrgName.trim(),
                       slug: createOrgSlug.trim().toLowerCase().replace(/\s+/g, "-"),
+                      short_name: createOrgShortName.trim() || null,
                       incoming_emails: createOrgIncomingEmails,
                       outgoing_emails: createOrgOutgoingEmails,
                     });
@@ -400,6 +417,7 @@ export default function SuperAdminDashboard() {
                     setCreateOrgOpen(false);
                     setCreateOrgName("");
                     setCreateOrgSlug("");
+                    setCreateOrgShortName("");
                     setCreateOrgIncomingEmails([""]);
                     setCreateOrgOutgoingEmails([""]);
                   } catch (err) {

@@ -7,6 +7,7 @@ function mapOrgRow(row: {
   id: string;
   name: string;
   slug: string;
+  short_name?: string | null;
   created_at: string | null;
   status: string;
   incoming_emails?: unknown;
@@ -25,6 +26,9 @@ function mapOrgRow(row: {
     created_at: row.created_at ?? "",
     status: row.status,
   };
+  if (row.short_name != null && String(row.short_name).trim() !== "") {
+    org.short_name = String(row.short_name).trim();
+  }
   const incoming = toStrArr(row.incoming_emails ?? null);
   const outgoing = toStrArr(row.outgoing_emails ?? null);
   if (incoming.length) org.incoming_emails = incoming;
@@ -77,6 +81,7 @@ export function useCreateOrganisation() {
     mutationFn: async (payload: {
       name: string;
       slug: string;
+      short_name?: string | null;
       email?: string;
       incoming_emails?: string[];
       outgoing_emails?: string[];
@@ -88,12 +93,14 @@ export function useCreateOrganisation() {
       if (legacy) {
         outgoing = normalizeEmailArray([legacy, ...outgoing]);
       }
+      const shortRaw = payload.short_name != null ? String(payload.short_name).trim() : "";
 
       const data = await fetchJson<Parameters<typeof mapOrgRow>[0]>("/data/organisations", {
         method: "POST",
         body: {
           name: payload.name.trim(),
           slug,
+          short_name: shortRaw !== "" ? shortRaw : null,
           email: legacy || undefined,
           incoming_emails: incoming,
           outgoing_emails: outgoing,
@@ -120,6 +127,7 @@ export function useUpdateOrganisation() {
     mutationFn: async (payload: {
       id: string;
       name: string;
+      short_name?: string | null;
       incoming_emails?: string[];
       outgoing_emails?: string[];
       spoc_name?: string | null;
@@ -128,6 +136,12 @@ export function useUpdateOrganisation() {
     }) => {
       const incoming = normalizeEmailArray(payload.incoming_emails);
       const outgoing = normalizeEmailArray(payload.outgoing_emails);
+      const shortRaw =
+        payload.short_name !== undefined
+          ? payload.short_name != null && String(payload.short_name).trim() !== ""
+            ? String(payload.short_name).trim()
+            : null
+          : undefined;
 
       const data = await fetchJson<Parameters<typeof mapOrgRow>[0]>(
         `/data/organisations/${encodeURIComponent(payload.id)}`,
@@ -135,6 +149,7 @@ export function useUpdateOrganisation() {
           method: "PATCH",
           body: {
             name: payload.name.trim(),
+            ...(shortRaw !== undefined ? { short_name: shortRaw } : {}),
             incoming_emails: incoming,
             outgoing_emails: outgoing,
             spoc_name:

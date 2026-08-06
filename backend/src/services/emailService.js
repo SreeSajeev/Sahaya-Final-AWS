@@ -6,6 +6,13 @@ import { findUserByEmailForLookup } from "../repositories/userRepository.js";
 import { getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.js";
 import { findTicketByTicketNumber, getTicketByIdUnscoped } from "../repositories/ticketQueryRepository.js";
 import { listSlaRowsByTicketIds } from "../repositories/slaRepository.js";
+import { findActiveTenantClientBySlug } from "../repositories/tenantClientRepository.js";
+import { findOrganisationsBySlugs } from "../repositories/organisationRepository.js";
+import {
+  buildResolutionEmailHtml,
+  buildResolutionEmailPlainText,
+  pickInitialRemarks,
+} from "./resolutionEmailContent.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
@@ -196,7 +203,7 @@ async function fetchTicketByNumber(ticketNumber) {
 
   const { data: ticket, error } = await getTicketByIdUnscoped(
     row.id,
-    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, priority, priority_level, short_description, complaint_id"
+    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, resolved_at, priority, priority_level, short_description, remarks, complaint_id, client_slug, organisation_id, verification_remarks, resolution_category, review_notes"
   );
 
   if (error) {
@@ -205,6 +212,24 @@ async function fetchTicketByNumber(ticketNumber) {
   }
 
   return ticket ?? null;
+}
+
+/**
+ * Canonical customer/client display name for ticket emails.
+ * Prefer tenant_clients.name by client_slug; else organisation name by slug.
+ * Do NOT use email local-part as the client name.
+ */
+export async function resolveClientDisplayNameForEmail(ticket) {
+  const slug = ticket?.client_slug != null ? String(ticket.client_slug).trim() : "";
+  const orgId = ticket?.organisation_id ?? null;
+  if (slug) {
+    const { data: client } = await findActiveTenantClientBySlug(slug, orgId);
+    if (client?.name && String(client.name).trim()) return String(client.name).trim();
+    const { data: orgs } = await findOrganisationsBySlugs([slug]);
+    const orgName = orgs?.[0]?.name != null ? String(orgs[0].name).trim() : "";
+    if (orgName) return orgName;
+  }
+  return null;
 }
 
 async function fetchSlaDeadlines(ticketId) {
@@ -653,6 +678,9 @@ export async function sendClientResolutionEmail({
   category = null,
   issueType = null,
   location = null,
+  /** Manager resolution remarks (preferred over merged OTHER+remarks when provided). */
+  resolutionRemarks = null,
+  reviewNotes = null,
 }) {
   /** @type {{ attempted: boolean; sent: boolean; skipped: boolean; reason: string | null }} */
   const out = {
@@ -673,11 +701,10 @@ export async function sendClientResolutionEmail({
 
   try {
     const ticket = await fetchTicketByNumber(ticketNumber);
-    const sla = ticket?.id ? await fetchSlaDeadlines(ticket.id) : null;
 
     const mergedTicket = ticket || {
       ticket_number: ticketNumber,
-      status: null,
+      status: "RESOLVED",
       category,
       issue_type: issueType,
       location,
@@ -687,7 +714,11 @@ export async function sendClientResolutionEmail({
       opened_at: null,
       created_at: null,
       short_description: null,
+      remarks: null,
       complaint_id: complaintId,
+      client_slug: null,
+      organisation_id: null,
+      resolved_at: null,
     };
 
     const resolvedVehicleNumber =
@@ -695,13 +726,50 @@ export async function sendClientResolutionEmail({
         ? vehicleNumber
         : mergedTicket.vehicle_number;
 
-    const detailsBlock = buildTicketDetailsTable({
-      ticket: mergedTicket,
-      sla,
-      complaintId,
-      verificationRemarks,
-      resolutionCategory,
-    });
+    const [clientName, reportedByDisplay] = await Promise.all([
+      resolveClientDisplayNameForEmail(mergedTicket),
+      resolveReporterDisplayForEmail(mergedTicket.opened_by_email),
+    ]);
+
+    const initialRemarks = pickInitialRemarks(mergedTicket);
+    const resolutionRemarksValue =
+      resolutionRemarks != null && String(resolutionRemarks).trim() !== ""
+        ? String(resolutionRemarks).trim()
+        : verificationRemarks != null && String(verificationRemarks).trim() !== ""
+          ? String(verificationRemarks).trim()
+          : mergedTicket.verification_remarks != null
+            ? String(mergedTicket.verification_remarks).trim()
+            : null;
+
+    const locationValue =
+      location != null && String(location).trim() !== ""
+        ? String(location).trim()
+        : mergedTicket.location;
+
+    const closureLocation =
+      reviewNotes != null && String(reviewNotes).trim() !== ""
+        ? String(reviewNotes).trim()
+        : mergedTicket.review_notes != null && String(mergedTicket.review_notes).trim() !== ""
+          ? String(mergedTicket.review_notes).trim()
+          : null;
+
+    const detailsArgs = {
+      ticket: { ...mergedTicket, status: mergedTicket.status || "RESOLVED" },
+      complaintId: complaintId ?? mergedTicket.complaint_id,
+      clientName,
+      reportedByDisplay,
+      initialRemarks,
+      resolutionRemarks: resolutionRemarksValue,
+      resolutionCategory: resolutionCategory ?? mergedTicket.resolution_category,
+      location: locationValue,
+      closureLocation,
+      resolvedAt: mergedTicket.resolved_at
+        ? formatDateTime(mergedTicket.resolved_at)
+        : null,
+    };
+
+    const detailsBlock = buildResolutionEmailPlainText(detailsArgs);
+    const htmlDetails = buildResolutionEmailHtml(detailsArgs);
 
     let textBody = `
 Your ticket ${ticketNumber} has been successfully resolved.
@@ -713,6 +781,16 @@ If you have further issues, feel free to raise a new ticket.
 Thank you,
 Pariskq Operations Team
     `.trim();
+
+    const htmlBody = [
+      "<p>Your ticket ",
+      escapeHtmlForEmail(ticketNumber),
+      " has been successfully resolved.</p>",
+      htmlDetails,
+      "<p>If you have further issues, feel free to raise a new ticket.</p>",
+      "<p>Thank you,<br/>Pariskq Operations Team</p>",
+    ].join("\n");
+
     console.log("EMAIL_TRIGGER_RESOLUTION", redactEmail(toEmail), "ticketNumber=", ticketNumber);
     out.attempted = true;
     out.skipped = false;
@@ -725,6 +803,7 @@ Pariskq Operations Team
           resolvedVehicleNumber
         ),
         TextBody: textBody,
+        HtmlBody: htmlBody,
       },
       "CLIENT_RESOLUTION"
     );
@@ -744,6 +823,14 @@ Pariskq Operations Team
     out.reason = "exception";
     return out;
   }
+}
+
+function escapeHtmlForEmail(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /**

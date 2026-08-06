@@ -217,6 +217,8 @@ export interface Organisation {
   id: string;
   name: string;
   slug: string;
+  /** Operator-friendly short label (not the slug). */
+  short_name?: string | null;
   created_at: string;
   status: string;
   /** Mailbox addresses matched against inbound ticket email To header */

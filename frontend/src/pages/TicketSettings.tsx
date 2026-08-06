@@ -399,33 +399,34 @@ export default function TicketSettings() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle className={typography.sectionTitle}>Review &amp; Close Notes Configuration</CardTitle>
+                  <CardTitle className={typography.sectionTitle}>Location Field (Verify &amp; Close)</CardTitle>
                   <CardDescription className={typography.body}>
-                    Configure the label and helper text shown on the Verify &amp; Close dialog for this tenant.
+                    Optional label/helper for the Location notes field on Verify &amp; Close (stored as review_notes).
+                    The dialog displays this field as Location.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="review-field-label">Review Field Label</Label>
+                    <Label htmlFor="review-field-label">Location Field Label (settings)</Label>
                     <Input
                       id="review-field-label"
                       readOnly={readOnly}
                       disabled={readOnly}
                       value={reviewFieldLabel}
                       onChange={(e) => setReviewFieldLabel(e.target.value)}
-                      placeholder="Review Notes"
+                      placeholder="Location"
                       maxLength={120}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="review-field-helper">Review Field Helper Text</Label>
+                    <Label htmlFor="review-field-helper">Location Field Helper Text</Label>
                     <Input
                       id="review-field-helper"
                       readOnly={readOnly}
                       disabled={readOnly}
                       value={reviewFieldHelperText}
                       onChange={(e) => setReviewFieldHelperText(e.target.value)}
-                      placeholder="Add review notes before closing this ticket."
+                      placeholder="Site or work location for this resolution."
                       maxLength={240}
                     />
                   </div>
