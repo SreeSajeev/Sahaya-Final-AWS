@@ -79,9 +79,15 @@ const p = new PrismaClient();
 await p.ticket.update({ where: { id: "$TID" }, data: { location: null } });
 await p.\$disconnect();
 NODE
+  # API contract matches FE useUpdateTicket: PATCH body is { updates: { location } }
   CODE_BF="$(auth -o /tmp/parity_bf.json -w '%{http_code}' -X PATCH "$API_BASE/data/tickets/$TID" \
-    -d '{"location":"Backfilled Parity Loc"}')"
-  if [ "$CODE_BF" = "200" ]; then record "location_backfill_patch" PASS; else record "location_backfill_patch" FAIL "http=$CODE_BF $(head -c 160 /tmp/parity_bf.json)"; fi
+    -d '{"updates":{"location":"Backfilled Parity Loc"}}')"
+  LOC_OK="$(python3 -c 'import json;d=json.load(open("/tmp/parity_bf.json"));print("yes" if (d.get("location")or"").upper().find("BACKFILLED")>=0 else "no")' 2>/dev/null || echo no)"
+  if [ "$CODE_BF" = "200" ] && [ "$LOC_OK" = "yes" ]; then
+    record "location_backfill_patch" PASS
+  else
+    record "location_backfill_patch" FAIL "http=$CODE_BF loc_ok=$LOC_OK $(head -c 160 /tmp/parity_bf.json)"
+  fi
 fi
 
 # --- D. Analytics staff_users ---
