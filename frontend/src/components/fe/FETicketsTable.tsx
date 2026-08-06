@@ -17,6 +17,7 @@ import {
   dataTableCellDenseClassName,
 } from '@/components/common';
 import { cn } from '@/lib/utils';
+import { formatStateDisplay } from '@/lib/indianStates';
 import {
   formatFETicketWorkType,
   type FETicketRow,
@@ -74,7 +75,7 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
 
   return (
     <div className="w-full min-w-0 overflow-x-auto touch-scroll-x scrollbar-thin">
-      <Table className="min-w-[1100px]">
+      <Table className="min-w-[1280px]">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className={headClass('min-w-[7.25rem] sticky left-0 z-20 bg-card border-r border-border')}>
@@ -83,9 +84,11 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
             <TableHead className={headClass('min-w-[7rem]')}>Status</TableHead>
             <TableHead className={headClass('min-w-[7rem]')}>Customer / Client</TableHead>
             <TableHead className={headClass('min-w-[8rem]')}>Location</TableHead>
+            <TableHead className={headClass('min-w-[5.5rem]')}>State</TableHead>
             <TableHead className={headClass('min-w-[6.5rem]')}>Vehicle</TableHead>
             <TableHead className={headClass('min-w-[6rem]')}>Category</TableHead>
-            <TableHead className={headClass('min-w-[5rem]')}>Priority</TableHead>
+            <TableHead className={headClass('min-w-[7rem]')}>Issue Type</TableHead>
+            <TableHead className={headClass('min-w-[5.5rem]')}>Priority</TableHead>
             <TableHead className={headClass('min-w-[6.5rem]')}>Created</TableHead>
             <TableHead className={headClass('min-w-[6.5rem]')}>Due</TableHead>
             <TableHead className={headClass('min-w-[7.5rem]')}>Work Type</TableHead>
@@ -122,11 +125,17 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
               <TableCell className={cellClass('max-w-[12rem] truncate')} title={fmtCell(ticket.location)}>
                 {fmtCell(ticket.location)}
               </TableCell>
+              <TableCell className={cellClass('max-w-[8rem] truncate')} title={formatStateDisplay(ticket.state)}>
+                {formatStateDisplay(ticket.state)}
+              </TableCell>
               <TableCell className={cellClass('font-mono text-xs')}>
                 {fmtCell(ticket.vehicle_number)}
               </TableCell>
               <TableCell className={cellClass('max-w-[8rem] truncate')} title={fmtCell(ticket.category)}>
                 {fmtCell(ticket.category)}
+              </TableCell>
+              <TableCell className={cellClass('max-w-[10rem] truncate')} title={fmtCell(ticket.issue_type)}>
+                {fmtCell(ticket.issue_type)}
               </TableCell>
               <TableCell className={cellClass()}>
                 <TicketPriorityBadge

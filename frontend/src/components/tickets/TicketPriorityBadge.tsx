@@ -1,4 +1,3 @@
-import { Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   type PriorityLevel,
@@ -13,14 +12,14 @@ interface TicketPriorityBadgeProps {
   className?: string;
 }
 
-const STAR_STYLES: Record<PriorityLevel, string> = {
-  LOW: 'fill-emerald-500 text-emerald-500',
-  MEDIUM: 'fill-amber-400 text-amber-400',
-  HIGH: 'fill-red-500 text-red-500',
+const LEVEL_STYLES: Record<PriorityLevel, string> = {
+  LOW: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  MEDIUM: 'bg-amber-50 text-amber-900 border-amber-200',
+  HIGH: 'bg-red-50 text-red-800 border-red-200',
 };
 
 /**
- * Compact star indicator for ticket priority (green / yellow / red).
+ * Textual priority badge: LOW / MEDIUM / HIGH (no star icons).
  */
 export function TicketPriorityBadge({
   priority,
@@ -32,11 +31,15 @@ export function TicketPriorityBadge({
 
   return (
     <span
-      className={cn('inline-flex items-center justify-center', className)}
+      className={cn(
+        'inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-semibold tracking-wide',
+        LEVEL_STYLES[level],
+        className,
+      )}
       title={label}
       aria-label={`Priority: ${label}`}
     >
-      <Star className={cn('h-4 w-4', STAR_STYLES[level])} aria-hidden />
+      {label}
     </span>
   );
 }

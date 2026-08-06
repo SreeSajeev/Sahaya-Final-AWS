@@ -12,7 +12,6 @@ import {
   User,
   Clock,
   Image as ImageIcon,
-  Star,
   ClipboardCheck,
   FileText,
   XCircle,
@@ -507,14 +506,30 @@ export default function TicketDetail() {
 
   /* ================= UI ================= */
 
-  const backTo = isClient ? "/app/client" : "/app";
+  const backTo = isClient
+    ? "/app/client"
+    : userProfile?.role === "FIELD_EXECUTIVE"
+      ? "/fe"
+      : "/app/tickets";
+  const backLabel = isClient
+    ? "Back to client portal"
+    : userProfile?.role === "FIELD_EXECUTIVE"
+      ? "My tickets"
+      : "All Tickets";
   const detailContent = (
     <PageContainer>
       <div className="space-y-6">
         <PageHeader
           leading={
-            <Button variant="ghost" size="icon" onClick={() => navigate(backTo)} aria-label="Back to dashboard">
-              <ArrowLeft className="h-5 w-5" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate(backTo)}
+              aria-label={backLabel}
+              className="gap-1.5 px-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">{backLabel}</span>
             </Button>
           }
           titleSlot={
@@ -531,9 +546,6 @@ export default function TicketDetail() {
                 priority={ticket.priority}
                 priority_level={ticket.priority_level}
               />
-              <span className="text-sm text-muted-foreground">
-                {priorityDisplayLabel(resolveTicketPriorityLevel(ticket))}
-              </span>
             </div>
           }
           description={`Opened ${formatIST(ticket.opened_at, "PPpp")}`}
@@ -935,7 +947,7 @@ export default function TicketDetail() {
                       )}
 
                       {a?.remarks && (
-                        <p className="mt-2 text-sm text-muted-foreground">
+                        <p className="mt-2 text-sm text-muted-foreground whitespace-pre-wrap break-words">
                           <strong>Remarks:</strong> {String(a.remarks)}
                         </p>
                       )}
@@ -1059,7 +1071,13 @@ function Info({ label, value, mono }: InfoProps) {
   return (
     <div>
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className={mono ? "font-mono font-medium" : "font-medium"}>
+      <p
+        className={
+          mono
+            ? "font-mono font-medium whitespace-pre-wrap break-words"
+            : "font-medium whitespace-pre-wrap break-words"
+        }
+      >
         {value || "—"}
       </p>
     </div>
@@ -1078,7 +1096,7 @@ function IconInfo({ icon: Icon, label, value }: IconInfoProps) {
       <Icon className="mt-1 h-4 w-4 text-muted-foreground" />
       <div>
         <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="font-medium">{value || "—"}</p>
+        <p className="font-medium whitespace-pre-wrap break-words">{value || "—"}</p>
       </div>
     </div>
   );

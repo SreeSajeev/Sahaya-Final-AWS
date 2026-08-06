@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ExternalLink, MapPin, ChevronRight, Star } from 'lucide-react';
+import { ExternalLink, MapPin, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatStateDisplay } from '@/lib/indianStates';
 import {

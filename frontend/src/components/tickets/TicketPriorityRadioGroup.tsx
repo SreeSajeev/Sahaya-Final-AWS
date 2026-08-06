@@ -1,18 +1,11 @@
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
-import { Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   type PriorityLevel,
   PRIORITY_LEVELS,
   priorityDisplayLabel,
 } from '@/lib/priority';
-
-const STAR_STYLES: Record<PriorityLevel, string> = {
-  LOW: 'fill-emerald-500 text-emerald-500',
-  MEDIUM: 'fill-amber-400 text-amber-400',
-  HIGH: 'fill-red-500 text-red-500',
-};
 
 interface TicketPriorityRadioGroupProps {
   value: PriorityLevel;
@@ -22,7 +15,7 @@ interface TicketPriorityRadioGroupProps {
   className?: string;
 }
 
-/** Low / Medium / High priority selector with star hints. */
+/** Low / Medium / High priority selector (textual labels only). */
 export function TicketPriorityRadioGroup({
   value,
   onValueChange,
@@ -43,9 +36,8 @@ export function TicketPriorityRadioGroup({
           <RadioGroupItem value={level} id={`${idPrefix}-${level}`} />
           <Label
             htmlFor={`${idPrefix}-${level}`}
-            className="flex cursor-pointer items-center gap-1.5 text-sm font-medium"
+            className="cursor-pointer text-sm font-medium tracking-wide"
           >
-            <Star className={cn('h-3.5 w-3.5', STAR_STYLES[level])} aria-hidden />
             {priorityDisplayLabel(level)}
           </Label>
         </div>

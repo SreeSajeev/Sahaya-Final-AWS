@@ -87,4 +87,19 @@ test.describe("Tickets", () => {
     await expect(page.locator("body")).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
   });
+
+  test("ticket detail All Tickets navigates to list", async ({ page }) => {
+    test.skip(!hasCreds("ADMIN") && !hasCreds("STAFF"), "missing staff creds");
+    const role = hasCreds("ADMIN") ? "ADMIN" : "STAFF";
+    const sess = await login(role as "ADMIN" | "STAFF");
+    const list = await api("GET", "/data/tickets?limit=1", { token: sess.accessToken });
+    const ticketId = list.json?.items?.[0]?.id as string | undefined;
+    test.skip(!ticketId, "no ticket available for navigation check");
+
+    await browserLogin(page, role as "ADMIN" | "STAFF");
+    await page.goto(`/app/tickets/${ticketId}`);
+    await expect(page).not.toHaveURL(/\/login/);
+    await page.getByRole("button", { name: /All Tickets/i }).click();
+    await expect(page).toHaveURL(/\/app\/tickets\/?$/);
+  });
 });

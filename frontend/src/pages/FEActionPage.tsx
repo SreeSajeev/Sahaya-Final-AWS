@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Camera, ImageIcon, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +45,7 @@ type FeActionTicketContext = {
 
 export default function FEActionPage() {
   const { tokenId } = useParams<{ tokenId: string }>();
+  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [submitted, setSubmitted] = useState(false);
@@ -285,6 +286,8 @@ export default function FEActionPage() {
 
   /* ================= SUBMIT PROOF ================= */
   const handleSubmit = async () => {
+    if (submitPending || submitted) return;
+
     if (!token || !ticket) {
       toast({ title: "Missing token or ticket" });
       return;
@@ -404,8 +407,9 @@ export default function FEActionPage() {
           isResolution && resolutionOutcome === "FAILED"
             ? "Failed attempt recorded"
             : "Proof submitted successfully",
-        description: "You may now close this page.",
+        description: "Returning to your ticket list…",
       });
+      navigate("/fe", { replace: true });
     } catch (err: unknown) {
       console.error("SUBMIT FAILED:", err);
       const message = String(err instanceof Error ? err.message : err || "");
@@ -491,7 +495,7 @@ export default function FEActionPage() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="p-6 text-center max-w-md w-full">
           <h2 className="text-lg font-semibold text-green-600">Proof Submitted</h2>
-          <p className="text-sm text-muted-foreground mt-2">You may close this page.</p>
+          <p className="text-sm text-muted-foreground mt-2">Returning to your ticket list…</p>
         </Card>
       </div>
     );
@@ -807,7 +811,7 @@ export default function FEActionPage() {
               {geoFetching && <p className="text-xs text-muted-foreground">Fetching location…</p>}
               {!geoFetching && geoMessage && <p className="text-xs text-muted-foreground">{geoMessage}</p>}
               <textarea
-                className="w-full border rounded p-3 text-base md:text-sm min-h-[88px]"
+                className="w-full border rounded p-3 text-base md:text-sm min-h-[88px] whitespace-pre-wrap"
                 placeholder={isResolution ? "Optional remarks" : "Optional remarks"}
                 value={remarks}
                 onChange={(e) => setRemarks(e.target.value)}
