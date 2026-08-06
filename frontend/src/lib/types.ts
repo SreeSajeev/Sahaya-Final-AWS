@@ -135,6 +135,10 @@ export interface Ticket {
   review_notes?: string | null;
   /** Resolution category chosen at close (may be absent on older rows). */
   resolution_category?: string | null;
+  /** Manager rejection reason (nullable for historical rejected tickets). */
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
+  rejected_by?: string | null;
 }
 
 // Ticket with assignment info

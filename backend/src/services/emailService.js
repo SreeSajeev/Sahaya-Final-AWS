@@ -13,6 +13,11 @@ import {
   buildResolutionEmailPlainText,
   pickInitialRemarks,
 } from "./resolutionEmailContent.js";
+import {
+  buildRejectionEmailHtml,
+  buildRejectionEmailPlainText,
+} from "./rejectionEmailContent.js";
+import { REJECTION_EMAIL_ATTACHMENT_MAX_BYTES } from "./rejectionEvidenceService.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
@@ -203,7 +208,7 @@ async function fetchTicketByNumber(ticketNumber) {
 
   const { data: ticket, error } = await getTicketByIdUnscoped(
     row.id,
-    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, resolved_at, priority, priority_level, short_description, remarks, complaint_id, client_slug, organisation_id, verification_remarks, resolution_category, review_notes"
+    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, resolved_at, priority, priority_level, short_description, remarks, complaint_id, client_slug, organisation_id, verification_remarks, resolution_category, review_notes, rejection_reason, rejected_at, rejected_by"
   );
 
   if (error) {
@@ -918,5 +923,193 @@ export async function sendDailyTenantReportEmail({
   );
 }
 
+/**
+ * Customer rejection notification (Postmark).
+ * Optional evidence is attached as a Postmark Attachment (server-side S3 fetch) —
+ * never expose public S3 URLs or short-lived signed links in customer email.
+ *
+ * @param {object} args
+ * @param {string} args.toEmail
+ * @param {string} args.ticketNumber
+ * @param {string | null} [args.rejectionReason]
+ * @param {string | null} [args.rejectedAt]
+ * @param {{ buffer: Buffer; contentType: string; filename?: string } | null} [args.evidenceAttachment]
+ */
+export async function sendClientRejectionEmail({
+  toEmail,
+  ticketNumber,
+  rejectionReason = null,
+  rejectedAt = null,
+  complaintId = null,
+  vehicleNumber = null,
+  category = null,
+  issueType = null,
+  location = null,
+  evidenceAttachment = null,
+}) {
+  /** @type {{ attempted: boolean; sent: boolean; skipped: boolean; reason: string | null; attached_evidence?: boolean }} */
+  const out = {
+    attempted: false,
+    sent: false,
+    skipped: true,
+    reason: null,
+    attached_evidence: false,
+  };
+
+  if (!isValidToEmail(toEmail)) {
+    out.reason = "invalid_recipient";
+    return out;
+  }
+  if (!isValidTicketNumber(ticketNumber)) {
+    out.reason = "invalid_ticket_number";
+    return out;
+  }
+
+  try {
+    const ticket = await fetchTicketByNumber(ticketNumber);
+
+    const mergedTicket = ticket || {
+      ticket_number: ticketNumber,
+      status: "REJECTED",
+      category,
+      issue_type: issueType,
+      location,
+      vehicle_number: vehicleNumber,
+      opened_by_email: toEmail,
+      priority: null,
+      opened_at: null,
+      created_at: null,
+      short_description: null,
+      remarks: null,
+      complaint_id: complaintId,
+      client_slug: null,
+      organisation_id: null,
+      rejected_at: rejectedAt,
+    };
+
+    const resolvedVehicleNumber =
+      vehicleNumber != null && String(vehicleNumber).trim() !== ""
+        ? vehicleNumber
+        : mergedTicket.vehicle_number;
+
+    const [clientName, reportedByDisplay] = await Promise.all([
+      resolveClientDisplayNameForEmail(mergedTicket),
+      resolveReporterDisplayForEmail(mergedTicket.opened_by_email),
+    ]);
+
+    const initialRemarks = pickInitialRemarks(mergedTicket);
+    const locationValue =
+      location != null && String(location).trim() !== ""
+        ? String(location).trim()
+        : mergedTicket.location;
+
+    const rejectedAtDisplay =
+      rejectedAt != null && String(rejectedAt).trim() !== ""
+        ? formatDateTime(rejectedAt)
+        : mergedTicket.rejected_at
+          ? formatDateTime(mergedTicket.rejected_at)
+          : formatDateTime(new Date().toISOString());
+
+    const detailsArgs = {
+      ticket: { ...mergedTicket, status: "REJECTED" },
+      complaintId: complaintId ?? mergedTicket.complaint_id,
+      clientName,
+      reportedByDisplay,
+      initialRemarks,
+      rejectionReason:
+        rejectionReason != null && String(rejectionReason).trim() !== ""
+          ? String(rejectionReason).trim()
+          : mergedTicket.rejection_reason != null
+            ? String(mergedTicket.rejection_reason).trim()
+            : null,
+      rejectedAt: rejectedAtDisplay,
+      issueType:
+        issueType != null && String(issueType).trim() !== ""
+          ? issueType
+          : mergedTicket.issue_type,
+      location: locationValue,
+    };
+
+    const detailsBlock = buildRejectionEmailPlainText(detailsArgs);
+    const htmlDetails = buildRejectionEmailHtml(detailsArgs);
+
+    let textBody = `
+Your ticket ${ticketNumber} has been rejected.
+
+${detailsBlock}
+
+If you have further issues, feel free to raise a new ticket.
+
+Thank you,
+Pariskq Operations Team
+    `.trim();
+
+    const htmlBody = [
+      "<p>Your ticket ",
+      escapeHtmlForEmail(ticketNumber),
+      " has been rejected.</p>",
+      htmlDetails,
+      "<p>If you have further issues, feel free to raise a new ticket.</p>",
+      "<p>Thank you,<br/>Pariskq Operations Team</p>",
+    ].join("\n");
+
+    /** @type {object[]} */
+    const attachments = [];
+    if (
+      evidenceAttachment?.buffer &&
+      Buffer.isBuffer(evidenceAttachment.buffer) &&
+      evidenceAttachment.buffer.length > 0 &&
+      evidenceAttachment.buffer.length <= REJECTION_EMAIL_ATTACHMENT_MAX_BYTES
+    ) {
+      const ct = String(evidenceAttachment.contentType || "image/jpeg").toLowerCase();
+      if (ct.startsWith("image/")) {
+        const ext =
+          ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : ct.includes("gif") ? "gif" : "jpg";
+        attachments.push({
+          Name: evidenceAttachment.filename || `rejection-evidence.${ext}`,
+          Content: evidenceAttachment.buffer.toString("base64"),
+          ContentType: ct,
+        });
+        out.attached_evidence = true;
+      }
+    }
+
+    console.log("EMAIL_TRIGGER_REJECTION", redactEmail(toEmail), "ticketNumber=", ticketNumber);
+    out.attempted = true;
+    out.skipped = false;
+    const payload = {
+      To: toEmail.trim(),
+      Subject: buildCustomerTicketEmailSubject(
+        "Ticket Rejected",
+        ticketNumber,
+        resolvedVehicleNumber
+      ),
+      TextBody: textBody,
+      HtmlBody: htmlBody,
+    };
+    if (attachments.length > 0) {
+      payload.Attachments = attachments;
+    }
+
+    const sendResult = await sendEmail(payload, "CLIENT_REJECTION");
+    if (sendResult.ok) {
+      out.sent = true;
+      out.reason = "sent";
+    } else {
+      out.sent = false;
+      out.reason = sendResult.reason || "provider_failure";
+    }
+    return out;
+  } catch (err) {
+    console.error("[EMAIL:CLIENT_REJECTION]", err.message);
+    out.attempted = true;
+    out.skipped = false;
+    out.sent = false;
+    out.reason = "exception";
+    return out;
+  }
+}
+
 export const sendResolutionEmail = sendClientResolutionEmail;
 export const sendClientClosureEmail = sendClientResolutionEmail;
+export const sendRejectionEmail = sendClientRejectionEmail;

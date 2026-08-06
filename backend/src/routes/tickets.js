@@ -1,6 +1,18 @@
 import express from "express";
 import { TOKEN_STATES, revokeTokensForTicket } from "../services/tokenService.js";
-import { sendResolutionEmail } from "../services/emailService.js";
+import { sendResolutionEmail, sendClientRejectionEmail } from "../services/emailService.js";
+import {
+  listClientNotificationEmails,
+  validateNotifyEmailsAgainstAllowed,
+} from "../services/clientNotificationEmailResolver.js";
+import {
+  buildRejectionEvidenceOptions,
+  resolveRejectionEvidence,
+  REJECTION_EMAIL_ATTACHMENT_MAX_BYTES,
+} from "../services/rejectionEvidenceService.js";
+import { listCommentsForTicket, insertComment } from "../repositories/commentRepository.js";
+import { findActiveTenantClientBySlug } from "../repositories/tenantClientRepository.js";
+import { normalizeClientSlug } from "../services/tenantClientService.js";
 import { setOnsiteDeadline } from "../services/slaService.js";
 import {
   assignOneTicket,
@@ -54,7 +66,6 @@ import {
   getTicketStatusById,
 } from "../repositories/ticketQueryRepository.js";
 import { updateSlaByTicketId } from "../repositories/slaRepository.js";
-import { insertComment } from "../repositories/commentRepository.js";
 import { getAssignmentById } from "../repositories/assignmentRepository.js";
 import { findUserNameById } from "../repositories/userRepository.js";
 import { findActiveResolutionTokenForTicket } from "../repositories/feActionTokenRepository.js";
@@ -90,7 +101,20 @@ const listTicketsQuerySchema = z.object({
 });
 
 const rejectBodySchema = z.object({
-  reason: z.string().min(1).max(1000),
+  reason: z
+    .string({ required_error: "Rejection reason is required." })
+    .max(1000)
+    .refine((v) => String(v).trim().length > 0, { message: "Rejection reason is required." }),
+  /** Selected client notification emails — re-validated server-side against Client contacts. */
+  recipients: z.array(z.string().max(320)).max(50).optional().default([]),
+  /** Optional FE proof reference (comment + index); never accept raw S3 keys from client. */
+  evidence: z
+    .object({
+      commentId: z.string().uuid(),
+      proofIndex: z.coerce.number().int().min(0).max(50),
+    })
+    .optional()
+    .nullable(),
 });
 
 const closeBodySchema = z.object({
@@ -464,13 +488,103 @@ router.post("/:id/reassign", requireRole(STAFF_OPERATION_ROLES), async (req, res
 });
 
 /* ======================================================
-   STAFF REJECT TICKET (terminal)
-   - Allowed only for OPEN or NEEDS_REVIEW (pre-assignment)
-   - Creates an audit comment in ticket_comments
-   - Sets tickets.status = REJECTED + needs_review=false
-   - Clears SLA deadlines + breach flags
-   - Deletes any outstanding fe_action_tokens for the ticket
-   - Idempotent: if already REJECTED, returns success
+   REJECTION CONTEXT (recipients + FE proof options)
+   GET /tickets/:id/rejection-context
+====================================================== */
+router.get("/:id/rejection-context", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
+  const ticketId = req.params.id;
+  try {
+    const { data: ticket, error: ticketError } = await getTicketByIdScoped(
+      req,
+      ticketId,
+      "id, status, organisation_id, ticket_number, client_slug, issue_type, category, location, opened_by_email, remarks, short_description, rejection_reason, rejected_at, rejected_by"
+    );
+    if (ticketError || !ticket) {
+      return jsonRes(res, 404, { error: "Ticket not found" });
+    }
+    if (!isTenantAllowed(req, ticket.organisation_id)) {
+      return denyTenantMismatch(res);
+    }
+
+    const slug = normalizeClientSlug(ticket.client_slug);
+    let client = null;
+    if (slug) {
+      const { data: tc } = await findActiveTenantClientBySlug(slug, ticket.organisation_id ?? null);
+      if (tc) {
+        client = {
+          id: tc.id,
+          name: tc.name ?? null,
+          slug: tc.slug ?? slug,
+        };
+      } else {
+        client = { id: null, name: null, slug };
+      }
+    }
+
+    /** @type {{ id: string; email: string; name: string | null; source: string }[]} */
+    let recipients = [];
+    if (slug) {
+      const result = await listClientNotificationEmails(req, {
+        clientSlug: slug,
+        organisationId: ticket.organisation_id ?? null,
+      });
+      if (result.error) {
+        return jsonRes(res, result.status ?? 500, { error: result.error });
+      }
+      recipients = (result.items ?? []).map((item) => ({
+        id: String(item.email).toLowerCase(),
+        email: item.email,
+        name: item.source === "contact_email" && client?.name ? String(client.name) : null,
+        source: item.source,
+      }));
+    }
+
+    const { data: comments, error: commentsErr } = await listCommentsForTicket(req, ticketId, {
+      limit: 200,
+      offset: 0,
+    });
+    if (commentsErr) {
+      return jsonRes(res, 500, { error: safeDbErrorForClient(commentsErr, "Failed to load proofs") });
+    }
+
+    const evidenceOptions = buildRejectionEvidenceOptions(comments || [], {
+      ticketId,
+      organisationId: ticket.organisation_id ?? null,
+    }).map(({ key: _key, ...rest }) => rest);
+
+    return jsonOk(res, {
+      ticket: {
+        id: ticket.id,
+        ticket_number: ticket.ticket_number,
+        status: ticket.status,
+        issue_type: ticket.issue_type ?? null,
+        category: ticket.category ?? null,
+        location: ticket.location ?? null,
+        client_slug: ticket.client_slug ?? null,
+      },
+      client,
+      recipients,
+      evidenceOptions,
+      canReject:
+        ticket.status === "OPEN" ||
+        ticket.status === "NEEDS_REVIEW" ||
+        ticket.status === "REJECTED",
+    });
+  } catch (err) {
+    console.error("[rejection-context]", err);
+    return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
+  }
+});
+
+/* ======================================================
+   REJECT TICKET (manager)
+   - Requires rejection reason
+   - Optional Client contact recipients (re-validated)
+   - Optional FE proof evidence (commentId + proofIndex)
+   - Sets tickets.status = REJECTED + structured rejection fields
+   - Clears SLA + revokes FE tokens
+   - Sends rejection email (non-transactional on Postmark failure)
+   - Idempotent: if already REJECTED, returns success (no re-email)
 ====================================================== */
 router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   console.log("[TENANT_GUARD] reject_attempt", {
@@ -483,9 +597,14 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
   const ticketId = req.params.id;
   const parsedBody = rejectBodySchema.safeParse(req.body ?? {});
   if (!parsedBody.success) {
-    return jsonRes(res, 400, { error: "rejection reason is required (1–1000 chars)", details: parsedBody.error.flatten() });
+    return jsonRes(res, 400, {
+      error: "Rejection reason is required.",
+      details: parsedBody.error.flatten(),
+    });
   }
   const reasonTrimmed = parsedBody.data.reason.trim();
+  const requestedRecipients = parsedBody.data.recipients ?? [];
+  const evidenceRef = parsedBody.data.evidence ?? null;
 
   if (!req.appUser?.id) {
     return jsonRes(res, 403, { error: "User profile required to reject tickets" });
@@ -495,7 +614,7 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
     const { data: ticket, error: ticketError } = await getTicketByIdScoped(
       req,
       ticketId,
-      "id, status, organisation_id, ticket_number, client_slug"
+      "id, status, organisation_id, ticket_number, client_slug, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, remarks, short_description"
     );
 
     if (ticketError || !ticket) {
@@ -508,7 +627,6 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
 
     console.log("[REJECT] fetched ticket.status BEFORE update:", ticket.status);
 
-    // Idempotency: if already rejected, still make sure SLA + tokens are cleared.
     const alreadyRejected = ticket.status === "REJECTED";
 
     if (!alreadyRejected && ticket.status !== "OPEN" && ticket.status !== "NEEDS_REVIEW") {
@@ -521,9 +639,53 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       });
     }
 
+    let validatedRecipients = [];
+    const slug = normalizeClientSlug(ticket.client_slug);
+    if (requestedRecipients.length > 0) {
+      if (!slug) {
+        return jsonRes(res, 400, {
+          error: "Cannot send rejection email: ticket has no client association",
+        });
+      }
+      const allowedResult = await listClientNotificationEmails(req, {
+        clientSlug: slug,
+        organisationId: ticket.organisation_id ?? null,
+      });
+      if (allowedResult.error) {
+        return jsonRes(res, allowedResult.status ?? 500, { error: allowedResult.error });
+      }
+      const check = validateNotifyEmailsAgainstAllowed(requestedRecipients, allowedResult.items);
+      if (!check.ok) {
+        return jsonRes(res, 400, { error: check.error });
+      }
+      validatedRecipients = check.validated;
+    }
+
+    let evidenceSnapshot = null;
+    if (evidenceRef && !alreadyRejected) {
+      const { data: comments, error: commentsErr } = await listCommentsForTicket(req, ticketId, {
+        limit: 200,
+        offset: 0,
+      });
+      if (commentsErr) {
+        return jsonRes(res, 500, {
+          error: safeDbErrorForClient(commentsErr, "Failed to validate rejection evidence"),
+        });
+      }
+      const withTicket = (comments || []).map((c) => ({ ...c, ticket_id: c.ticket_id ?? ticketId }));
+      const resolved = resolveRejectionEvidence(evidenceRef, {
+        ticketId,
+        organisationId: ticket.organisation_id ?? null,
+        comments: withTicket,
+      });
+      if (!resolved.ok) {
+        return jsonRes(res, resolved.status ?? 400, { error: resolved.error });
+      }
+      evidenceSnapshot = resolved.evidence;
+    }
+
     const nowIso = new Date().toISOString();
 
-    // Stop FE workflow first to ensure no token-based actions can proceed.
     try {
       await revokeTokensForTicket({ ticketId, reason: "ticket_rejected" });
     } catch (tokenErr) {
@@ -533,13 +695,19 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       });
     }
 
-    // Update ticket terminal fields.
-    const updateTicketRes = await updateTicketById(ticketId, {
+    const ticketPatch = {
       status: "REJECTED",
       needs_review: false,
       current_assignment_id: null,
       updated_at: nowIso,
-    });
+    };
+    if (!alreadyRejected) {
+      ticketPatch.rejection_reason = reasonTrimmed;
+      ticketPatch.rejected_at = nowIso;
+      ticketPatch.rejected_by = req.appUser.id;
+    }
+
+    const updateTicketRes = await updateTicketById(ticketId, ticketPatch);
     if (updateTicketRes.error) {
       console.error("[REJECT] update tickets failed:", updateTicketRes.error.message);
       return jsonRes(res, 500, {
@@ -563,24 +731,27 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       });
     }
 
-    // Audit comment (skip duplicates if already rejected).
-    if (!alreadyRejected) {
-      const { data: rejectorRow } = await findUserNameById(req.appUser.id);
-      const rejectedByName =
-        rejectorRow?.name != null && String(rejectorRow.name).trim() !== ""
-          ? String(rejectorRow.name).trim()
-          : "Unknown";
+    const { data: rejectorRow } = await findUserNameById(req.appUser.id);
+    const rejectedByName =
+      rejectorRow?.name != null && String(rejectorRow.name).trim() !== ""
+        ? String(rejectorRow.name).trim()
+        : "Unknown";
 
+    if (!alreadyRejected) {
       const insertCommentRes = await insertComment({
         ticket_id: ticketId,
         source: "STAFF",
         author_id: req.appUser.id,
+        organisation_id: ticket.organisation_id ?? null,
         body: `Ticket rejected: ${reasonTrimmed}`,
         attachments: {
           rejection: {
             reason: reasonTrimmed,
             rejected_by_user_id: req.appUser.id,
             rejected_by_name: rejectedByName,
+            rejected_at: nowIso,
+            recipients: validatedRecipients,
+            evidence: evidenceSnapshot,
           },
         },
       });
@@ -602,6 +773,121 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       return jsonRes(res, 500, { error: "Ticket rejection could not be verified" });
     }
 
+    /** @type {{ attempted: boolean; sent: boolean; skipped: boolean; reason: string | null; recipient_count?: number; sent_count?: number }} */
+    let rejection_email_status = {
+      attempted: false,
+      sent: false,
+      skipped: true,
+      reason: alreadyRejected ? "already_rejected" : "not_attempted",
+    };
+
+    let evidenceAttachment = null;
+    if (!alreadyRejected && evidenceSnapshot?.storage_key && validatedRecipients.length > 0) {
+      try {
+        const { getProof, isProofS3Enabled } = await import("../services/proofStorageService.js");
+        if (isProofS3Enabled()) {
+          const proof = await getProof({ key: evidenceSnapshot.storage_key });
+          if (
+            proof?.buffer?.length > 0 &&
+            proof.buffer.length <= REJECTION_EMAIL_ATTACHMENT_MAX_BYTES &&
+            String(proof.contentType || "").toLowerCase().startsWith("image/")
+          ) {
+            evidenceAttachment = {
+              buffer: proof.buffer,
+              contentType: proof.contentType,
+              filename: "rejection-evidence.jpg",
+            };
+          }
+        }
+      } catch (e) {
+        console.error("[REJECT] evidence attach failed (continuing without attachment):", e?.message || e);
+        logEvent("reject_evidence_attach_failed", {
+          ticketId,
+          reason: e?.message || String(e),
+        });
+      }
+    }
+
+    if (!alreadyRejected && validatedRecipients.length === 0) {
+      rejection_email_status = {
+        attempted: false,
+        sent: false,
+        skipped: true,
+        reason: "no_recipients",
+        recipient_count: 0,
+        sent_count: 0,
+      };
+      logEvent("reject_email_skipped", {
+        ticketId,
+        tenantId: req.tenantId ?? null,
+        reason: "no_recipients",
+      });
+    } else if (!alreadyRejected) {
+      try {
+        let sentCount = 0;
+        let attemptedAny = false;
+        const reasons = [];
+        for (const toEmail of validatedRecipients) {
+          logEvent("reject_email_attempt", {
+            ticketId,
+            tenantId: req.tenantId ?? null,
+            to_redacted: redactEmail(toEmail),
+            ticket_number: ticket.ticket_number ?? null,
+          });
+          const emailResult = await sendClientRejectionEmail({
+            toEmail,
+            ticketNumber: ticket.ticket_number,
+            rejectionReason: reasonTrimmed,
+            rejectedAt: nowIso,
+            complaintId: ticket.complaint_id ?? null,
+            vehicleNumber: ticket.vehicle_number ?? null,
+            category: ticket.category ?? null,
+            issueType: ticket.issue_type ?? null,
+            location: ticket.location ?? null,
+            evidenceAttachment,
+          });
+          attemptedAny = attemptedAny || Boolean(emailResult?.attempted);
+          if (emailResult?.sent) sentCount += 1;
+          if (emailResult?.reason) reasons.push(`${redactEmail(toEmail)}:${emailResult.reason}`);
+
+          if (emailResult?.sent) {
+            logEvent("reject_email_success", { ticketId, ticket_number: ticket.ticket_number ?? null });
+          } else if (emailResult?.attempted && !emailResult?.sent) {
+            logEvent("reject_email_provider_failure", {
+              ticketId,
+              reason: emailResult?.reason ?? "unknown",
+            });
+          }
+        }
+
+        const allSent = sentCount === validatedRecipients.length;
+        const partial = attemptedAny && sentCount > 0 && !allSent;
+        rejection_email_status = {
+          attempted: attemptedAny,
+          sent: allSent,
+          skipped: !attemptedAny,
+          reason: allSent ? "sent" : partial ? "partial_failure" : reasons[0] ?? "provider_failure",
+          recipient_count: validatedRecipients.length,
+          sent_count: sentCount,
+        };
+      } catch (e) {
+        rejection_email_status = {
+          attempted: true,
+          sent: false,
+          skipped: false,
+          reason: "exception",
+          recipient_count: validatedRecipients.length,
+          sent_count: 0,
+        };
+        console.error("[REJECT] Rejection email failed:", e?.message || e);
+        logEvent("reject_email_provider_failure", {
+          ticketId,
+          reason: "exception",
+          message: e?.message || String(e),
+        });
+      }
+    }
+
     void insertAuditLog({
       req,
       entity_type: "ticket",
@@ -613,10 +899,24 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
         ticket_number: ticket.ticket_number ?? null,
         reason: reasonTrimmed,
         already_rejected: alreadyRejected,
+        recipients: validatedRecipients,
+        evidence: evidenceSnapshot
+          ? {
+              comment_id: evidenceSnapshot.comment_id,
+              proof_index: evidenceSnapshot.proof_index,
+              category: evidenceSnapshot.category,
+              storage_key_present: Boolean(evidenceSnapshot.storage_key),
+            }
+          : null,
+        rejection_email_status,
       },
     });
 
-    return jsonOk(res, { success: true });
+    return jsonOk(res, {
+      success: true,
+      rejection_email_status,
+      recipients: validatedRecipients,
+    });
   } catch (err) {
     console.error("[reject-ticket]", err);
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });

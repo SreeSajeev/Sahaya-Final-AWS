@@ -46,6 +46,10 @@ model Ticket {
   shortDescription      String?   @map("short_description")
   reviewNotes           String?   @map("review_notes")
   resolutionCategory    String?   @map("resolution_category")
+  /// Manager rejection reason (queryable for reports). Historical rows may be null.
+  rejectionReason       String?   @map("rejection_reason")
+  rejectedAt            DateTime? @map("rejected_at") @db.Timestamptz(6)
+  rejectedBy            String?   @map("rejected_by") @db.Uuid
   assignments           TicketAssignment[]
 
   @@map("tickets")
