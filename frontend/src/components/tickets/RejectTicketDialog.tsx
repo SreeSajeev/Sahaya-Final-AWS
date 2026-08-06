@@ -4,10 +4,10 @@
  * Manager rejection workflow:
  * - required rejection reason
  * - Client contact recipient checkboxes
- * - optional FE proof photo selection
+ * - optional FE proof selection OR fresh manager photo upload
  */
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +21,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { XCircle, Loader2 } from "lucide-react";
 import { Ticket } from "@/lib/types";
 import { TicketNumberDisplay } from "@/components/common/TicketNumberDisplay";
@@ -29,6 +30,12 @@ import { fetchJson } from "@/lib/backendDataApi";
 export type RejectEvidenceRef = {
   commentId: string;
   proofIndex: number;
+} | null;
+
+export type RejectEvidenceUpload = {
+  contentType: string;
+  filename: string;
+  dataBase64: string;
 } | null;
 
 type RejectionRecipient = {
@@ -70,11 +77,16 @@ interface RejectTicketDialogProps {
     reason: string;
     recipients: string[];
     evidence: RejectEvidenceRef;
+    evidenceUpload: RejectEvidenceUpload;
   }) => void;
   isPending: boolean;
 }
 
 const REJECTABLE = new Set(["OPEN", "NEEDS_REVIEW"]);
+const ALLOWED_UPLOAD_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+type PhotoMode = "none" | "fe" | "upload";
 
 export function RejectTicketDialog({
   ticket,
@@ -86,19 +98,28 @@ export function RejectTicketDialog({
   const [reason, setReason] = useState("");
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [photoMode, setPhotoMode] = useState<PhotoMode>("none");
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+  const [uploadPayload, setUploadPayload] = useState<RejectEvidenceUpload>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [context, setContext] = useState<RejectionContext | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const canReject = REJECTABLE.has(ticket.status);
   const reasonOk = reason.trim().length > 0 && reason.trim().length <= 1000;
-  const canConfirm = canReject && reasonOk && !isPending && !contextLoading;
+  const canConfirm = canReject && reasonOk && !isPending && !contextLoading && !uploadError;
 
   useEffect(() => {
     if (!open) {
       setReason("");
       setSelectedEmails(new Set());
       setSelectedEvidenceId(null);
+      setPhotoMode("none");
+      setUploadPreview(null);
+      setUploadPayload(null);
+      setUploadError(null);
       setContext(null);
       setContextError(null);
       return;
@@ -114,7 +135,6 @@ export function RejectTicketDialog({
         );
         if (cancelled) return;
         setContext(data);
-        // Pre-select all valid recipients when few exist (manager can uncheck).
         const emails = (data.recipients ?? []).map((r) => r.email);
         setSelectedEmails(new Set(emails));
       } catch (err) {
@@ -139,23 +159,72 @@ export function RejectTicketDialog({
     });
   };
 
+  const clearUpload = () => {
+    setUploadPreview(null);
+    setUploadPayload(null);
+    setUploadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const onFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError(null);
+    const ct = (file.type || "").toLowerCase();
+    if (!ALLOWED_UPLOAD_TYPES.has(ct)) {
+      setUploadError("Use JPEG, PNG, or WebP only.");
+      clearUpload();
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadError("Photo must be 4 MB or smaller.");
+      clearUpload();
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const match = result.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) {
+        setUploadError("Could not read image.");
+        clearUpload();
+        return;
+      }
+      setUploadPreview(result);
+      setUploadPayload({
+        contentType: ct === "image/jpg" ? "image/jpeg" : ct,
+        filename: file.name || "rejection-photo.jpg",
+        dataBase64: match[2],
+      });
+      setPhotoMode("upload");
+      setSelectedEvidenceId(null);
+    };
+    reader.onerror = () => {
+      setUploadError("Could not read image.");
+      clearUpload();
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleConfirm = (e: MouseEvent) => {
     e.preventDefault();
     if (!canConfirm) return;
-    const evidenceOpt = context?.evidenceOptions?.find((o) => o.id === selectedEvidenceId);
+    const evidenceOpt =
+      photoMode === "fe"
+        ? context?.evidenceOptions?.find((o) => o.id === selectedEvidenceId)
+        : undefined;
     onConfirm({
       reason: reason.trim(),
       recipients: Array.from(selectedEmails),
-      evidence: evidenceOpt
-        ? { commentId: evidenceOpt.commentId, proofIndex: evidenceOpt.proofIndex }
-        : null,
+      evidence:
+        photoMode === "fe" && evidenceOpt
+          ? { commentId: evidenceOpt.commentId, proofIndex: evidenceOpt.proofIndex }
+          : null,
+      evidenceUpload: photoMode === "upload" ? uploadPayload : null,
     });
   };
 
-  const clientLabel =
-    context?.client?.name?.trim() ||
-    ticket.client_slug ||
-    "—";
+  const clientLabel = context?.client?.name?.trim() || ticket.client_slug || "—";
   const recipients = context?.recipients ?? [];
   const evidenceOptions = context?.evidenceOptions ?? [];
 
@@ -252,28 +321,50 @@ export function RejectTicketDialog({
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               <Label>Rejection Photo (optional)</Label>
-              <p className="text-xs text-muted-foreground">
-                Choose an image from FE proofs already attached to this ticket.
-              </p>
-              {evidenceOptions.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No FE proof images available.</p>
-              ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={photoMode === "none" ? "default" : "outline"}
+                  disabled={isPending}
+                  onClick={() => {
+                    setPhotoMode("none");
+                    setSelectedEvidenceId(null);
+                    clearUpload();
+                  }}
+                >
+                  No photo
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={photoMode === "fe" ? "default" : "outline"}
+                  disabled={isPending || evidenceOptions.length === 0}
+                  onClick={() => {
+                    setPhotoMode("fe");
+                    clearUpload();
+                  }}
+                >
+                  Select FE proof
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={photoMode === "upload" ? "default" : "outline"}
+                  disabled={isPending}
+                  onClick={() => {
+                    setPhotoMode("upload");
+                    setSelectedEvidenceId(null);
+                  }}
+                >
+                  Upload photo
+                </Button>
+              </div>
+
+              {photoMode === "fe" && (
                 <ul className="max-h-36 space-y-2 overflow-y-auto rounded-md border p-3">
-                  <li className="flex items-center gap-2">
-                    <Checkbox
-                      id="reject-evidence-none"
-                      checked={selectedEvidenceId == null}
-                      onCheckedChange={(v) => {
-                        if (v === true) setSelectedEvidenceId(null);
-                      }}
-                      disabled={isPending}
-                    />
-                    <label htmlFor="reject-evidence-none" className="text-sm cursor-pointer">
-                      No photo
-                    </label>
-                  </li>
                   {evidenceOptions.map((opt) => (
                     <li key={opt.id} className="flex items-center gap-2">
                       <Checkbox
@@ -290,6 +381,39 @@ export function RejectTicketDialog({
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {photoMode === "upload" && (
+                <div className="space-y-2 rounded-md border p-3">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={onFileChange}
+                    disabled={isPending}
+                    className="block w-full text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">JPEG, PNG, or WebP · max 4 MB</p>
+                  {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+                  {uploadPreview && (
+                    <div className="space-y-2">
+                      <img
+                        src={uploadPreview}
+                        alt="Rejection photo preview"
+                        className="max-h-40 rounded border object-contain"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={isPending}
+                        onClick={clearUpload}
+                      >
+                        Remove photo
+                      </Button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

@@ -13,6 +13,7 @@ import {
 import {
   assertProofKeyBelongsToTicket,
   buildRejectionEvidenceOptions,
+  parseRejectionUploadImage,
   resolveRejectionEvidence,
 } from "../../src/services/rejectionEvidenceService.js";
 import { validateNotifyEmailsAgainstAllowed } from "../../src/services/clientNotificationEmailResolver.js";
@@ -225,6 +226,48 @@ describe("rejection evidence from FE proofs", () => {
         ],
       }
     );
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("manager rejection photo upload validation", () => {
+  it("accepts valid JPEG base64", () => {
+    // Minimal JPEG: FF D8 FF D9
+    const buf = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const r = parseRejectionUploadImage({
+      contentType: "image/jpeg",
+      filename: "r.jpg",
+      dataBase64: buf.toString("base64"),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.upload?.buffer.length).toBe(4);
+  });
+
+  it("rejects PDF / executable MIME", () => {
+    const r = parseRejectionUploadImage({
+      contentType: "application/pdf",
+      dataBase64: Buffer.from("%PDF").toString("base64"),
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects oversized payload", () => {
+    const big = Buffer.alloc(4 * 1024 * 1024 + 10, 0xff);
+    big[0] = 0xff;
+    big[1] = 0xd8;
+    const r = parseRejectionUploadImage({
+      contentType: "image/jpeg",
+      dataBase64: big.toString("base64"),
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects JPEG MIME with PNG bytes", () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const r = parseRejectionUploadImage({
+      contentType: "image/jpeg",
+      dataBase64: png.toString("base64"),
+    });
     expect(r.ok).toBe(false);
   });
 });

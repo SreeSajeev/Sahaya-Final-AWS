@@ -500,6 +500,11 @@ export default function TicketDetail() {
     reason: string;
     recipients: string[];
     evidence: { commentId: string; proofIndex: number } | null;
+    evidenceUpload: {
+      contentType: string;
+      filename: string;
+      dataBase64: string;
+    } | null;
   }) => {
     if (isClient) return;
     const trimmed = payload.reason.trim();
@@ -523,6 +528,7 @@ export default function TicketDetail() {
           reason: trimmed,
           recipients: payload.recipients,
           evidence: payload.evidence,
+          evidence_upload: payload.evidenceUpload,
         },
       });
 
@@ -1063,8 +1069,12 @@ export default function TicketDetail() {
                           )}
                           {rejection.evidence?.comment_id != null && (
                             <p className="text-muted-foreground">
-                              Evidence: FE proof attached (comment{" "}
-                              {String(rejection.evidence.comment_id).slice(0, 8)}…, index{" "}
+                              Evidence:{" "}
+                              {(rejection.evidence as { source?: string }).source ===
+                              "MANAGER_UPLOAD"
+                                ? "Manager rejection photo"
+                                : "FE proof"}{" "}
+                              (comment {String(rejection.evidence.comment_id).slice(0, 8)}…, index{" "}
                               {rejection.evidence.proof_index ?? 0})
                             </p>
                           )}

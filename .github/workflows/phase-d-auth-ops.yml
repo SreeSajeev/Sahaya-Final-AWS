@@ -25,6 +25,7 @@ on:
           - restart_pg
           - playwright_acceptance
           - parity_smoke
+          - rejection_acceptance
           - phase_f_soak_start
           - phase_f_soak_status
           - phase_f_soak_dense
@@ -139,6 +140,15 @@ jobs:
                 FE_BASE="${FE_BASE:-https://test-sahaya.pariskq.in}" \
                 CREDS_FILE="$CREDS_FILE" \
                 bash scripts/acceptance-parity-smoke.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "rejection_acceptance" ]; then
+              chmod +x scripts/acceptance-rejection-workflow.sh
+              API_BASE="${API_BASE:-https://api.test-sahaya.pariskq.in}" \
+                FE_BASE="${FE_BASE:-https://test-sahaya.pariskq.in}" \
+                CREDS_FILE="$CREDS_FILE" \
+                bash scripts/acceptance-rejection-workflow.sh
               exit 0
             fi
 

@@ -8,9 +8,10 @@ import {
 import {
   buildRejectionEvidenceOptions,
   resolveRejectionEvidence,
+  parseRejectionUploadImage,
   REJECTION_EMAIL_ATTACHMENT_MAX_BYTES,
 } from "../services/rejectionEvidenceService.js";
-import { listCommentsForTicket, insertComment } from "../repositories/commentRepository.js";
+import { listCommentsForTicket, insertComment, updateCommentById } from "../repositories/commentRepository.js";
 import { findActiveTenantClientBySlug } from "../repositories/tenantClientRepository.js";
 import { normalizeClientSlug } from "../services/tenantClientService.js";
 import { setOnsiteDeadline } from "../services/slaService.js";
@@ -112,6 +113,22 @@ const rejectBodySchema = z.object({
     .object({
       commentId: z.string().uuid(),
       proofIndex: z.coerce.number().int().min(0).max(50),
+    })
+    .optional()
+    .nullable(),
+  /**
+   * Optional manager-uploaded rejection photo (base64).
+   * Mutually exclusive with `evidence` (FE proof selection).
+   */
+  evidence_upload: z
+    .object({
+      contentType: z.string().max(80),
+      filename: z.string().max(120).optional().nullable(),
+      dataBase64: z.string().min(1).max(8_000_000).optional(),
+      data_base64: z.string().min(1).max(8_000_000).optional(),
+    })
+    .refine((v) => Boolean(v.dataBase64 || v.data_base64), {
+      message: "evidence_upload requires dataBase64",
     })
     .optional()
     .nullable(),
@@ -605,6 +622,13 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
   const reasonTrimmed = parsedBody.data.reason.trim();
   const requestedRecipients = parsedBody.data.recipients ?? [];
   const evidenceRef = parsedBody.data.evidence ?? null;
+  const evidenceUploadRaw = parsedBody.data.evidence_upload ?? null;
+
+  if (evidenceRef && evidenceUploadRaw) {
+    return jsonRes(res, 400, {
+      error: "Provide either an FE proof selection or a rejection photo upload, not both",
+    });
+  }
 
   if (!req.appUser?.id) {
     return jsonRes(res, 403, { error: "User profile required to reject tickets" });
@@ -662,7 +686,16 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
     }
 
     let evidenceSnapshot = null;
-    if (evidenceRef && !alreadyRejected) {
+    /** @type {{ buffer: Buffer; contentType: string; filename: string } | null} */
+    let managerUpload = null;
+
+    if (evidenceUploadRaw && !alreadyRejected) {
+      const parsedUpload = parseRejectionUploadImage(evidenceUploadRaw);
+      if (!parsedUpload.ok) {
+        return jsonRes(res, parsedUpload.status ?? 400, { error: parsedUpload.error });
+      }
+      managerUpload = parsedUpload.upload;
+    } else if (evidenceRef && !alreadyRejected) {
       const { data: comments, error: commentsErr } = await listCommentsForTicket(req, ticketId, {
         limit: 200,
         offset: 0,
@@ -737,6 +770,9 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
         ? String(rejectorRow.name).trim()
         : "Unknown";
 
+    /** In-memory manager upload buffer for email (avoids re-fetch when just uploaded). */
+    let evidenceAttachmentFromUpload = null;
+
     if (!alreadyRejected) {
       const insertCommentRes = await insertComment({
         ticket_id: ticketId,
@@ -761,6 +797,74 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
           error: safeDbErrorForClient(insertCommentRes.error, "Failed to record rejection comment"),
         });
       }
+
+      const rejectionComment = insertCommentRes.data;
+      if (managerUpload && rejectionComment?.id) {
+        try {
+          const { uploadProof, isProofS3Enabled } = await import("../services/proofStorageService.js");
+          if (!isProofS3Enabled()) {
+            return jsonRes(res, 503, { error: "Rejection photo storage is temporarily unavailable" });
+          }
+          const uploaded = await uploadProof({
+            tenantId: ticket.organisation_id,
+            ticketId,
+            commentId: rejectionComment.id,
+            index: 0,
+            buffer: managerUpload.buffer,
+            contentType: managerUpload.contentType,
+            filename: managerUpload.filename,
+          });
+          evidenceSnapshot = {
+            comment_id: rejectionComment.id,
+            proof_index: 0,
+            storage_key: uploaded.key,
+            category: "REJECTION_EVIDENCE",
+            source: "MANAGER_UPLOAD",
+            content_type: uploaded.contentType,
+            bytes: uploaded.bytes,
+          };
+          const dataUrl = `data:${managerUpload.contentType};base64,${managerUpload.buffer.toString("base64")}`;
+          const prevAtt =
+            rejectionComment.attachments &&
+            typeof rejectionComment.attachments === "object" &&
+            !Array.isArray(rejectionComment.attachments)
+              ? rejectionComment.attachments
+              : {};
+          const updateAttRes = await updateCommentById(rejectionComment.id, {
+            attachments: {
+              ...prevAtt,
+              rejection: {
+                ...(prevAtt.rejection && typeof prevAtt.rejection === "object" ? prevAtt.rejection : {}),
+                reason: reasonTrimmed,
+                rejected_by_user_id: req.appUser.id,
+                rejected_by_name: rejectedByName,
+                rejected_at: nowIso,
+                recipients: validatedRecipients,
+                evidence: evidenceSnapshot,
+              },
+              image_base64: dataUrl,
+              images: [{ image_base64: dataUrl, mime_type: managerUpload.contentType }],
+              proof_storage_paths: [uploaded.key],
+            },
+          });
+          if (updateAttRes.error) {
+            console.error("[REJECT] update rejection evidence comment failed:", updateAttRes.error.message);
+            return jsonRes(res, 500, {
+              error: safeDbErrorForClient(updateAttRes.error, "Failed to store rejection photo metadata"),
+            });
+          }
+          evidenceAttachmentFromUpload = {
+            buffer: managerUpload.buffer,
+            contentType: managerUpload.contentType,
+            filename: managerUpload.filename || "rejection-evidence.jpg",
+          };
+        } catch (e) {
+          console.error("[REJECT] manager photo upload failed:", e?.message || e);
+          return jsonRes(res, 500, {
+            error: safeDbErrorForClient(e, "Failed to store rejection photo"),
+          });
+        }
+      }
     }
 
     const { data: finalTicket, error: finalTicketError } = await getTicketStatusById(ticketId);
@@ -781,8 +885,13 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       reason: alreadyRejected ? "already_rejected" : "not_attempted",
     };
 
-    let evidenceAttachment = null;
-    if (!alreadyRejected && evidenceSnapshot?.storage_key && validatedRecipients.length > 0) {
+    let evidenceAttachment = evidenceAttachmentFromUpload;
+    if (
+      !alreadyRejected &&
+      !evidenceAttachment &&
+      evidenceSnapshot?.storage_key &&
+      validatedRecipients.length > 0
+    ) {
       try {
         const { getProof, isProofS3Enabled } = await import("../services/proofStorageService.js");
         if (isProofS3Enabled()) {
@@ -905,6 +1014,7 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
               comment_id: evidenceSnapshot.comment_id,
               proof_index: evidenceSnapshot.proof_index,
               category: evidenceSnapshot.category,
+              source: evidenceSnapshot.source ?? "FE_PROOF",
               storage_key_present: Boolean(evidenceSnapshot.storage_key),
             }
           : null,

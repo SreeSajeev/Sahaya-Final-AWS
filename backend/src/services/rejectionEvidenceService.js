@@ -145,3 +145,92 @@ export function resolveRejectionEvidence(evidence, { ticketId, organisationId = 
 
 /** Max bytes to attach to rejection email (Postmark-friendly). */
 export const REJECTION_EMAIL_ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Manager upload uses the same size cap as email attachment. */
+export const REJECTION_UPLOAD_MAX_BYTES = REJECTION_EMAIL_ATTACHMENT_MAX_BYTES;
+
+export const REJECTION_UPLOAD_ALLOWED_MIME = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+
+/**
+ * Validate optional manager-uploaded rejection image (base64 from frontend).
+ * Never trusts client-declared size alone — decodes and re-checks.
+ *
+ * @param {unknown} upload
+ * @returns {{ ok: true; upload: null | { buffer: Buffer; contentType: string; filename: string } } | { ok: false; error: string; status: number }}
+ */
+export function parseRejectionUploadImage(upload) {
+  if (upload == null) return { ok: true, upload: null };
+  if (typeof upload !== "object" || Array.isArray(upload)) {
+    return { ok: false, error: "Invalid rejection photo payload", status: 400 };
+  }
+  const contentTypeRaw = upload.contentType != null ? String(upload.contentType).trim().toLowerCase() : "";
+  const filename = upload.filename != null ? String(upload.filename).trim().slice(0, 120) : "rejection-photo.jpg";
+  let data = upload.dataBase64 != null ? String(upload.dataBase64) : upload.data_base64 != null ? String(upload.data_base64) : "";
+  data = data.trim();
+  if (!data) {
+    return { ok: false, error: "Rejection photo data is empty", status: 400 };
+  }
+
+  let contentType = contentTypeRaw;
+  const dataUrlMatch = data.match(/^data:([^;]+);base64,(.+)$/is);
+  if (dataUrlMatch) {
+    contentType = String(dataUrlMatch[1] || contentType).trim().toLowerCase();
+    data = dataUrlMatch[2];
+  }
+
+  if (!REJECTION_UPLOAD_ALLOWED_MIME.has(contentType)) {
+    return {
+      ok: false,
+      error: "Rejection photo must be JPEG, PNG, or WebP",
+      status: 400,
+    };
+  }
+
+  let buffer;
+  try {
+    buffer = Buffer.from(data, "base64");
+  } catch {
+    return { ok: false, error: "Rejection photo could not be decoded", status: 400 };
+  }
+  if (!buffer.length) {
+    return { ok: false, error: "Rejection photo is empty", status: 400 };
+  }
+  if (buffer.length > REJECTION_UPLOAD_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `Rejection photo exceeds maximum size (${REJECTION_UPLOAD_MAX_BYTES} bytes)`,
+      status: 400,
+    };
+  }
+
+  // Lightweight magic-byte checks (do not trust extension alone).
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const isPng =
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  const isWebp =
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP";
+  if (contentType.includes("jpeg") || contentType.includes("jpg")) {
+    if (!isJpeg) return { ok: false, error: "Rejection photo content is not a valid JPEG", status: 400 };
+  } else if (contentType.includes("png")) {
+    if (!isPng) return { ok: false, error: "Rejection photo content is not a valid PNG", status: 400 };
+  } else if (contentType.includes("webp")) {
+    if (!isWebp) return { ok: false, error: "Rejection photo content is not a valid WebP", status: 400 };
+  }
+
+  const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+  return {
+    ok: true,
+    upload: {
+      buffer,
+      contentType: contentType === "image/jpg" ? "image/jpeg" : contentType,
+      filename: filename.includes(".") ? filename : `rejection-photo.${ext}`,
+    },
+  };
+}
