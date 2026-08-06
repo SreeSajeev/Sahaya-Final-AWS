@@ -3,10 +3,12 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useQuery } from '@tanstack/react-query';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import type { TicketStatus } from '@/lib/types';
+import type { TicketComment, TicketStatus } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   DataTableShell,
   DataTableEmptyState,
@@ -14,11 +16,19 @@ import {
 import { FETicketFiltersBar } from '@/components/fe/FETicketFiltersBar';
 import { FETicketsTable } from '@/components/fe/FETicketsTable';
 import {
+  collectFETicketFacetOptions,
   filterAndSortFETickets,
+  filterFETicketsByDateRange,
+  validateFEDateRange,
   type FETicketRow,
   type FETicketSortKey,
   type FEWorkTypeFilter,
 } from '@/lib/feTicketList';
+import {
+  downloadFieldVisitCsv,
+  openFieldVisitPrintWindow,
+  type FERemarkLine,
+} from '@/lib/feFieldVisitExport';
 import {
   Truck,
   AlertTriangle,
@@ -26,34 +36,53 @@ import {
   KeyRound,
   ChevronLeft,
   ChevronRight,
+  Printer,
+  Download,
 } from 'lucide-react';
 import { fetchJson } from '@/lib/backendDataApi';
+import { useToast } from '@/hooks/use-toast';
 
 const PAGE_SIZE = 25;
 
 export default function FEMyTickets() {
   const { user, userProfile, signOut, isFieldExecutive, isClient, session } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebouncedValue(searchInput, 300);
   const [statusFilter, setStatusFilter] = useState<'all' | TicketStatus>('all');
   const [workTypeFilter, setWorkTypeFilter] = useState<FEWorkTypeFilter>('all');
   const [sortKey, setSortKey] = useState<FETicketSortKey>('newest');
+  const [stateFilter, setStateFilter] = useState('all');
+  const [locationFilter, setLocationFilter] = useState('all');
+  const [customerFilter, setCustomerFilter] = useState('all');
   const [page, setPage] = useState(1);
 
-  // Redirect non-FE users once profile is available.
+  const [visitFrom, setVisitFrom] = useState('');
+  const [visitTo, setVisitTo] = useState('');
+  const [visitBusy, setVisitBusy] = useState(false);
+  const [visitSheetTickets, setVisitSheetTickets] = useState<FETicketRow[] | null>(null);
+  const [visitRemarks, setVisitRemarks] = useState<Record<string, FERemarkLine[]>>({});
+  const [visitError, setVisitError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!userProfile || isFieldExecutive) return;
     navigate(isClient ? '/app/client' : '/app', { replace: true });
   }, [userProfile, isFieldExecutive, isClient, navigate]);
 
-  // Reset to first page when filters change.
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, statusFilter, workTypeFilter, sortKey]);
+  }, [
+    debouncedSearch,
+    statusFilter,
+    workTypeFilter,
+    sortKey,
+    stateFilter,
+    locationFilter,
+    customerFilter,
+  ]);
 
-  // Fetch FE's assigned tickets using email match to field_executives
   const {
     data: tickets,
     isLoading: ticketsLoading,
@@ -65,9 +94,13 @@ export default function FEMyTickets() {
       const res = await fetchJson<{ items: FETicketRow[] }>(`/fe/me/tickets`);
       return (res.items ?? []) as FETicketRow[];
     },
-    // Wait for profile, role, and access token so we do not call CRM with no Authorization (401 → UI looked like "no tickets").
     enabled: Boolean(userProfile?.id && isFieldExecutive && session?.access_token),
   });
+
+  const facetOptions = useMemo(
+    () => collectFETicketFacetOptions(tickets ?? []),
+    [tickets],
+  );
 
   const displayedTickets = useMemo(
     () =>
@@ -76,8 +109,20 @@ export default function FEMyTickets() {
         status: statusFilter,
         workType: workTypeFilter,
         sortKey,
+        state: stateFilter,
+        location: locationFilter,
+        customer: customerFilter,
       }),
-    [tickets, debouncedSearch, statusFilter, workTypeFilter, sortKey],
+    [
+      tickets,
+      debouncedSearch,
+      statusFilter,
+      workTypeFilter,
+      sortKey,
+      stateFilter,
+      locationFilter,
+      customerFilter,
+    ],
   );
 
   const total = displayedTickets.length;
@@ -91,14 +136,82 @@ export default function FEMyTickets() {
   const hasActiveFilters =
     statusFilter !== 'all' ||
     workTypeFilter !== 'all' ||
+    stateFilter !== 'all' ||
+    locationFilter !== 'all' ||
+    customerFilter !== 'all' ||
     debouncedSearch.trim().length > 0;
 
   const clearFilters = () => {
     setSearchInput('');
     setStatusFilter('all');
     setWorkTypeFilter('all');
+    setStateFilter('all');
+    setLocationFilter('all');
+    setCustomerFilter('all');
     setSortKey('newest');
     setPage(1);
+  };
+
+  const loadRemarksForTickets = async (rows: FETicketRow[]) => {
+    const map: Record<string, FERemarkLine[]> = {};
+    await Promise.all(
+      rows.map(async (t) => {
+        try {
+          const res = await fetchJson<{ items: TicketComment[] }>(
+            `/data/tickets/${encodeURIComponent(t.id)}/comments?limit=200&offset=0`,
+          );
+          map[t.id] = (res.items ?? []).map((c) => ({
+            at: c.created_at,
+            source: c.source,
+            author: c.author_id,
+            body: c.body ?? '',
+          }));
+        } catch {
+          map[t.id] = [];
+        }
+      }),
+    );
+    return map;
+  };
+
+  const generateFieldVisitSheet = async () => {
+    setVisitError(null);
+    setVisitSheetTickets(null);
+    const check = validateFEDateRange(visitFrom, visitTo);
+    if (!check.ok) {
+      setVisitError(check.error);
+      return;
+    }
+    const assigned = tickets ?? [];
+    const matched = filterFETicketsByDateRange(assigned, visitFrom, visitTo);
+    if (matched.length === 0) {
+      setVisitSheetTickets([]);
+      setVisitRemarks({});
+      setVisitError('No assigned tickets found for this date range.');
+      return;
+    }
+    setVisitBusy(true);
+    try {
+      const remarks = await loadRemarksForTickets(matched);
+      setVisitRemarks(remarks);
+      setVisitSheetTickets(matched);
+    } finally {
+      setVisitBusy(false);
+    }
+  };
+
+  const printVisitSheet = () => {
+    if (!visitSheetTickets?.length) return;
+    openFieldVisitPrintWindow(visitSheetTickets, visitFrom, visitTo, {
+      feName: userProfile?.name || user?.email,
+      remarksByTicketId: visitRemarks,
+    });
+  };
+
+  const downloadVisitCsv = () => {
+    if (!visitSheetTickets?.length) return;
+    downloadFieldVisitCsv(visitSheetTickets, visitFrom, visitTo, visitRemarks);
+    toast({ title: 'CSV downloaded', description: 'Field visit sheet exported.' });
   };
 
   if (!isFieldExecutive && userProfile) {
@@ -108,7 +221,7 @@ export default function FEMyTickets() {
   return (
     <div className="min-h-screen" style={{ background: 'hsl(285 45% 12%)' }}>
       <header
-        className="border-b px-4 md:px-6 py-4 safe-px"
+        className="border-b px-4 md:px-6 py-4 safe-px print:hidden"
         style={{ borderColor: 'hsl(285 35% 20%)', background: 'hsl(285 45% 16%)' }}
       >
         <div className="w-full max-w-7xl mx-auto flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -184,7 +297,7 @@ export default function FEMyTickets() {
           </p>
         </div>
 
-        <Alert className="mb-6 border-primary/30 bg-primary/10">
+        <Alert className="mb-6 border-primary/30 bg-primary/10 print:hidden">
           <AlertTriangle className="h-4 w-4 text-primary" />
           <AlertDescription className="text-white/80">
             <strong>Workflow:</strong> Open a ticket, then use the <strong>On-Site</strong> and{' '}
@@ -214,6 +327,17 @@ export default function FEMyTickets() {
               onWorkTypeChange={setWorkTypeFilter}
               sortKey={sortKey}
               onSortKeyChange={setSortKey}
+              state={stateFilter}
+              onStateChange={setStateFilter}
+              location={locationFilter}
+              onLocationChange={setLocationFilter}
+              customer={customerFilter}
+              onCustomerChange={setCustomerFilter}
+              stateOptions={facetOptions.states}
+              locationOptions={facetOptions.locations}
+              customerOptions={facetOptions.customers}
+              showClearFilters={hasActiveFilters}
+              onClearFilters={clearFilters}
             />
 
             {!ticketsLoading && tickets && tickets.length > 0 ? (
@@ -224,11 +348,6 @@ export default function FEMyTickets() {
                   {hasActiveFilters ? ' (filtered)' : ''}
                   {tickets.length !== total ? ` · ${tickets.length} total assigned` : ''}
                 </p>
-                {hasActiveFilters ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
-                    Clear filters
-                  </Button>
-                ) : null}
               </div>
             ) : null}
 
@@ -253,7 +372,7 @@ export default function FEMyTickets() {
                           <DataTableEmptyState
                             filterEmpty
                             filteredTitle="No matching tickets"
-                            filteredDescription="Try a different search, status, or work type filter."
+                            filteredDescription="Try a different search, state, location, or customer filter."
                           />
                         )
                       : undefined
@@ -295,6 +414,67 @@ export default function FEMyTickets() {
             ) : null}
           </div>
         )}
+
+        {!ticketsError ? (
+          <div className="mt-6 space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm md:p-5 print:hidden">
+            <div>
+              <h3 className="text-base font-semibold">Field Visit Sheet / Print Tickets</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Date range uses assignment date when available (otherwise created date). Only your
+                assigned tickets are included.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="fe-visit-from">From</Label>
+                <Input
+                  id="fe-visit-from"
+                  type="date"
+                  value={visitFrom}
+                  onChange={(e) => setVisitFrom(e.target.value)}
+                  className="w-[11rem]"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="fe-visit-to">To</Label>
+                <Input
+                  id="fe-visit-to"
+                  type="date"
+                  value={visitTo}
+                  onChange={(e) => setVisitTo(e.target.value)}
+                  className="w-[11rem]"
+                />
+              </div>
+              <Button
+                type="button"
+                onClick={() => void generateFieldVisitSheet()}
+                disabled={visitBusy || ticketsLoading}
+              >
+                {visitBusy ? 'Generating…' : 'Generate Field Visit Sheet'}
+              </Button>
+            </div>
+            {visitError ? (
+              <p className="text-sm text-destructive" role="status">
+                {visitError}
+              </p>
+            ) : null}
+            {visitSheetTickets && visitSheetTickets.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-muted-foreground mr-2">
+                  {visitSheetTickets.length} ticket{visitSheetTickets.length === 1 ? '' : 's'} ready
+                </p>
+                <Button type="button" variant="outline" className="gap-1" onClick={printVisitSheet}>
+                  <Printer className="h-4 w-4" />
+                  Print
+                </Button>
+                <Button type="button" variant="outline" className="gap-1" onClick={downloadVisitCsv}>
+                  <Download className="h-4 w-4" />
+                  Download CSV
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </main>
     </div>
   );

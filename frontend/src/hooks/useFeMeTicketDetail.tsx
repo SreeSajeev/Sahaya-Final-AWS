@@ -25,6 +25,10 @@ export type FeMeTicketDetail = Record<string, unknown> & {
   } | null;
   resolution_locked?: boolean;
   assignment_due?: string | null;
+  assigned_at?: string | null;
+  complaint_id?: string | null;
+  remarks?: string | null;
+  short_description?: string | null;
   reporter_display?: string | null;
   creator_display?: string | null;
   priority?: boolean;

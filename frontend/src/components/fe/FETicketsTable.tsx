@@ -16,9 +16,11 @@ import {
   dataTableHeadDenseClassName,
   dataTableCellDenseClassName,
 } from '@/components/common';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { formatStateDisplay } from '@/lib/indianStates';
 import {
+  formatComplaintIdDisplay,
   formatFETicketWorkType,
   type FETicketRow,
 } from '@/lib/feTicketList';
@@ -75,23 +77,23 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
 
   return (
     <div className="w-full min-w-0 overflow-x-auto touch-scroll-x scrollbar-thin">
-      <Table className="min-w-[1280px]">
+      <Table className="min-w-[1180px]">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className={headClass('min-w-[7.25rem] sticky left-0 z-20 bg-card border-r border-border')}>
-              Ticket #
+              Ticket No.
             </TableHead>
-            <TableHead className={headClass('min-w-[7rem]')}>Status</TableHead>
-            <TableHead className={headClass('min-w-[7rem]')}>Customer / Client</TableHead>
-            <TableHead className={headClass('min-w-[8rem]')}>Location</TableHead>
+            <TableHead className={headClass('min-w-[6.5rem]')}>Complaint ID</TableHead>
+            <TableHead className={headClass('min-w-[7rem]')}>Customer</TableHead>
+            <TableHead className={headClass('min-w-[6.5rem] hidden sm:table-cell')}>Vehicle</TableHead>
             <TableHead className={headClass('min-w-[5.5rem]')}>State</TableHead>
-            <TableHead className={headClass('min-w-[6.5rem]')}>Vehicle</TableHead>
-            <TableHead className={headClass('min-w-[6rem]')}>Category</TableHead>
+            <TableHead className={headClass('min-w-[8rem]')}>Location</TableHead>
             <TableHead className={headClass('min-w-[7rem]')}>Issue Type</TableHead>
             <TableHead className={headClass('min-w-[5.5rem]')}>Priority</TableHead>
-            <TableHead className={headClass('min-w-[6.5rem]')}>Created</TableHead>
-            <TableHead className={headClass('min-w-[6.5rem]')}>Due</TableHead>
-            <TableHead className={headClass('min-w-[7.5rem]')}>Work Type</TableHead>
+            <TableHead className={headClass('min-w-[7rem]')}>Status</TableHead>
+            <TableHead className={headClass('min-w-[6.5rem] hidden lg:table-cell')}>Created</TableHead>
+            <TableHead className={headClass('min-w-[7.5rem] hidden xl:table-cell')}>Work Type</TableHead>
+            <TableHead className={headClass('min-w-[4.5rem]')}>Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -116,23 +118,20 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
                   variant="compact"
                 />
               </TableCell>
-              <TableCell className={cellClass()}>
-                <StatusBadge status={ticket.status} />
+              <TableCell className={cellClass('font-mono text-xs')} title={formatComplaintIdDisplay(ticket.complaint_id)}>
+                {formatComplaintIdDisplay(ticket.complaint_id)}
               </TableCell>
               <TableCell className={cellClass('max-w-[10rem] truncate')} title={fmtCell(ticket.client_name ?? ticket.client_slug)}>
                 {fmtCell(ticket.client_name ?? ticket.client_slug)}
               </TableCell>
-              <TableCell className={cellClass('max-w-[12rem] truncate')} title={fmtCell(ticket.location)}>
-                {fmtCell(ticket.location)}
+              <TableCell className={cellClass('hidden sm:table-cell font-mono text-xs')}>
+                {fmtCell(ticket.vehicle_number)}
               </TableCell>
               <TableCell className={cellClass('max-w-[8rem] truncate')} title={formatStateDisplay(ticket.state)}>
                 {formatStateDisplay(ticket.state)}
               </TableCell>
-              <TableCell className={cellClass('font-mono text-xs')}>
-                {fmtCell(ticket.vehicle_number)}
-              </TableCell>
-              <TableCell className={cellClass('max-w-[8rem] truncate')} title={fmtCell(ticket.category)}>
-                {fmtCell(ticket.category)}
+              <TableCell className={cellClass('max-w-[12rem] truncate')} title={fmtCell(ticket.location)}>
+                {fmtCell(ticket.location)}
               </TableCell>
               <TableCell className={cellClass('max-w-[10rem] truncate')} title={fmtCell(ticket.issue_type)}>
                 {fmtCell(ticket.issue_type)}
@@ -143,14 +142,28 @@ function FETicketsTableComponent({ tickets }: FETicketsTableProps) {
                   priority_level={ticket.priority_level}
                 />
               </TableCell>
-              <TableCell className={cellClass('whitespace-nowrap text-muted-foreground')}>
+              <TableCell className={cellClass()}>
+                <StatusBadge status={ticket.status} />
+              </TableCell>
+              <TableCell className={cellClass('hidden lg:table-cell whitespace-nowrap text-muted-foreground')}>
                 {fmtDate(ticket.created_at || ticket.opened_at)}
               </TableCell>
-              <TableCell className={cellClass('whitespace-nowrap text-muted-foreground')}>
-                {fmtDate(ticket.assignment_due)}
-              </TableCell>
-              <TableCell className={cellClass('whitespace-nowrap text-muted-foreground')}>
+              <TableCell className={cellClass('hidden xl:table-cell whitespace-nowrap text-muted-foreground')}>
                 {formatFETicketWorkType(ticket)}
+              </TableCell>
+              <TableCell className={cellClass()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openTicket(ticket.id);
+                  }}
+                >
+                  Open
+                </Button>
               </TableCell>
             </TableRow>
           ))}
