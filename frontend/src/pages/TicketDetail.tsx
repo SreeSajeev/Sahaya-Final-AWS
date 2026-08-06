@@ -171,6 +171,38 @@ export default function TicketDetail() {
   if (isLoading) {
     const content = (
       <PageContainer>
+        <div className="mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              navigate(
+                isClient
+                  ? "/app/client"
+                  : userProfile?.role === "FIELD_EXECUTIVE"
+                    ? "/fe"
+                    : "/app/tickets"
+              )
+            }
+            aria-label={
+              isClient
+                ? "Back to client portal"
+                : userProfile?.role === "FIELD_EXECUTIVE"
+                  ? "My tickets"
+                  : "All Tickets"
+            }
+            className="gap-1.5 px-2"
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            <span>
+              {isClient
+                ? "Back to client portal"
+                : userProfile?.role === "FIELD_EXECUTIVE"
+                  ? "My tickets"
+                  : "All Tickets"}
+            </span>
+          </Button>
+        </div>
         <div className="flex h-64 items-center justify-center text-muted-foreground">
           Loading ticket…
         </div>
