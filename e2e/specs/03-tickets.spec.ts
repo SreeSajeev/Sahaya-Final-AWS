@@ -99,7 +99,10 @@ test.describe("Tickets", () => {
     await browserLogin(page, role as "ADMIN" | "STAFF");
     await page.goto(`/app/tickets/${ticketId}`);
     await expect(page).not.toHaveURL(/\/login/);
-    await page.getByRole("button", { name: /All Tickets/i }).click();
+    // Prefer aria-label so icon-only / responsive text still matches.
+    const back = page.locator('button[aria-label="All Tickets"]');
+    await expect(back).toBeVisible({ timeout: 60_000 });
+    await back.click();
     await expect(page).toHaveURL(/\/app\/tickets\/?$/);
   });
 });

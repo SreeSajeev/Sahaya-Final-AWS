@@ -528,8 +528,8 @@ export default function TicketDetail() {
               aria-label={backLabel}
               className="gap-1.5 px-2"
             >
-              <ArrowLeft className="h-4 w-4" />
-              <span className="hidden sm:inline">{backLabel}</span>
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span>{backLabel}</span>
             </Button>
           }
           titleSlot={
