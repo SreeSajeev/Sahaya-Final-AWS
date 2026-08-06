@@ -7,7 +7,6 @@ import { useFeMeTicketDetail } from "@/hooks/useFeMeTicketDetail";
 import { formatIST } from "@/lib/dateUtils";
 import { StatusBadge } from "@/components/tickets/StatusBadge";
 import { TicketPriorityBadge } from "@/components/tickets/TicketPriorityBadge";
-import { priorityDisplayLabel, resolveTicketPriorityLevel } from "@/lib/priority";
 import type { TicketStatus } from "@/lib/types";
 import { ArrowLeft, Lock, MapPin, Truck, FileText, Clock, User } from "lucide-react";
 
@@ -105,10 +104,7 @@ export default function FETicketView() {
                 Created {t.created_at ? formatIST(String(t.created_at), "PPp") : "—"}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-                  <TicketPriorityBadge priority={t.priority} priority_level={t.priority_level} />
-                  {priorityDisplayLabel(resolveTicketPriorityLevel(t))}
-                </span>
+                <TicketPriorityBadge priority={t.priority} priority_level={t.priority_level} />
                 <Badge variant="secondary">Client: {fmtMaybe(t.client_name ?? t.client_slug)}</Badge>
               </div>
             </div>
@@ -138,12 +134,19 @@ export default function FETicketView() {
               </p>
             )}
             <p>
-              <span className="text-muted-foreground">Category / Issue</span>
+              <span className="text-muted-foreground">Category</span>
               <br />
-              <span className="font-medium">
-                {fmtMaybe(t.category)}
-                {t.issue_type ? ` · ${fmtMaybe(t.issue_type)}` : ""}
-              </span>
+              <span className="font-medium">{fmtMaybe(t.category)}</span>
+            </p>
+            <p>
+              <span className="text-muted-foreground">Issue Type</span>
+              <br />
+              <span className="font-medium">{fmtMaybe(t.issue_type)}</span>
+            </p>
+            <p>
+              <span className="text-muted-foreground">State</span>
+              <br />
+              <span className="font-medium">{fmtMaybe(t.state)}</span>
             </p>
             <p className="flex items-start gap-2">
               <MapPin className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />

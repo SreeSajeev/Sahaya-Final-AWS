@@ -369,7 +369,9 @@ export default function ClientTicketDetail() {
                           </p>
                         )}
                         {evt.remarks && (
-                          <p className="text-sm text-muted-foreground mt-1 italic">Remarks: {evt.remarks}</p>
+                          <p className="text-sm text-muted-foreground mt-1 italic whitespace-pre-wrap break-words">
+                            Remarks: {evt.remarks}
+                          </p>
                         )}
                         {(evt.images?.length ?? 0) > 0 && (
                           <ProofAttachmentGallery

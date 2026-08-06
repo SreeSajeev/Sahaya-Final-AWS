@@ -133,7 +133,7 @@ echo "===== SAFE WRITE (create TEST ticket if allowed) ====="
 # Prefer STAFF create if endpoint exists
 CREATE_CODE="$(curl -sS -o /tmp/e2e_create.json -w '%{http_code}' -X POST "$API_BASE/tickets" \
   -H "Authorization: Bearer $STA" -H 'Content-Type: application/json' \
-  -d '{"short_description":"E2E_TEST_ACCEPTANCE_MARKER","category":"OTHER","issue_type":"OTHER","priority_level":"LOW","status":"OPEN"}' || true)"
+  -d '{"short_description":"E2E_TEST_ACCEPTANCE_MARKER","category":"OTHER","issue_type":"OTHER","priority_level":"LOW","status":"OPEN","location":"E2E_TEST_LOCATION"}' || true)"
 echo "create_ticket_http=$CREATE_CODE"
 python3 - <<'PY'
 import json

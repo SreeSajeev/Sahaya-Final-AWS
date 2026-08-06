@@ -288,8 +288,15 @@ function buildTicketDetailsTable({
   lines.push(`Resolution: ${formatDetail(resolutionDeadline)}`);
 
   if (hasResolutionCategory) {
-    const categoryLabel =
-      String(resolutionCategory).trim() === "OTHER" ? "Other" : String(resolutionCategory).trim();
+    const rawCat = String(resolutionCategory).trim();
+    let categoryLabel = rawCat === "OTHER" ? "Other" : rawCat;
+    if (rawCat === "OTHER" && hasVerificationRemarks) {
+      const details = String(verificationRemarks)
+        .trim()
+        .split(/\n\n/)[0]
+        ?.trim();
+      if (details) categoryLabel = `Other: ${details}`;
+    }
     lines.push("", "Resolution Category", `- ${categoryLabel}`);
   }
   if (hasVerificationRemarks) {

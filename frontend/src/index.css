@@ -559,3 +559,15 @@
     -webkit-backdrop-filter: blur(12px);
   }
 }
+
+@layer utilities {
+  /* Mobile safe-area helpers for the FE proof upload page (notches / home indicator). */
+  .safe-px {
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  .safe-pb {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}

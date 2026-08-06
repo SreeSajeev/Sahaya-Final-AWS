@@ -12,7 +12,6 @@ import {
   User,
   Clock,
   Image as ImageIcon,
-  Star,
   ClipboardCheck,
   FileText,
   XCircle,
@@ -131,6 +130,7 @@ export default function TicketDetail() {
   const [reviewPriorityLevel, setReviewPriorityLevel] = useState<PriorityLevel>(DEFAULT_PRIORITY_LEVEL);
   const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
   const [clientSlugDraft, setClientSlugDraft] = useState("");
+  const [locationDraft, setLocationDraft] = useState("");
   const reviewFormSynced = useRef(false);
   useEffect(() => {
     if (ticket && canCompleteReview) {
@@ -171,6 +171,38 @@ export default function TicketDetail() {
   if (isLoading) {
     const content = (
       <PageContainer>
+        <div className="mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              navigate(
+                isClient
+                  ? "/app/client"
+                  : userProfile?.role === "FIELD_EXECUTIVE"
+                    ? "/fe"
+                    : "/app/tickets"
+              )
+            }
+            aria-label={
+              isClient
+                ? "Back to client portal"
+                : userProfile?.role === "FIELD_EXECUTIVE"
+                  ? "My tickets"
+                  : "All Tickets"
+            }
+            className="gap-1.5 px-2"
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            <span>
+              {isClient
+                ? "Back to client portal"
+                : userProfile?.role === "FIELD_EXECUTIVE"
+                  ? "My tickets"
+                  : "All Tickets"}
+            </span>
+          </Button>
+        </div>
         <div className="flex h-64 items-center justify-center text-muted-foreground">
           Loading ticket…
         </div>
@@ -185,7 +217,7 @@ export default function TicketDetail() {
         <div className="space-y-2 text-center">
           <h2 className="text-xl font-semibold">Ticket not found</h2>
           <Link to={isClient ? "/app/client" : "/app/tickets"} className="text-primary hover:underline">
-            Back to {isClient ? "dashboard" : "tickets"}
+            Back to {isClient ? "client portal" : "All Tickets"}
           </Link>
         </div>
       </PageContainer>
@@ -295,6 +327,34 @@ export default function TicketDetail() {
         onError: (err) =>
           toast({
             title: "Failed to update state",
+            description: err.message,
+            variant: "destructive",
+          }),
+      }
+    );
+  };
+
+  const handleSaveLocation = () => {
+    if (!ticket) return;
+    const trimmed = locationDraft.trim();
+    if (!trimmed) {
+      toast({
+        title: "Location is required",
+        description: "Please enter a location before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateTicket.mutate(
+      {
+        ticketId: ticket.id,
+        updates: { location: trimmed },
+      },
+      {
+        onSuccess: () => setLocationDraft(""),
+        onError: (err) =>
+          toast({
+            title: "Failed to update location",
             description: err.message,
             variant: "destructive",
           }),
@@ -478,14 +538,30 @@ export default function TicketDetail() {
 
   /* ================= UI ================= */
 
-  const backTo = isClient ? "/app/client" : "/app";
+  const backTo = isClient
+    ? "/app/client"
+    : userProfile?.role === "FIELD_EXECUTIVE"
+      ? "/fe"
+      : "/app/tickets";
+  const backLabel = isClient
+    ? "Back to client portal"
+    : userProfile?.role === "FIELD_EXECUTIVE"
+      ? "My tickets"
+      : "All Tickets";
   const detailContent = (
     <PageContainer>
       <div className="space-y-6">
         <PageHeader
           leading={
-            <Button variant="ghost" size="icon" onClick={() => navigate(backTo)} aria-label="Back to dashboard">
-              <ArrowLeft className="h-5 w-5" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate(backTo)}
+              aria-label={backLabel}
+              className="gap-1.5 px-2"
+            >
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span>{backLabel}</span>
             </Button>
           }
           titleSlot={
@@ -502,9 +578,6 @@ export default function TicketDetail() {
                 priority={ticket.priority}
                 priority_level={ticket.priority_level}
               />
-              <span className="text-sm text-muted-foreground">
-                {priorityDisplayLabel(resolveTicketPriorityLevel(ticket))}
-              </span>
             </div>
           }
           description={`Opened ${formatIST(ticket.opened_at, "PPpp")}`}
@@ -696,7 +769,36 @@ export default function TicketDetail() {
                     <Info label="Vehicle Number" value={ticket.vehicle_number} mono />
                     <Info label="Category" value={ticket.category} />
                     <Info label="Issue Type" value={ticket.issue_type} />
-                    <IconInfo icon={MapPin} label="Location" value={ticket.location} />
+                    {canPerformActions && !ticket.location?.trim() ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="ticket-location" className="text-sm font-medium">
+                          Location <span className="text-destructive">*</span>
+                        </Label>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <Input
+                            id="ticket-location"
+                            placeholder="e.g., Mumbai, Andheri East"
+                            value={locationDraft}
+                            onChange={(e) => setLocationDraft(e.target.value)}
+                            disabled={updateTicket.isPending}
+                            className="w-full"
+                          />
+                          <Button
+                            type="button"
+                            onClick={handleSaveLocation}
+                            disabled={updateTicket.isPending || !locationDraft.trim()}
+                            className="shrink-0"
+                          >
+                            Save
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          This ticket has no location yet. Add one to keep records complete.
+                        </p>
+                      </div>
+                    ) : (
+                      <IconInfo icon={MapPin} label="Location" value={ticket.location} />
+                    )}
                     {canPerformActions ? (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">State</Label>
@@ -877,7 +979,7 @@ export default function TicketDetail() {
                       )}
 
                       {a?.remarks && (
-                        <p className="mt-2 text-sm text-muted-foreground">
+                        <p className="mt-2 text-sm text-muted-foreground whitespace-pre-wrap break-words">
                           <strong>Remarks:</strong> {String(a.remarks)}
                         </p>
                       )}
@@ -1001,7 +1103,13 @@ function Info({ label, value, mono }: InfoProps) {
   return (
     <div>
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className={mono ? "font-mono font-medium" : "font-medium"}>
+      <p
+        className={
+          mono
+            ? "font-mono font-medium whitespace-pre-wrap break-words"
+            : "font-medium whitespace-pre-wrap break-words"
+        }
+      >
         {value || "—"}
       </p>
     </div>
@@ -1020,7 +1128,7 @@ function IconInfo({ icon: Icon, label, value }: IconInfoProps) {
       <Icon className="mt-1 h-4 w-4 text-muted-foreground" />
       <div>
         <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="font-medium">{value || "—"}</p>
+        <p className="font-medium whitespace-pre-wrap break-words">{value || "—"}</p>
       </div>
     </div>
   );

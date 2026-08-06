@@ -24,6 +24,7 @@ test.describe("Tickets", () => {
         category: "OTHER",
         issue_type: "OTHER",
         priority_level: "LOW",
+        location: "E2E_PW_LOCATION",
       },
     });
     expect(create.status).toBe(200);
@@ -85,5 +86,21 @@ test.describe("Tickets", () => {
     await page.goto("/app/tickets");
     await expect(page.locator("body")).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
+  });
+
+  test("ticket detail All Tickets navigates to list", async ({ page }) => {
+    test.skip(!hasCreds("ADMIN") && !hasCreds("STAFF"), "missing staff creds");
+    const role = hasCreds("ADMIN") ? "ADMIN" : "STAFF";
+    await browserLogin(page, role as "ADMIN" | "STAFF");
+    await page.goto("/app/tickets");
+    await expect(page).not.toHaveURL(/\/login/);
+    const ticketLink = page.locator('a[href*="/app/tickets/"]').first();
+    test.skip((await ticketLink.count()) === 0, "no ticket links on list");
+    await ticketLink.click();
+    await expect(page).toHaveURL(/\/app\/tickets\/[^/]+/);
+    const back = page.getByRole("button", { name: "All Tickets" });
+    await expect(back).toBeVisible({ timeout: 60_000 });
+    await back.click();
+    await expect(page).toHaveURL(/\/app\/tickets\/?$/);
   });
 });

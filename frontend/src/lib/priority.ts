@@ -38,10 +38,9 @@ export function resolveTicketPriorityLevel(ticket: {
   return DEFAULT_PRIORITY_LEVEL;
 }
 
+/** User-facing priority text: LOW / MEDIUM / HIGH (uppercase, no stars). */
 export function priorityDisplayLabel(level: PriorityLevel): string {
-  if (level === 'HIGH') return 'High';
-  if (level === 'MEDIUM') return 'Medium';
-  return 'Low';
+  return level;
 }
 
 export function ticketPassesPriorityFilter(

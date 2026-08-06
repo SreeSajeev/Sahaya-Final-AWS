@@ -98,6 +98,7 @@ import {
   RequireClient,
   RequireAdmin,
 } from "@/components/auth/AuthGuards";
+import { PasswordResetDeepLinkRedirect } from "@/components/auth/PasswordResetDeepLinkRedirect";
 import { ClientLayout } from "@/components/layout/ClientLayout";
 
 // Pages
@@ -133,9 +134,9 @@ import ComplaintPoints from "@/pages/ComplaintPoints";
 import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
 import { isPublicComplaintsEnabled } from "@/lib/publicComplaintsFeature";
 import NotFound from "@/pages/NotFound";
+import TicketDetail from "@/pages/TicketDetail";
 
 // Lazy-loaded heavy pages (improves initial load)
-const TicketDetail = lazy(() => import("@/pages/TicketDetail"));
 const AuditLogs = lazy(() => import("@/pages/AuditLogs"));
 const Analytics = lazy(() => import("@/pages/Analytics"));
 
@@ -169,6 +170,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <PasswordResetDeepLinkRedirect />
         <TooltipProvider>
           <Toaster />
           <Sonner />
@@ -256,14 +258,7 @@ export default function App() {
                 <Route path="/app" element={<Dashboard />} />
                 <Route path="/app/tenant-admin" element={<TenantAdminDashboard />} />
                 <Route path="/app/tickets" element={<TicketsList />} />
-                <Route
-                  path="/app/tickets/:ticketId"
-                  element={
-                    <Suspense fallback={<PageLoader />}>
-                      <TicketDetail />
-                    </Suspense>
-                  }
-                />
+                <Route path="/app/tickets/:ticketId" element={<TicketDetail />} />
                 <Route path="/app/review" element={<ReviewQueue />} />
                 <Route path="/app/emails" element={<RawEmails />} />
                 <Route

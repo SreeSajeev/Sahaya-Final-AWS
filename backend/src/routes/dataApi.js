@@ -74,6 +74,7 @@ import { insertComment, listCommentsForTicket, getCommentById } from "../reposit
 import {
   listUsersScoped,
   listUsersOrganisationIds,
+  listStaffUsersForAnalytics,
   countUsersGlobal,
 } from "../repositories/userRepository.js";
 import {
@@ -1602,8 +1603,23 @@ router.get("/analytics/summary", async (req, res) => {
     const { data: assignments, error: asErr } = await listAllAssignmentsScoped(req);
     if (asErr) return jsonError(res, 500, asErr.message);
 
+    // Staff/admin users for Service Manager scorecards (assigned_by attribution)
+    let staffUsers = [];
+    try {
+      const { data: usersRows, error: usersErr } = await listStaffUsersForAnalytics(req);
+      if (!usersErr) staffUsers = usersRows || [];
+    } catch {
+      staffUsers = [];
+    }
+
     logEvent("dataApi.analytics.summary", { tenantId: req.tenantId ?? null, ms: Date.now() - startedAt, tickets: (tickets || []).length });
-    return jsonOk(res, { tickets: tickets || [], sla: sla || [], field_executives: fes || [], ticket_assignments: assignments || [] });
+    return jsonOk(res, {
+      tickets: tickets || [],
+      sla: sla || [],
+      field_executives: fes || [],
+      ticket_assignments: assignments || [],
+      staff_users: staffUsers,
+    });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to load analytics");
   }

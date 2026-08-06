@@ -84,6 +84,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   const [customIssueType, setCustomIssueType] = useState('');
   const [customCategory, setCustomCategory] = useState('');
   const [location, setLocation] = useState('');
+  const [locationTouched, setLocationTouched] = useState(false);
   const [ticketState, setTicketState] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [complaintId, setComplaintId] = useState('');
@@ -281,7 +282,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         vehicle_number: vehicleNumber.trim() || null,
         category: effectiveCategory,
         issue_type: effectiveIssueType,
-        location: location.trim() || null,
+        location: location.trim(),
         state: ticketState,
         complaint_id: complaintId.trim() || null,
         source: 'MANUAL',
@@ -371,6 +372,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     setCustomIssueType('');
     setCustomCategory('');
     setLocation('');
+    setLocationTouched(false);
     setTicketState(null);
     setDescription('');
     setComplaintId('');
@@ -415,6 +417,8 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
 
   const staffClientSelectDisabled =
     !isClientMode && (clientsLoading || clientOptions.length === 0 || clientsFetchError);
+  const locationMissing = !location.trim();
+
   const staffSubmitBlocked =
     !isClientMode &&
     (clientsLoading || clientsFetchError || clientOptions.length === 0 || !manualClientSlug.trim());
@@ -635,14 +639,24 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
 
           {/* Location */}
           <div className="space-y-2">
-            <Label htmlFor="location">Location</Label>
+            <Label htmlFor="location">
+              Location <span className="text-destructive">*</span>
+            </Label>
             <Input
               id="location"
               placeholder="e.g., Mumbai, Andheri East"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              className="w-full"
+              onBlur={() => setLocationTouched(true)}
+              aria-required="true"
+              aria-invalid={locationTouched && locationMissing}
+              className={
+                locationTouched && locationMissing ? 'w-full border-destructive' : 'w-full'
+              }
             />
+            {locationTouched && locationMissing && (
+              <p className="text-xs text-destructive">Location is required.</p>
+            )}
           </div>
 
           {!isClientMode && (
@@ -678,7 +692,11 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={createTicketMutation.isPending || staffSubmitBlocked}>
+            <Button
+              type="submit"
+              disabled={createTicketMutation.isPending || staffSubmitBlocked || locationMissing}
+              onClick={() => setLocationTouched(true)}
+            >
               {createTicketMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

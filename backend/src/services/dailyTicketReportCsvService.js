@@ -39,6 +39,8 @@ const CSV_HEADERS = [
   "Resolution Deadline",
   "Resolution Time Hours",
   "Resolution Category",
+  "Resolution Other Details",
+  "Resolution Category Display",
 ];
 
 function escapeCsv(value) {
@@ -48,6 +50,24 @@ function escapeCsv(value) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
+}
+
+function extractResolutionOtherDetails(resolutionCategory, verificationRemarks) {
+  const cat = String(resolutionCategory ?? "").trim().toUpperCase();
+  if (cat !== "OTHER") return "";
+  const remarks = String(verificationRemarks ?? "").trim();
+  if (!remarks) return "";
+  return remarks.split(/\n\n/)[0]?.trim() || remarks;
+}
+
+function formatResolutionCategoryDisplay(resolutionCategory, verificationRemarks) {
+  const raw = String(resolutionCategory ?? "").trim();
+  if (!raw) return "";
+  if (raw.toUpperCase() === "OTHER") {
+    const details = extractResolutionOtherDetails(raw, verificationRemarks);
+    return details ? `Other: ${details}` : "Other";
+  }
+  return raw;
 }
 
 function legacyPriorityYesNo(priority) {
@@ -141,6 +161,14 @@ export function buildDailyTicketReportCsv({
     const resolvedAt = ticket.resolved_at ?? "";
     const remarks = ticket.verification_remarks ?? "";
     const resolutionCategory = ticket.resolution_category ?? "";
+    const resolutionOtherDetails = extractResolutionOtherDetails(
+      resolutionCategory,
+      remarks
+    );
+    const resolutionCategoryDisplay = formatResolutionCategoryDisplay(
+      resolutionCategory,
+      remarks
+    );
     const sla = slaByTicketId.get(ticketId);
     const activityTypes = (activityTypesByTicketId.get(ticketId) || []).join("; ");
     const assignStats = assignmentStatsByTicketId.get(ticketId);
@@ -189,6 +217,8 @@ export function buildDailyTicketReportCsv({
         formatInstantInIst(sla?.resolution_deadline ?? ""),
         resolutionTimeHours(ticket),
         resolutionCategory,
+        resolutionOtherDetails,
+        resolutionCategoryDisplay,
       ]
         .map(escapeCsv)
         .join(",")

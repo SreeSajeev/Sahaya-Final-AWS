@@ -24,6 +24,7 @@ on:
           - backup_restore
           - restart_pg
           - playwright_acceptance
+          - parity_smoke
           - phase_f_soak_start
           - phase_f_soak_status
           - phase_f_soak_dense
@@ -42,8 +43,11 @@ on:
           - phase_f_historical_audit
           - phase_f_historical_api_probe
           - phase_f_convergence_gate
+          - phase_f_classify_test_orgs
+          - phase_f_classify_marker_rows
+          - phase_f_cleanup_test_fixtures_2a2b
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr / phase_f_cleanup_test_fixtures_2a2b"
         required: false
         default: ""
 
@@ -126,6 +130,15 @@ jobs:
               cd "$MONOREPO/e2e"
               chmod +x run-acceptance.sh
               CREDS_FILE="$CREDS_FILE" bash run-acceptance.sh
+              exit 0
+            fi
+
+            if [ "$MODE" = "parity_smoke" ]; then
+              chmod +x scripts/acceptance-parity-smoke.sh
+              API_BASE="${API_BASE:-https://api.test-sahaya.pariskq.in}" \
+                FE_BASE="${FE_BASE:-https://test-sahaya.pariskq.in}" \
+                CREDS_FILE="$CREDS_FILE" \
+                bash scripts/acceptance-parity-smoke.sh
               exit 0
             fi
 
@@ -216,6 +229,43 @@ jobs:
             if [ "$MODE" = "phase_f_historical_api_probe" ]; then
               chmod +x scripts/phase-f/run-phase-f.sh
               bash scripts/phase-f/run-phase-f.sh historical_api_probe
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_classify_test_orgs" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== READ-ONLY: classify TEST vs HISTORICAL orgs (no deletes) ====="
+              bash scripts/phase-f/run-phase-f.sh classify_test_orgs
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_classify_marker_rows" ]; then
+              chmod +x scripts/phase-f/run-phase-f.sh
+              echo "===== READ-ONLY: TEST marker rows inside HISTORICAL orgs (no deletes) ====="
+              bash scripts/phase-f/run-phase-f.sh classify_test_orgs
+              bash scripts/phase-f/run-phase-f.sh classify_marker_rows
+              exit 0
+            fi
+
+            if [ "$MODE" = "phase_f_cleanup_test_fixtures_2a2b" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing Phase 2A+2B cleanup without confirm=CONFIRM" >&2
+                exit 1
+              fi
+              set -euo pipefail
+              chmod +x scripts/phase-f/run-phase-f.sh scripts/acceptance-full-platform.sh
+              echo "===== PHASE 2A+2B: backup + delete TEST orgs + marker tickets (TEST EC2 only) ====="
+              export CLEANUP_CONFIRM=DELETE_TEST_FIXTURES_2A_2B
+              bash scripts/phase-f/run-phase-f.sh cleanup_test_fixtures_2a2b
+              echo "===== CLEANUP REPORT ====="
+              cat /var/backups/sahaya/phase-f/test-fixture-cleanup-2a2b-report.json | head -c 200000 || true
+              echo
+              echo "===== CLEANUP BACKUPS ====="
+              ls -lt /var/backups/sahaya/cleanup 2>/dev/null | head -10 || true
+              echo "===== PRE-MIGRATION BACKUP MARKERS (must remain untouched) ====="
+              ls -la /var/backups/sahaya/pre-migration 2>/dev/null | head -20 || true
+              echo "===== ACCEPTANCE REGRESSION AFTER CLEANUP ====="
+              bash scripts/acceptance-full-platform.sh
               exit 0
             fi
 

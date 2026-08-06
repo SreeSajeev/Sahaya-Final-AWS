@@ -3,7 +3,7 @@
  *
  * Confirmation dialog for Service Manager to close/resolve a ticket.
  * Only allows closing tickets that are in appropriate states (ON_SITE, RESOLVED_PENDING_VERIFICATION).
- * Requires Resolution Category; includes optional verification remarks (sent to backend and included in resolution email).
+ * Requires Issue Type (stored as resolution_category); includes optional verification remarks (sent to backend and included in resolution email).
  */
 
 import { useState, useEffect } from "react";
@@ -163,7 +163,7 @@ export function CloseTicketDialog({
                     verified and resolved.
                   </p>
                   <div className="space-y-2">
-                    <Label htmlFor="close-resolution-category">Resolution Category *</Label>
+                    <Label htmlFor="close-resolution-category">Issue Type *</Label>
                     <Select
                       value={resolutionCategory}
                       onValueChange={(value) => {
@@ -174,7 +174,7 @@ export function CloseTicketDialog({
                       }}
                     >
                       <SelectTrigger id="close-resolution-category">
-                        <SelectValue placeholder="Select resolution category" />
+                        <SelectValue placeholder="Select issue type" />
                       </SelectTrigger>
                       <SelectContent>
                         {resolutionCategoryOptions.map((cat) => (
@@ -188,18 +188,18 @@ export function CloseTicketDialog({
                   </div>
                   {isOtherCategory && (
                     <div className="space-y-2">
-                      <Label htmlFor="close-resolution-other">Specify Resolution *</Label>
+                      <Label htmlFor="close-resolution-other">Specify Issue Type *</Label>
                       <Textarea
                         id="close-resolution-other"
-                        placeholder="Enter resolution details..."
+                        placeholder="Enter issue type details..."
                         value={resolutionOtherDetails}
                         onChange={(e) => setResolutionOtherDetails(e.target.value)}
-                        className={`min-h-[80px] ${!resolutionOtherDetails.trim() ? "border-destructive/80" : ""}`}
+                        className={`min-h-[80px] whitespace-pre-wrap ${!resolutionOtherDetails.trim() ? "border-destructive/80" : ""}`}
                         required
                       />
                       {!resolutionOtherDetails.trim() && (
                         <p className="text-xs text-destructive">
-                          Resolution details are required when Other is selected.
+                          Details are required when Other is selected.
                         </p>
                       )}
                     </div>
@@ -211,7 +211,7 @@ export function CloseTicketDialog({
                       placeholder="Notes for the client..."
                       value={remarks}
                       onChange={(e) => setRemarks(e.target.value)}
-                      className="min-h-[80px]"
+                      className="min-h-[80px] whitespace-pre-wrap"
                     />
                   </div>
                   <div className="space-y-2">
@@ -221,7 +221,7 @@ export function CloseTicketDialog({
                       placeholder={reviewHelper}
                       value={reviewNotes}
                       onChange={(e) => setReviewNotes(e.target.value)}
-                      className="min-h-[100px]"
+                      className="min-h-[100px] whitespace-pre-wrap"
                     />
                     <p className="text-xs text-muted-foreground">{reviewHelper}</p>
                   </div>

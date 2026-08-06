@@ -77,6 +77,19 @@ case "$MODE" in
   historical_api_probe)
     node scripts/phase-f/historical-api-probe.mjs
     ;;
+  classify_test_orgs)
+    node scripts/phase-f/classify-test-orgs.mjs
+    ;;
+  classify_marker_rows)
+    node scripts/phase-f/classify-marker-rows-in-historical.mjs
+    ;;
+  cleanup_test_fixtures_2a2b)
+    if [ "${CLEANUP_CONFIRM:-}" != "DELETE_TEST_FIXTURES_2A_2B" ]; then
+      echo "Refusing cleanup: set CLEANUP_CONFIRM=DELETE_TEST_FIXTURES_2A_2B" >&2
+      exit 2
+    fi
+    node scripts/phase-f/cleanup-test-fixtures-2a2b.mjs
+    ;;
   load)
     export LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-15}"
     export LOAD_ROUNDS="${LOAD_ROUNDS:-4}"

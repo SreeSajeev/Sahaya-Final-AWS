@@ -86,7 +86,11 @@ export const CreateTicketSchema = z.object({
   vehicle_number: z.string().max(20).nullable().optional(),
   category: z.string().max(50).nullable().optional(),
   issue_type: z.string().max(100).nullable().optional(),
-  location: z.string().max(255).nullable().optional(),
+  location: z
+    .string({ required_error: 'Location is required' })
+    .trim()
+    .min(1, { message: 'Location is required' })
+    .max(255, { message: 'Location too long' }),
   state: z.string().max(100).nullable().optional(),
   complaint_id: z.string().max(50).nullable().optional(),
   source: z.enum(['EMAIL', 'MANUAL', 'SYSTEM']).default('MANUAL'),
