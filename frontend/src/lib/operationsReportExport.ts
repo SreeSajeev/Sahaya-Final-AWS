@@ -68,6 +68,7 @@ export type OperationsReportExportContext = {
 
 type OperationsEnrichmentMaps = TicketExportEnrichmentMaps & {
   companyShortNameBySlug?: Record<string, string>;
+  userNameById?: Map<string, string>;
 };
 
 function ticketAgeHours(ticket: Record<string, unknown>): string {
@@ -131,7 +132,9 @@ export function buildOperationsReportRows(
     "State",
     "Reported Location",
     "Attended Location",
-    "Field Executive",
+    "Assigned To",
+    "Assignment Type",
+    "Assigned Role",
     "Assigned Date",
     "Current Status",
     "Current Assignment ID",
@@ -166,6 +169,12 @@ export function buildOperationsReportRows(
       assigns.find((a) => safe(a.id) === currentAid) ?? assigns[0];
     let feName = "";
     if (current?.fe_id) feName = maps.feNameById.get(safe(current.fe_id)) ?? "";
+    const assignmentType = safe(current?.assignment_type) || (current?.fe_id ? "FIELD_EXECUTIVE" : "");
+    const assignedRole = safe(current?.assigned_role) || (assignmentType === "SERVICE_MANAGER" ? "STAFF" : assignmentType === "FIELD_EXECUTIVE" ? "FIELD_EXECUTIVE" : "");
+    const assigneeDisplay =
+      assignmentType === "SERVICE_MANAGER"
+        ? (maps.userNameById?.get(safe(current?.assigned_user_id)) || feName || "Service Manager")
+        : feName;
     const sla = maps.slaByTicketId.get(id);
     const cat = safe(t.resolution_category);
     const remarks = safe(t.verification_remarks);
@@ -204,7 +213,9 @@ export function buildOperationsReportRows(
       safe(t.state),
       safe(t.location),
       safe(t.resolution_location_name),
-      feName,
+      assigneeDisplay,
+      assignmentType,
+      assignedRole,
       safe(current?.assigned_at),
       safe(t.status),
       currentAid,

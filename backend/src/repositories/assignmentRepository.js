@@ -7,8 +7,15 @@ function assignmentInsertToPrisma(insert) {
   /** @type {Record<string, unknown>} */
   const data = {
     ticketId: insert.ticket_id,
-    feId: insert.fe_id,
   };
+  if (insert.fe_id != null && String(insert.fe_id).trim() !== "") {
+    data.feId = insert.fe_id;
+  }
+  if (insert.assignment_type != null) data.assignmentType = String(insert.assignment_type);
+  if (insert.assigned_user_id != null) data.assignedUserId = insert.assigned_user_id;
+  if (insert.assigned_role != null) data.assignedRole = insert.assigned_role;
+  if (insert.assigned_by != null) data.assignedBy = insert.assigned_by;
+  if (insert.assignment_remarks != null) data.assignmentRemarks = insert.assignment_remarks;
   if (insert.organisation_id) data.organisationId = insert.organisation_id;
   if (insert.assignment_due_at) data.assignmentDueAt = new Date(String(insert.assignment_due_at));
   return data;
@@ -237,6 +244,43 @@ export async function listAssignmentsByFeId(feId) {
       data: rows.map((r) => mapAssignmentWithTicket(/** @type {Record<string, unknown>} */ (r))).filter(Boolean),
       error: null,
     };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+/** Current Service Manager assignments (assignment_type = SERVICE_MANAGER). */
+export async function listAssignmentsByAssignedUserId(userId) {
+  try {
+    const rows = await prisma.ticketAssignment.findMany({
+      where: {
+        assignedUserId: userId,
+        assignmentType: "SERVICE_MANAGER",
+      },
+      include: { ticket: true },
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      data: rows.map((r) => mapAssignmentWithTicket(/** @type {Record<string, unknown>} */ (r))).filter(Boolean),
+      error: null,
+    };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+export async function getAssignmentWithTicketByAssignedUserAndTicket(userId, ticketId) {
+  try {
+    const row = await prisma.ticketAssignment.findFirst({
+      where: {
+        assignedUserId: userId,
+        ticketId,
+        assignmentType: "SERVICE_MANAGER",
+      },
+      include: { ticket: true },
+      orderBy: { createdAt: "desc" },
+    });
+    return { data: row ? mapAssignmentWithTicket(/** @type {Record<string, unknown>} */ (row)) : null, error: null };
   } catch (err) {
     return { data: null, error: toSupabaseStyleError(err) };
   }

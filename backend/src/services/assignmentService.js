@@ -31,7 +31,15 @@ import { maskTokenForLog } from "../utils/tokenRedact.js";
 import { safeDbErrorForClient } from "../utils/http.js";
 import { normalizeTicketState } from "../utils/normalizeTicketState.js";
 import { logEvent } from "../utils/structuredLog.js";
-import { insertAuditLog } from "./auditLogService.js";
+import { findUserById } from "../repositories/userRepository.js";
+import {
+  ASSIGNMENT_TYPE_FIELD_EXECUTIVE,
+  ASSIGNMENT_TYPE_SERVICE_MANAGER,
+  normalizeAssignmentType,
+  isServiceManagerAssignment,
+} from "../constants/assignmentTypes.js";
+import { insertComment } from "../repositories/commentRepository.js";
+import { sendServiceManagerAssignmentEmail } from "./emailService.js";
 
 export const BULK_ASSIGN_MAX_TICKETS = 25;
 export const BULK_ASSIGNABLE_STATUSES = ["OPEN", "FE_ATTEMPT_FAILED"];
@@ -402,12 +410,25 @@ export function getBulkAssignStatusRejectionReason(status) {
 }
 
 /**
- * Assign one ticket to an FE. Preserves legacy single-assign semantics (only REJECTED blocked).
+ * Assign one ticket to an FE or Service Manager.
+ * FE path preserves legacy semantics (tokens + FE email/SMS).
+ * SM path skips onsite/resolution tokens and FE attendance.
  *
  * @returns {Promise<{ ok: true, data: object } | { ok: false, statusCode: number, error: string, details?: object }>}
  */
-export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, state: stateInput }) {
+export async function assignOneTicket({
+  req,
+  ticketId,
+  feId = null,
+  assignedUserId = null,
+  assignmentType: assignmentTypeInput = ASSIGNMENT_TYPE_FIELD_EXECUTIVE,
+  assignmentDueAt,
+  state: stateInput,
+  assignmentRemarks = null,
+}) {
   const assignment_due_at = assignmentDueAt ?? null;
+  const assignmentType = normalizeAssignmentType(assignmentTypeInput);
+  const isSm = assignmentType === ASSIGNMENT_TYPE_SERVICE_MANAGER;
 
   const { data: ticket, error: ticketError } = await getTicketByIdForAssign(req, ticketId);
 
@@ -423,27 +444,76 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     return { ok: false, statusCode: 403, error: "Tenant mismatch", tenantMismatch: true };
   }
 
-  const { data: feRow, error: feLookupErr } = await getFieldExecutiveById(
-    feId,
-    "id, organisation_id, active"
-  );
-  if (feLookupErr || !feRow) {
-    return { ok: false, statusCode: 404, error: "Field executive not found" };
-  }
-  if (feRow.active === false) {
-    return { ok: false, statusCode: 400, error: "Field executive is inactive" };
-  }
-  if (
-    ticket.organisation_id &&
-    feRow.organisation_id &&
-    String(ticket.organisation_id) !== String(feRow.organisation_id)
-  ) {
-    return {
-      ok: false,
-      statusCode: 403,
-      error: "Field executive does not belong to this ticket's organisation",
-      tenantMismatch: true,
-    };
+  /** @type {string|null} */
+  let resolvedFeId = null;
+  /** @type {string|null} */
+  let resolvedUserId = null;
+  /** @type {string|null} */
+  let resolvedRole = null;
+  /** @type {{ name?: string|null, email?: string|null }|null} */
+  let smUser = null;
+
+  if (isSm) {
+    if (!assignedUserId) {
+      return { ok: false, statusCode: 400, error: "assigned_user_id is required for Service Manager assignment" };
+    }
+    const { data: userRow, error: userErr } = await findUserById(assignedUserId);
+    if (userErr || !userRow) {
+      return { ok: false, statusCode: 404, error: "Service Manager not found" };
+    }
+    const role = String(userRow.role || "").toUpperCase();
+    if (role !== "STAFF" && role !== "ADMIN") {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "Assignee must be a Service Manager (STAFF) or Admin user",
+      };
+    }
+    if (userRow.active === false || userRow.is_active === false) {
+      return { ok: false, statusCode: 400, error: "Service Manager is inactive" };
+    }
+    if (
+      ticket.organisation_id &&
+      userRow.organisation_id &&
+      String(ticket.organisation_id) !== String(userRow.organisation_id)
+    ) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "Service Manager does not belong to this ticket's organisation",
+        tenantMismatch: true,
+      };
+    }
+    resolvedUserId = String(userRow.id);
+    resolvedRole = role;
+    smUser = { name: userRow.name, email: userRow.email };
+  } else {
+    if (!feId) {
+      return { ok: false, statusCode: 400, error: "feId is required for Field Executive assignment" };
+    }
+    const { data: feRow, error: feLookupErr } = await getFieldExecutiveById(
+      feId,
+      "id, organisation_id, active"
+    );
+    if (feLookupErr || !feRow) {
+      return { ok: false, statusCode: 404, error: "Field executive not found" };
+    }
+    if (feRow.active === false) {
+      return { ok: false, statusCode: 400, error: "Field executive is inactive" };
+    }
+    if (
+      ticket.organisation_id &&
+      feRow.organisation_id &&
+      String(ticket.organisation_id) !== String(feRow.organisation_id)
+    ) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "Field executive does not belong to this ticket's organisation",
+        tenantMismatch: true,
+      };
+    }
+    resolvedFeId = feId;
   }
 
   if (stateInput !== undefined) {
@@ -465,10 +535,19 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
   await revokeTokensForTicket({ ticketId, reason: "reassigned" });
 
   const hasAssignmentDueAt = await hasPublicColumn("ticket_assignments", "assignment_due_at");
+  const remarksTrim =
+    assignmentRemarks != null && String(assignmentRemarks).trim() !== ""
+      ? String(assignmentRemarks).trim()
+      : null;
 
   const { data: assignment, error: assignmentError } = await insertAssignment({
     ticket_id: ticketId,
-    fe_id: feId,
+    ...(resolvedFeId ? { fe_id: resolvedFeId } : {}),
+    assignment_type: assignmentType,
+    ...(resolvedUserId ? { assigned_user_id: resolvedUserId } : {}),
+    ...(resolvedRole ? { assigned_role: resolvedRole } : {}),
+    ...(req.appUser?.id ? { assigned_by: req.appUser.id } : {}),
+    ...(remarksTrim ? { assignment_remarks: remarksTrim } : {}),
     ...(ticket.organisation_id ? { organisation_id: ticket.organisation_id } : {}),
     ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
   });
@@ -480,7 +559,9 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
       statusCode: 400,
       error: safeDbErrorForClient(
         assignmentError,
-        "Failed to create assignment. Check that the Field Executive exists and the ticket is not already assigned."
+        isSm
+          ? "Failed to create Service Manager assignment."
+          : "Failed to create assignment. Check that the Field Executive exists and the ticket is not already assigned."
       ),
     };
   }
@@ -491,73 +572,125 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)
   );
 
-  const { onSiteToken, resolutionToken } = await issueAssignmentTokenPair({
-    ticketId,
-    feId,
-    idempotencyKey: `assign:${assignment.id}`,
-  });
-
-  const { count: assignmentCount } = await countAssignmentsForTicket(ticketId);
-  const isFirstAssignment = (assignmentCount ?? 0) <= 1;
-
-  console.log(
-    JSON.stringify({
-      event: "assignment_tokens_issued",
-      requestId: req.requestId,
-      ticket_id: ticketId,
-      assignment_id: assignment.id,
-      fe_id: feId,
-      on_site_token_id: maskTokenForLog(onSiteToken),
-      resolution_token_id: maskTokenForLog(resolutionToken),
-      resolution_state: "LOCKED",
-    })
-  );
-
-  const rid = req.requestId ?? null;
+  /** @type {string|null} */
+  let onSiteToken = null;
+  /** @type {string|null} */
+  let resolutionToken = null;
   let notifications = {
     email: { success: false, error: "Notifications did not run" },
     sms: { success: false, error: "Notifications did not run" },
   };
-  try {
-    notifications = await collectAssignmentNotifications({
-      rid,
-      ticketId,
-      feId,
-      assignment,
-      ticket,
-      onSiteToken,
-      resolutionToken,
-      assignment_due_at,
-      isFirstAssignment,
-      assignmentCount,
+  const rid = req.requestId ?? null;
+
+  if (isSm) {
+    try {
+      const emailResult = await sendServiceManagerAssignmentEmail({
+        toEmail: smUser?.email,
+        toName: smUser?.name,
+        ticketNumber: ticket.ticket_number,
+        assignmentRemarks: remarksTrim,
+      });
+      notifications = {
+        email: {
+          success: Boolean(emailResult?.sent),
+          error: emailResult?.sent ? null : emailResult?.error || "Assignment email failed",
+        },
+        sms: { success: false, error: "SMS not used for Service Manager assignment" },
+      };
+    } catch (notifyErr) {
+      const msg = notifyErr?.message ? String(notifyErr.message).slice(0, 400) : "Notification pipeline failed";
+      notifications = {
+        email: { success: false, error: msg },
+        sms: { success: false, error: "SMS not used for Service Manager assignment" },
+      };
+    }
+
+    await insertComment({
+      ticket_id: ticketId,
+      source: "STAFF",
+      author_id: req.appUser?.id ?? null,
+      organisation_id: ticket.organisation_id ?? null,
+      body: `Service Manager Assigned${smUser?.name ? `: ${smUser.name}` : ""}`,
+      attachments: {
+        service_manager_assignment: {
+          event_type: "SERVICE_MANAGER_ASSIGNED",
+          assignment_id: assignment.id,
+          assigned_user_id: resolvedUserId,
+          assigned_role: resolvedRole,
+          assigned_at: new Date().toISOString(),
+          remarks: remarksTrim,
+        },
+      },
     });
-  } catch (notifyErr) {
-    const msg = notifyErr?.message ? String(notifyErr.message).slice(0, 400) : "Notification pipeline failed";
-    console.error(
+  } else {
+    const tokens = await issueAssignmentTokenPair({
+      ticketId,
+      feId: resolvedFeId,
+      idempotencyKey: `assign:${assignment.id}`,
+    });
+    onSiteToken = tokens.onSiteToken;
+    resolutionToken = tokens.resolutionToken;
+
+    console.log(
       JSON.stringify({
-        event: "assignment_notifications_fatal",
-        requestId: rid,
-        error: msg,
+        event: "assignment_tokens_issued",
+        requestId: req.requestId,
+        ticket_id: ticketId,
+        assignment_id: assignment.id,
+        fe_id: resolvedFeId,
+        on_site_token_id: maskTokenForLog(onSiteToken),
+        resolution_token_id: maskTokenForLog(resolutionToken),
+        resolution_state: "LOCKED",
       })
     );
-    logEvent("assignment_notifications_fatal", { requestId: rid, message: msg });
-    notifications = {
-      email: { success: false, error: msg },
-      sms: { success: false, error: msg },
-    };
+
+    const { count: assignmentCount } = await countAssignmentsForTicket(ticketId);
+    const isFirstAssignment = (assignmentCount ?? 0) <= 1;
+
+    try {
+      notifications = await collectAssignmentNotifications({
+        rid,
+        ticketId,
+        feId: resolvedFeId,
+        assignment,
+        ticket,
+        onSiteToken,
+        resolutionToken,
+        assignment_due_at,
+        isFirstAssignment,
+        assignmentCount,
+      });
+    } catch (notifyErr) {
+      const msg = notifyErr?.message ? String(notifyErr.message).slice(0, 400) : "Notification pipeline failed";
+      console.error(
+        JSON.stringify({
+          event: "assignment_notifications_fatal",
+          requestId: rid,
+          error: msg,
+        })
+      );
+      logEvent("assignment_notifications_fatal", { requestId: rid, message: msg });
+      notifications = {
+        email: { success: false, error: msg },
+        sms: { success: false, error: msg },
+      };
+    }
   }
 
   void insertAuditLog({
     req,
     entity_type: "assignment",
     entity_id: assignment.id,
-    action: "ticket_assigned",
+    action: isSm ? "ticket_assigned_service_manager" : "ticket_assigned",
     ticket_organisation_id: ticket.organisation_id ?? null,
     client_slug: ticket.client_slug ?? null,
-    actor_fe_id: feId,
+    actor_fe_id: resolvedFeId,
     metadata: {
       ticket_id: ticketId,
-      fe_id: feId,
+      assignment_type: assignmentType,
+      fe_id: resolvedFeId,
+      assigned_user_id: resolvedUserId,
+      assigned_role: resolvedRole,
       ticket_number: ticket.ticket_number ?? null,
       assignment_id: assignment.id,
     },
@@ -571,7 +704,9 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     ticket_organisation_id: ticket.organisation_id ?? null,
     client_slug: ticket.client_slug ?? null,
     metadata: {
-      fe_id: feId,
+      assignment_type: assignmentType,
+      fe_id: resolvedFeId,
+      assigned_user_id: resolvedUserId,
       assignment_id: assignment.id,
       ticket_number: ticket.ticket_number ?? null,
     },
@@ -581,6 +716,7 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
     ok: true,
     data: {
       success: true,
+      assignment_type: assignmentType,
       token: onSiteToken,
       onSiteToken,
       resolutionToken,
@@ -588,19 +724,33 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
       assignment_id: assignment.id,
       ticket_number: ticket.ticket_number ?? null,
       organisation_id: ticket.organisation_id ?? null,
+      assigned_user_id: resolvedUserId,
+      fe_id: resolvedFeId,
     },
   };
 }
 
+/** @deprecated internal alias kept for clarity in tests */
+export { isServiceManagerAssignment };
+
 /**
- * Reassign a ticket from one FE to another. Inserts a new assignment row, revokes prior tokens,
- * updates current_assignment_id, notifies the new FE only, and writes ticket_reassigned audit.
- *
- * @returns {Promise<{ ok: true, data: object } | { ok: false, statusCode: number, error: string, details?: object }>}
+ * Reassign a ticket. Supports FE↔FE, SM↔SM, and cross-type reassignment.
+ * FE path issues tokens; SM path skips tokens.
  */
-export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, state: stateInput }) {
+export async function reassignOneTicket({
+  req,
+  ticketId,
+  feId = null,
+  assignedUserId = null,
+  assignmentType: assignmentTypeInput = ASSIGNMENT_TYPE_FIELD_EXECUTIVE,
+  assignmentDueAt,
+  state: stateInput,
+  assignmentRemarks = null,
+}) {
   const assignment_due_at = assignmentDueAt ?? null;
   const reassignedAt = new Date().toISOString();
+  const assignmentType = normalizeAssignmentType(assignmentTypeInput);
+  const isSm = assignmentType === ASSIGNMENT_TYPE_SERVICE_MANAGER;
 
   const { data: ticket, error: ticketError } = await getTicketByIdForAssign(req, ticketId);
 
@@ -625,33 +775,10 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     };
   }
 
-  const { data: feRowRe, error: feLookupReErr } = await getFieldExecutiveById(
-    feId,
-    "id, organisation_id, active"
-  );
-  if (feLookupReErr || !feRowRe) {
-    return { ok: false, statusCode: 404, error: "Field executive not found" };
-  }
-  if (feRowRe.active === false) {
-    return { ok: false, statusCode: 400, error: "Field executive is inactive" };
-  }
-  if (
-    ticket.organisation_id &&
-    feRowRe.organisation_id &&
-    String(ticket.organisation_id) !== String(feRowRe.organisation_id)
-  ) {
-    return {
-      ok: false,
-      statusCode: 403,
-      error: "Field executive does not belong to this ticket's organisation",
-      tenantMismatch: true,
-    };
-  }
-
   const hasAssignmentDueAt = await hasPublicColumn("ticket_assignments", "assignment_due_at");
   const priorSelect = hasAssignmentDueAt
-    ? "id, fe_id, assignment_due_at, field_executives(id, name)"
-    : "id, fe_id, field_executives(id, name)";
+    ? "id, fe_id, assignment_type, assigned_user_id, assignment_due_at, field_executives(id, name)"
+    : "id, fe_id, assignment_type, assigned_user_id, field_executives(id, name)";
 
   const { data: priorAssignment, error: priorErr } = await getAssignmentById(
     ticket.current_assignment_id,
@@ -674,131 +801,21 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     };
   }
 
-  const oldFeId = priorAssignment.fe_id != null ? String(priorAssignment.fe_id) : null;
-  const oldFeName =
-    priorAssignment.field_executives?.name != null
-      ? String(priorAssignment.field_executives.name).trim()
-      : null;
-  const oldDueDate =
-    hasAssignmentDueAt && priorAssignment.assignment_due_at != null
-      ? String(priorAssignment.assignment_due_at)
-      : null;
-
-  if (stateInput !== undefined) {
-    const normalizedState = normalizeTicketState(stateInput);
-    const { error: stateUpdateError } = await updateTicketById(ticketId, {
-      state: normalizedState,
-      updated_at: reassignedAt,
-    });
-    if (stateUpdateError) {
-      return {
-        ok: false,
-        statusCode: 400,
-        error: safeDbErrorForClient(stateUpdateError, "Failed to update ticket state"),
-      };
-    }
-    ticket.state = normalizedState;
-  }
-
-  await revokeTokensForTicket({ ticketId, reason: "reassigned" });
-
-  const { data: assignment, error: assignmentError } = await insertAssignment({
-    ticket_id: ticketId,
-    fe_id: feId,
-    ...(ticket.organisation_id ? { organisation_id: ticket.organisation_id } : {}),
-    ...(hasAssignmentDueAt && assignment_due_at ? { assignment_due_at } : {}),
-  });
-
-  if (assignmentError || !assignment) {
-    console.error("Reassignment insert error:", assignmentError?.code || "unknown");
-    return {
-      ok: false,
-      statusCode: 400,
-      error: safeDbErrorForClient(
-        assignmentError,
-        "Failed to create reassignment. Check that the Field Executive exists."
-      ),
-    };
-  }
-
-  const priorStatus = ticket.status;
-  await updateTicketById(ticketId, {
-    status: "ASSIGNED",
-    current_assignment_id: assignment.id,
-    updated_at: reassignedAt,
-  });
-
-  if (assignment_due_at != null) {
-    setAssignmentDeadline(ticketId, assignment_due_at).catch((err) =>
-      console.error("[SLA] setAssignmentDeadline after reassign", ticketId, err.message)
-    );
-  }
-
-  const { onSiteToken, resolutionToken } = await issueAssignmentTokenPair({
+  // Delegate create of the new assignment row to assignOneTicket after clearing
+  // current assignment gate: temporarily use assign path by calling shared insert.
+  // Keep reassign semantics: require prior assignment, reset to ASSIGNED, audit reassign.
+  const assignResult = await assignOneTicket({
+    req,
     ticketId,
     feId,
-    idempotencyKey: `assign:${assignment.id}`,
+    assignedUserId,
+    assignmentType,
+    assignmentDueAt: assignment_due_at,
+    state: stateInput,
+    assignmentRemarks,
   });
 
-  const { count: assignmentCount } = await countAssignmentsForTicket(ticketId);
-  const isFirstAssignment = (assignmentCount ?? 0) <= 1;
-
-  console.log(
-    JSON.stringify({
-      event: "reassignment_tokens_issued",
-      requestId: req.requestId,
-      ticket_id: ticketId,
-      prior_assignment_id: priorAssignment.id,
-      assignment_id: assignment.id,
-      old_fe_id: oldFeId,
-      new_fe_id: feId,
-      on_site_token_id: maskTokenForLog(onSiteToken),
-      resolution_token_id: maskTokenForLog(resolutionToken),
-    })
-  );
-
-  const rid = req.requestId ?? null;
-  let notifications = {
-    email: { success: false, error: "Notifications did not run" },
-    sms: { success: false, error: "Notifications did not run" },
-  };
-  try {
-    notifications = await collectAssignmentNotifications({
-      rid,
-      ticketId,
-      feId,
-      assignment,
-      ticket,
-      onSiteToken,
-      resolutionToken,
-      assignment_due_at,
-      isFirstAssignment,
-      assignmentCount,
-    });
-  } catch (notifyErr) {
-    const msg = notifyErr?.message ? String(notifyErr.message).slice(0, 400) : "Notification pipeline failed";
-    console.error(
-      JSON.stringify({
-        event: "reassignment_notifications_fatal",
-        requestId: rid,
-        error: msg,
-      })
-    );
-    logEvent("reassignment_notifications_fatal", { requestId: rid, message: msg });
-    notifications = {
-      email: { success: false, error: msg },
-      sms: { success: false, error: msg },
-    };
-  }
-
-  const { data: newFeRow } = await getFieldExecutiveById(feId, "name");
-  const newFeName = newFeRow?.name != null ? String(newFeRow.name).trim() : null;
-  const newDueDate =
-    hasAssignmentDueAt && (assignment.assignment_due_at ?? assignment_due_at)
-      ? String(assignment.assignment_due_at ?? assignment_due_at)
-      : null;
-
-  const reassignedBy = req?.appUser?.id ?? null;
+  if (!assignResult.ok) return assignResult;
 
   void insertAuditLog({
     req,
@@ -808,70 +825,23 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
     ticket_organisation_id: ticket.organisation_id ?? null,
     client_slug: ticket.client_slug ?? null,
     metadata: {
-      ticket_id: ticketId,
-      ticket_number: ticket.ticket_number ?? null,
-      old_fe_id: oldFeId,
-      old_fe_name: oldFeName,
-      new_fe_id: feId,
-      new_fe_name: newFeName,
-      old_due_date: oldDueDate,
-      new_due_date: newDueDate,
-      reassigned_by: reassignedBy,
+      prior_assignment_id: priorAssignment.id,
+      prior_assignment_type: priorAssignment.assignment_type ?? ASSIGNMENT_TYPE_FIELD_EXECUTIVE,
+      prior_fe_id: priorAssignment.fe_id ?? null,
+      prior_assigned_user_id: priorAssignment.assigned_user_id ?? null,
+      new_assignment_id: assignResult.data?.assignment_id ?? null,
+      new_assignment_type: assignmentType,
       reassigned_at: reassignedAt,
-      prior_assignment_id: priorAssignment.id,
-      new_assignment_id: assignment.id,
-      prior_status: priorStatus,
+      is_sm: isSm,
     },
   });
-
-  void insertAuditLog({
-    req,
-    entity_type: "assignment",
-    entity_id: assignment.id,
-    action: "ticket_assigned",
-    ticket_organisation_id: ticket.organisation_id ?? null,
-    client_slug: ticket.client_slug ?? null,
-    metadata: {
-      ticket_id: ticketId,
-      fe_id: feId,
-      ticket_number: ticket.ticket_number ?? null,
-      assignment_id: assignment.id,
-      reassignment: true,
-      prior_assignment_id: priorAssignment.id,
-    },
-  });
-
-  if (priorStatus !== "ASSIGNED") {
-    void insertAuditLog({
-      req,
-      entity_type: "ticket",
-      entity_id: ticketId,
-      action: "status_changed_to_ASSIGNED",
-      ticket_organisation_id: ticket.organisation_id ?? null,
-      client_slug: ticket.client_slug ?? null,
-      metadata: {
-        fe_id: feId,
-        assignment_id: assignment.id,
-        ticket_number: ticket.ticket_number ?? null,
-        prior_status: priorStatus,
-        reassignment: true,
-      },
-    });
-  }
 
   return {
     ok: true,
     data: {
-      success: true,
-      reassignment: true,
-      token: onSiteToken,
-      onSiteToken,
-      resolutionToken,
-      notifications,
-      assignment_id: assignment.id,
+      ...assignResult.data,
+      reassigned: true,
       prior_assignment_id: priorAssignment.id,
-      ticket_number: ticket.ticket_number ?? null,
-      organisation_id: ticket.organisation_id ?? null,
     },
   };
 }

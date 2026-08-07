@@ -20,6 +20,7 @@ import {
   KeyRound,
   Briefcase,
   MapPin,
+  ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_NAME } from '@/lib/constants';
@@ -96,6 +97,7 @@ export function Sidebar() {
     () => [
       { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
       { name: 'All Tickets', href: '/app/tickets', icon: Ticket },
+      { name: 'My Assigned Tickets', href: '/sm', icon: ClipboardList },
       { name: 'Review Queue', href: '/app/review', icon: AlertTriangle, badge: true },
       { name: terminology.fieldExecutivesLabel, href: '/app/field-executives', icon: Truck },
       { name: 'Service Managers', href: '/app/service-managers', icon: Shield },

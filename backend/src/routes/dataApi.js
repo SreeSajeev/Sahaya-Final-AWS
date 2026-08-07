@@ -490,6 +490,8 @@ router.post("/tickets-row-supplement", async (req, res) => {
 
   const emptyRow = () => ({
     assignedFeName: null,
+    assignedUserName: null,
+    assignmentType: null,
     assignedAt: null,
     dueAssignment: null,
   });
@@ -587,6 +589,8 @@ router.post("/tickets-row-supplement", async (req, res) => {
             assigned_at: row.assigned_at,
             fe: row.field_executives,
             assignment_due_at: hasAssignmentDueAt ? row.assignment_due_at : null,
+            assignment_type: row.assignment_type ?? null,
+            assigned_user_id: row.assigned_user_id ?? null,
           });
         }
       }
@@ -595,9 +599,35 @@ router.post("/tickets-row-supplement", async (req, res) => {
     for (const [tid, row] of best.entries()) {
       if (!supplement[tid]) continue;
       supplement[tid].assignedAt = row.assigned_at ?? null;
+      supplement[tid].assignmentType = row.assignment_type ?? null;
       const n = row.fe?.name;
       supplement[tid].assignedFeName =
         n != null && String(n).trim() !== "" ? String(n).trim() : null;
+    }
+
+    const smUserIds = [
+      ...new Set(
+        [...best.values()]
+          .map((r) => (r.assigned_user_id != null ? String(r.assigned_user_id) : ""))
+          .filter(Boolean)
+      ),
+    ];
+    if (smUserIds.length > 0) {
+      const { findUsersByIds } = await import("../repositories/userRepository.js");
+      const { data: users } = await findUsersByIds(smUserIds);
+      const nameById = new Map(
+        (users || []).map((u) => [String(u.id), u.name != null ? String(u.name).trim() : ""])
+      );
+      for (const [tid, row] of best.entries()) {
+        if (!supplement[tid] || !row.assigned_user_id) continue;
+        const name = nameById.get(String(row.assigned_user_id));
+        if (name) {
+          supplement[tid].assignedUserName = name;
+          if (!supplement[tid].assignedFeName) {
+            supplement[tid].assignedFeName = `${name} (SM)`;
+          }
+        }
+      }
     }
 
     /** @type {Map<string, string>} */

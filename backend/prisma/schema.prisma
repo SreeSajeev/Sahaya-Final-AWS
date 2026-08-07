@@ -334,7 +334,14 @@ model FieldExecutive {
 model TicketAssignment {
   id                           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ticketId                     String          @map("ticket_id") @db.Uuid
-  feId                         String          @map("fe_id") @db.Uuid
+  /** Nullable for SERVICE_MANAGER assignments; required for FIELD_EXECUTIVE. */
+  feId                         String?         @map("fe_id") @db.Uuid
+  /** FIELD_EXECUTIVE (default / historical) | SERVICE_MANAGER */
+  assignmentType               String          @default("FIELD_EXECUTIVE") @map("assignment_type")
+  assignedUserId               String?         @map("assigned_user_id") @db.Uuid
+  assignedRole                 String?         @map("assigned_role")
+  assignedBy                   String?         @map("assigned_by") @db.Uuid
+  assignmentRemarks            String?         @map("assignment_remarks")
   assignedAt                   DateTime?       @default(now()) @map("assigned_at") @db.Timestamp(6)
   organisationId               String?         @map("organisation_id") @db.Uuid
   assignmentDueAt              DateTime?       @map("assignment_due_at") @db.Timestamptz(6)
@@ -344,9 +351,11 @@ model TicketAssignment {
   outcome                      String?
   endedAt                      DateTime?       @map("ended_at") @db.Timestamp(6)
   failureReason                String?         @map("failure_reason")
-  fe                           FieldExecutive  @relation(fields: [feId], references: [id])
+  fe                           FieldExecutive? @relation(fields: [feId], references: [id])
   ticket                       Ticket          @relation(fields: [ticketId], references: [id])
 
+  @@index([assignmentType], map: "ticket_assignments_assignment_type_idx")
+  @@index([assignedUserId], map: "ticket_assignments_assigned_user_id_idx")
   @@map("ticket_assignments")
 }
 

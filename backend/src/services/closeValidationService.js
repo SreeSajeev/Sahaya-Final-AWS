@@ -39,9 +39,9 @@ function countProofImages(attachments) {
 }
 
 /**
- * Returns true when at least one FE-sourced comment carries proof attachments.
+ * Returns true when at least one FE or Service Manager comment carries resolution proof.
  */
-async function ticketHasFeProof(ticketId) {
+async function ticketHasResolutionProof(ticketId) {
   const { data: comments, error } = await listFeCommentsForTicketProofCheck(ticketId, { limit: 50 });
 
   if (error) {
@@ -55,6 +55,25 @@ async function ticketHasFeProof(ticketId) {
     const body = row.body != null ? String(row.body).toLowerCase() : "";
     if (body.includes("proof uploaded")) return true;
   }
+
+  // SM proofs are STAFF-sourced — also scan unscoped comments for sm_resolution_proof.
+  try {
+    const { listCommentsForTicketUnscoped } = await import("../repositories/commentRepository.js");
+    const { data: all } = await listCommentsForTicketUnscoped(ticketId, { limit: 100, offset: 0 });
+    for (const row of all || []) {
+      const att = row.attachments;
+      if (att && typeof att === "object" && !Array.isArray(att) && att.sm_resolution_proof) {
+        return true;
+      }
+      const body = row.body != null ? String(row.body).toLowerCase() : "";
+      if (body.includes("proof uploaded") && String(row.source || "").toUpperCase() === "STAFF") {
+        return true;
+      }
+    }
+  } catch (err) {
+    console.error("[CLOSE_VALIDATION] SM proof scan failed", ticketId, err?.message);
+  }
+
   return false;
 }
 
@@ -105,13 +124,13 @@ export async function validateTicketClosePreconditions({ ticketId, ticket, body 
     (status === "ON_SITE" && wasAssigned);
 
   if (needsProof && !isProofCheckSkipped()) {
-    const hasProof = await ticketHasFeProof(ticketId);
+    const hasProof = await ticketHasResolutionProof(ticketId);
     if (!hasProof) {
       return {
         ok: false,
         statusCode: 400,
         error:
-          "FE proof is required before closing this ticket. Upload proof via the field workflow, or set CLOSE_SKIP_PROOF_VALIDATION=true for legacy exceptions.",
+          "Resolution proof is required before closing this ticket. Upload proof via the field or Service Manager workflow, or set CLOSE_SKIP_PROOF_VALIDATION=true for legacy exceptions.",
       };
     }
   }

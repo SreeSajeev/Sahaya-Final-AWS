@@ -300,12 +300,18 @@ export function useAssignTicket() {
     mutationFn: async ({
       ticketId,
       feId,
+      assignedUserId,
+      assignmentType = "FIELD_EXECUTIVE",
+      assignmentRemarks,
       assignmentDueAt,
       state,
       contextImages,
     }: {
       ticketId: string;
-      feId: string;
+      feId?: string | null;
+      assignedUserId?: string | null;
+      assignmentType?: "FIELD_EXECUTIVE" | "SERVICE_MANAGER";
+      assignmentRemarks?: string | null;
       /** Optional ISO timestamp; included when backend supports `assignment_due_at`. */
       assignmentDueAt?: string | null;
       state?: string | null;
@@ -320,7 +326,13 @@ export function useAssignTicket() {
           {
             method: "POST",
             body: {
-              feId,
+              assignment_type: assignmentType,
+              ...(assignmentType === "SERVICE_MANAGER"
+                ? { assigned_user_id: assignedUserId }
+                : { feId }),
+              ...(assignmentRemarks && String(assignmentRemarks).trim() !== ""
+                ? { assignment_remarks: assignmentRemarks }
+                : {}),
               ...(assignmentDueAt && String(assignmentDueAt).trim() !== ""
                 ? { assignment_due_at: assignmentDueAt }
                 : {}),
@@ -352,6 +364,7 @@ export function useAssignTicket() {
       queryClient.invalidateQueries({ queryKey: ["ticket-list-supplement"] });
       queryClient.invalidateQueries({ queryKey: ["field-executives-with-stats"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["sm-my-tickets"] });
       toast({
         title: "Ticket assigned",
         description: "Assignment saved. Email and SMS status follows.",
@@ -372,12 +385,18 @@ export function useReassignTicket() {
     mutationFn: async ({
       ticketId,
       feId,
+      assignedUserId,
+      assignmentType = "FIELD_EXECUTIVE",
+      assignmentRemarks,
       assignmentDueAt,
       state,
       contextImages,
     }: {
       ticketId: string;
-      feId: string;
+      feId?: string | null;
+      assignedUserId?: string | null;
+      assignmentType?: "FIELD_EXECUTIVE" | "SERVICE_MANAGER";
+      assignmentRemarks?: string | null;
       assignmentDueAt?: string | null;
       state?: string | null;
       contextImages?: AssignmentContextImagePayload[];
@@ -391,7 +410,13 @@ export function useReassignTicket() {
           {
             method: "POST",
             body: {
-              feId,
+              assignment_type: assignmentType,
+              ...(assignmentType === "SERVICE_MANAGER"
+                ? { assigned_user_id: assignedUserId }
+                : { feId }),
+              ...(assignmentRemarks && String(assignmentRemarks).trim() !== ""
+                ? { assignment_remarks: assignmentRemarks }
+                : {}),
               ...(assignmentDueAt && String(assignmentDueAt).trim() !== ""
                 ? { assignment_due_at: assignmentDueAt }
                 : {}),
@@ -423,9 +448,10 @@ export function useReassignTicket() {
       queryClient.invalidateQueries({ queryKey: ["ticket-list-supplement"] });
       queryClient.invalidateQueries({ queryKey: ["field-executives-with-stats"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["sm-my-tickets"] });
       toast({
         title: "Ticket reassigned",
-        description: "The new field executive has been notified.",
+        description: "The new assignee has been notified.",
       });
       toastAssignmentNotifications(data?.notifications ?? null);
     },

@@ -144,6 +144,8 @@ const Analytics = lazy(() => import("@/pages/Analytics"));
 // FE pages
 import FEMyTickets from "@/pages/FEMyTickets";
 import FETicketView from "@/pages/FETicketView";
+import SMMyTickets from "@/pages/SMMyTickets";
+import SMTicketView from "@/pages/SMTicketView";
 import FEActionPage from "@/pages/FEActionPage";
 import PublicReportPage from "@/pages/public/PublicReportPage";
 
@@ -256,6 +258,8 @@ export default function App() {
               {/* 🧑‍💼 STAFF / ADMIN */}
               {/* ========================= */}
               <Route element={<RequireStaff />}>
+                <Route path="/sm" element={<SMMyTickets />} />
+                <Route path="/sm/ticket/:ticketId" element={<SMTicketView />} />
                 <Route path="/app" element={<Dashboard />} />
                 <Route path="/app/tenant-admin" element={<TenantAdminDashboard />} />
                 <Route path="/app/tickets" element={<TicketsList />} />

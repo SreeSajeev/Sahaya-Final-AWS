@@ -594,6 +594,66 @@ Pariskq Operations Team
   }
 }
 
+/**
+ * Assignment notification for Service Manager assignees (no FE tokens / onsite links).
+ * Reuses the same sendEmail + ticket details builders as FE assignment.
+ */
+export async function sendServiceManagerAssignmentEmail({
+  toEmail,
+  toName = null,
+  ticketNumber,
+  assignmentRemarks = null,
+}) {
+  try {
+    if (!isValidToEmail(toEmail)) {
+      return { sent: false, error: "no_sm_email" };
+    }
+    if (!isValidTicketNumber(ticketNumber)) {
+      return { sent: false, error: "invalid_ticket_number" };
+    }
+
+    const ticket = await fetchTicketByNumber(ticketNumber);
+    const sla = ticket?.id ? await fetchSlaDeadlines(ticket.id) : null;
+    const clientName = ticket ? await resolveConstrainedClientDisplayNameForEmail(ticket) : null;
+    const detailsBlock = ticket
+      ? buildTicketDetailsTable({ ticket, sla, clientName })
+      : "Ticket details unavailable.";
+    const remarksBlock =
+      assignmentRemarks != null && String(assignmentRemarks).trim() !== ""
+        ? `\nAssignment remarks:\n${String(assignmentRemarks).trim()}\n`
+        : "";
+
+    const subjectTag = generateTicketSubjectTag(ticketNumber);
+    const sendResult = await sendEmail(
+      {
+        To: String(toEmail).trim(),
+        Subject: `Ticket Assigned (Service Manager) - ${subjectTag}`,
+        TextBody: `
+Hello ${toName || ""},
+
+You have been assigned Ticket ${ticketNumber} for internal resolution.
+
+No site visit or FE tokens are required. Open your Assigned Tickets portal,
+upload resolution proof, and submit for verification.
+${remarksBlock}
+${detailsBlock}
+
+Thank you,
+Pariskq Operations Team
+        `.trim(),
+      },
+      "SM_ASSIGNMENT"
+    );
+    return {
+      sent: Boolean(sendResult?.ok),
+      error: sendResult?.ok ? null : sendResult?.reason || "provider_failure",
+    };
+  } catch (err) {
+    console.error("[SM ASSIGN EMAIL ERROR]", err.message);
+    return { sent: false, error: err.message || "exception" };
+  }
+}
+
 export async function sendFEAssignmentWorkflowEmail({
   feId,
   ticketNumber,

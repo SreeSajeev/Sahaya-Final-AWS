@@ -37,6 +37,11 @@ import { useAssignTicket, useReassignTicket, type AssignmentContextImagePayload 
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { compressProofImage } from '@/lib/compressProofImage';
+import { useQuery } from '@tanstack/react-query';
+import { fetchJson } from '@/lib/backendDataApi';
+import type { User } from '@/lib/types';
+
+type AssigneeKind = 'FIELD_EXECUTIVE' | 'SERVICE_MANAGER';
 
 type ContextImageDraft = {
   id: string;
@@ -94,7 +99,10 @@ export function FEAssignmentModal({
   const assignTicket = useAssignTicket();
   const reassignTicket = useReassignTicket();
   const submitMutation = isReassign ? reassignTicket : assignTicket;
+  const [assigneeKind, setAssigneeKind] = useState<AssigneeKind>('FIELD_EXECUTIVE');
   const [selectedFE, setSelectedFE] = useState<string | null>(null);
+  const [selectedSmUserId, setSelectedSmUserId] = useState<string | null>(null);
+  const [assignmentRemarks, setAssignmentRemarks] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   /** Optional deadline for assignment (`datetime-local` value → ISO when confirming). */
@@ -105,6 +113,23 @@ export function FEAssignmentModal({
   const [contextBusy, setContextBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const { data: serviceManagers = [], isLoading: smLoading } = useQuery({
+    queryKey: ['assignable-service-managers', ticket.organisation_id],
+    enabled: open && assigneeKind === 'SERVICE_MANAGER',
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: '200', offset: '0', role: 'STAFF' });
+      if (ticket.organisation_id) params.set('organisation_id', ticket.organisation_id);
+      const res = await fetchJson<{ items?: User[] } | User[]>(`/data/users?${params}`);
+      const items = Array.isArray(res) ? res : res.items ?? [];
+      return items.filter(
+        (u) =>
+          (u.role === 'STAFF' || u.role === 'ADMIN') &&
+          u.active !== false &&
+          (u as { is_active?: boolean }).is_active !== false
+      );
+    },
+  });
+
   useEffect(() => {
     if (open) {
       setTicketState(ticket.state ?? null);
@@ -114,7 +139,10 @@ export function FEAssignmentModal({
 
   useEffect(() => {
     if (!open) {
+      setAssigneeKind('FIELD_EXECUTIVE');
       setSelectedFE(null);
+      setSelectedSmUserId(null);
+      setAssignmentRemarks('');
       setSearchQuery('');
       setConfirmDialogOpen(false);
       setAssignmentDueLocal('');
@@ -286,15 +314,17 @@ export function FEAssignmentModal({
 
   // Handle clicking the assign button - shows confirmation dialog
   const handleAssignClick = () => {
-    if (!selectedFE) return;
-
-    // Show confirmation dialog (Requirement 3)
+    if (assigneeKind === 'SERVICE_MANAGER') {
+      if (!selectedSmUserId) return;
+    } else if (!selectedFE) {
+      return;
+    }
     setConfirmDialogOpen(true);
   };
 
   // Handle actual assignment after confirmation
   const handleConfirmAssign = async () => {
-    if (!selectedFE) return;
+    if (assigneeKind === 'SERVICE_MANAGER' ? !selectedSmUserId : !selectedFE) return;
 
     try {
       const dueIso =
@@ -307,7 +337,10 @@ export function FEAssignmentModal({
 
       await submitMutation.mutateAsync({
         ticketId: ticket.id,
-        feId: selectedFE,
+        assignmentType: assigneeKind,
+        feId: assigneeKind === 'FIELD_EXECUTIVE' ? selectedFE : null,
+        assignedUserId: assigneeKind === 'SERVICE_MANAGER' ? selectedSmUserId : null,
+        assignmentRemarks: assignmentRemarks.trim() || null,
         assignmentDueAt: dueIso,
         state: ticketState,
         contextImages:
@@ -319,11 +352,10 @@ export function FEAssignmentModal({
             : undefined,
       });
 
-      // Success + email/SMS toasts are handled in useAssignTicket / useReassignTicket
-
       setConfirmDialogOpen(false);
       onOpenChange(false);
       setSelectedFE(null);
+      setSelectedSmUserId(null);
     } catch (error) {
       setConfirmDialogOpen(false);
       const message = error instanceof Error ? error.message : isReassign ? "Reassignment failed" : "Assignment failed";
@@ -336,12 +368,16 @@ export function FEAssignmentModal({
   };
 
   const feLabel = terminology.fieldExecutiveLabel;
-  const modalTitle = isReassign ? `Reassign ${feLabel}` : `Assign ${feLabel}`;
+  const modalTitle = isReassign
+    ? `Reassign ticket`
+    : `Assign ticket`;
   const modalDescription = isReassign
-    ? `Choose a new ${feLabel.toLowerCase()} for ticket`
-    : `Select a ${feLabel.toLowerCase()} for ticket`;
+    ? `Choose a Field Executive or Service Manager for ticket`
+    : `Assign to a Field Executive or Service Manager for ticket`;
 
   const selectedIsRecommended = selectedFE ? isRecommended(selectedFE) : true;
+  const canSubmit =
+    assigneeKind === 'SERVICE_MANAGER' ? Boolean(selectedSmUserId) : Boolean(selectedFE);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -379,6 +415,41 @@ export function FEAssignmentModal({
           </div>
 
           <div className="space-y-2">
+            <Label>Assign To</Label>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="assignee-kind"
+                  checked={assigneeKind === 'FIELD_EXECUTIVE'}
+                  onChange={() => {
+                    setAssigneeKind('FIELD_EXECUTIVE');
+                    setSelectedSmUserId(null);
+                  }}
+                />
+                Field Executive
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="assignee-kind"
+                  checked={assigneeKind === 'SERVICE_MANAGER'}
+                  onChange={() => {
+                    setAssigneeKind('SERVICE_MANAGER');
+                    setSelectedFE(null);
+                  }}
+                />
+                Service Manager
+              </label>
+            </div>
+            {assigneeKind === 'SERVICE_MANAGER' ? (
+              <p className="text-xs text-muted-foreground">
+                Internal resolution — no onsite or resolution tokens. Service Manager uploads proof and submits for verification.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="assign-ticket-state">State</Label>
             <StateSelect
               id="assign-ticket-state"
@@ -388,6 +459,19 @@ export function FEAssignmentModal({
             />
           </div>
 
+          <div className="space-y-2">
+            <Label htmlFor="assign-remarks">Assignment Remarks</Label>
+            <Textarea
+              id="assign-remarks"
+              value={assignmentRemarks}
+              onChange={(e) => setAssignmentRemarks(e.target.value)}
+              placeholder="Optional remarks for the assignee"
+              className="min-h-[72px]"
+            />
+          </div>
+
+          {assigneeKind === 'FIELD_EXECUTIVE' ? (
+          <>
           {/* Recommendations Banner */}
           {recommendations.length > 0 && (
             <Alert className="border-primary/50 bg-primary/5">
@@ -492,7 +576,60 @@ export function FEAssignmentModal({
               </div>
             )}
           </ScrollArea>
+          </>
+          ) : (
+          <ScrollArea className="h-[280px] rounded-lg border">
+            {smLoading ? (
+              <div className="flex items-center justify-center p-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : serviceManagers.length === 0 ? (
+              <div className="flex items-center justify-center p-8 text-muted-foreground">
+                No Service Managers found for this organisation
+              </div>
+            ) : (
+              <div className="p-2 space-y-2">
+                {serviceManagers
+                  .filter((u) =>
+                    !searchQuery.trim()
+                      ? true
+                      : `${u.name} ${u.email}`.toLowerCase().includes(searchQuery.toLowerCase())
+                  )
+                  .map((user) => {
+                    const isSelected = selectedSmUserId === user.id;
+                    return (
+                      <div
+                        key={user.id}
+                        onClick={() => setSelectedSmUserId(user.id)}
+                        className={cn(
+                          'relative flex items-center gap-4 rounded-lg border p-3 cursor-pointer transition-all',
+                          isSelected
+                            ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                            : 'hover:bg-muted/50'
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2',
+                            isSelected ? 'border-primary bg-primary' : 'border-muted-foreground/30'
+                          )}
+                        >
+                          {isSelected && <CheckCircle className="h-3 w-3 text-primary-foreground" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium">{user.name}</div>
+                          <div className="text-sm text-muted-foreground truncate">{user.email}</div>
+                        </div>
+                        <Badge variant="outline">{user.role === 'ADMIN' ? 'Admin' : 'Service Manager'}</Badge>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+          </ScrollArea>
+          )}
 
+          {assigneeKind === 'FIELD_EXECUTIVE' ? (
           <div className="space-y-2">
             <Label htmlFor="assignment-due">Assignment deadline (optional)</Label>
             <Input
@@ -506,6 +643,7 @@ export function FEAssignmentModal({
               If set, sent as <code className="text-xs">assignment_due_at</code> when the server supports it.
             </p>
           </div>
+          ) : null}
 
           {/* Assignment Context */}
           <div className="space-y-3 rounded-lg border p-3">
@@ -513,7 +651,8 @@ export function FEAssignmentModal({
               <div>
                 <Label className="text-sm font-semibold">Assignment Context</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Optional photos with remarks the field executive can review before visiting the site.
+                  Optional photos with remarks the assignee can review
+                  {assigneeKind === 'FIELD_EXECUTIVE' ? ' before visiting the site' : ''}.
                 </p>
               </div>
               <Button
@@ -591,7 +730,7 @@ export function FEAssignmentModal({
           </div>
 
           {/* Override Reason (only if selecting non-recommended) */}
-          {selectedFE && !selectedIsRecommended && (
+          {assigneeKind === 'FIELD_EXECUTIVE' && selectedFE && !selectedIsRecommended && (
             <Alert className="border-amber-200 bg-amber-50 text-amber-900">
               <AlertTriangle className="h-4 w-4 text-amber-600" />
               <AlertDescription>
@@ -607,11 +746,7 @@ export function FEAssignmentModal({
             </Button>
             <Button
               onClick={handleAssignClick}
-              disabled={
-                !selectedFE ||
-                submitMutation.isPending ||
-                contextBusy
-              }
+              disabled={!canSubmit || submitMutation.isPending || contextBusy}
             >
               {submitMutation.isPending ? (
                 <>
@@ -621,9 +756,10 @@ export function FEAssignmentModal({
               ) : (
                 <>
                   <CheckCircle className="mr-2 h-4 w-4" />
-                  {isReassign
-                    ? `Reassign to ${selectedFEObject?.name || 'Selected FE'}`
-                    : `Assign to ${selectedFEObject?.name || 'Selected FE'}`}
+                  {isReassign ? 'Reassign' : 'Assign'}
+                  {assigneeKind === 'SERVICE_MANAGER'
+                    ? ` to ${serviceManagers.find((u) => u.id === selectedSmUserId)?.name || 'Service Manager'}`
+                    : ` to ${selectedFEObject?.name || 'Selected FE'}`}
                 </>
               )}
             </Button>
@@ -632,7 +768,7 @@ export function FEAssignmentModal({
       </DialogContent>
 
       {/* Confirmation Dialog - Requirement 3 */}
-      {selectedFEObject && (
+      {assigneeKind === 'FIELD_EXECUTIVE' && selectedFEObject && (
         <AssignmentConfirmDialog
           open={confirmDialogOpen}
           onOpenChange={setConfirmDialogOpen}
@@ -643,6 +779,27 @@ export function FEAssignmentModal({
             skillMatch: selectedFEObject.skillMatch,
           }}
           isRecommended={isRecommended(selectedFE!)}
+          onConfirm={handleConfirmAssign}
+          isPending={submitMutation.isPending}
+        />
+      )}
+      {assigneeKind === 'SERVICE_MANAGER' && selectedSmUserId && confirmDialogOpen && (
+        <AssignmentConfirmDialog
+          open={confirmDialogOpen}
+          onOpenChange={setConfirmDialogOpen}
+          ticket={ticket}
+          fieldExecutive={{
+            id: selectedSmUserId,
+            name: serviceManagers.find((u) => u.id === selectedSmUserId)?.name || 'Service Manager',
+            email: serviceManagers.find((u) => u.id === selectedSmUserId)?.email || null,
+            phone: null,
+            base_location: null,
+            skills: null,
+            active: true,
+            organisation_id: ticket.organisation_id ?? null,
+            created_at: '',
+          }}
+          isRecommended={true}
           onConfirm={handleConfirmAssign}
           isPending={submitMutation.isPending}
         />

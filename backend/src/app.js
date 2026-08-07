@@ -39,6 +39,7 @@ import fePublicRouter from "./routes/fePublic.js";
 import authProvisionRouter from "./routes/authProvision.js";
 import publicAuthRouter from "./routes/publicAuth.js";
 import localAuthRouter from "./routes/localAuth.js";
+import smMeRouter from "./routes/smMe.js";
 import feMeRouter from "./routes/feMe.js";
 import fieldExecutivesRouter from "./routes/fieldExecutives.js";
 import complaintPointsRouter from "./routes/complaintPoints.js";
@@ -257,6 +258,9 @@ app.use("/fe", fePublicRouter);
 
 // FE authenticated APIs (remove frontend direct DB writes)
 app.use("/fe", feMeRouter);
+
+// Service Manager assigned-tickets portal (no FE tokens)
+app.use("/sm", smMeRouter);
 
 // Public auth helpers (no JWT) — org list, forgot/reset password, legacy access-token lookup
 app.use("/auth/public", publicAuthRouter);
