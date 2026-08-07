@@ -302,6 +302,20 @@ function buildTicketDetailsTable({
     `Ticket Created Time: ${formatDetail(createdAt)}`,
     `Current Status: ${formatDetail(ticket?.status)}`,
     `Remarks / Description: ${formatDetail(shortDesc)}`,
+    `Response SLA: ${
+      ticket?.response_sla_minutes != null
+        ? `${Math.round(Number(ticket.response_sla_minutes) / 60)} Hours`
+        : "Not provided"
+    }`,
+    `Resolution SLA: ${
+      ticket?.resolution_sla_minutes != null
+        ? `${Math.round(Number(ticket.resolution_sla_minutes) / 60)} Hours`
+        : "Not provided"
+    }`,
+    `Response Due: ${formatDetail(ticket?.response_due_at ? formatDateTime(ticket.response_due_at) : null)}`,
+    `Resolution Due: ${formatDetail(
+      ticket?.resolution_due_at ? formatDateTime(ticket.resolution_due_at) : null
+    )}`,
   ];
 
   if (complaintId != null && String(complaintId).trim() !== "") {

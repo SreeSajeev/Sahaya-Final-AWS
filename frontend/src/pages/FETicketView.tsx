@@ -27,6 +27,7 @@ import { buildFeActivityTimeline } from "@/lib/feActivityTimeline";
 import { openFETicketPrintWindow } from "@/lib/feTicketPrint";
 import { fetchJson } from "@/lib/backendDataApi";
 import { formatStateDisplay } from "@/lib/indianStates";
+import { getTicketSlaView, slaStatusTone, statusDisplayLabel } from "@/lib/tenantSla";
 import { FeTimelineProofs } from "@/components/fe/FeTimelineProofs";
 import { ArrowLeft, Lock, MapPin, Truck, FileText, Clock, User, Printer, Plus } from "lucide-react";
 
@@ -314,6 +315,33 @@ export default function FETicketView() {
             <p className="text-sm font-medium flex items-center gap-2">
               <Clock className="h-4 w-4" /> Assignment & SLA
             </p>
+            {(() => {
+              const sla = getTicketSlaView(t as unknown as Record<string, unknown>);
+              if (!sla) return null;
+              const tone = slaStatusTone(sla.status);
+              const cls =
+                tone === "green"
+                  ? "text-emerald-700"
+                  : tone === "orange"
+                    ? "text-amber-700"
+                    : tone === "red"
+                      ? "text-destructive"
+                      : "text-muted-foreground";
+              return (
+                <div className="mt-2 space-y-1 text-sm">
+                  <p className={cls}>
+                    Resolution due:{" "}
+                    {sla.resolution.dueAt ? formatIST(sla.resolution.dueAt, "PPp") : "—"}
+                  </p>
+                  <p className={cls}>Remaining: {sla.resolution.remainingLabel ?? "—"}</p>
+                  {sla.breached ? (
+                    <Badge variant="destructive">SLA Breached</Badge>
+                  ) : (
+                    <Badge variant="secondary">{statusDisplayLabel(sla.status)}</Badge>
+                  )}
+                </div>
+              );
+            })()}
             <p className="text-xs text-muted-foreground">
               Assigned: {fmtDeadline(t.assigned_at)}
             </p>

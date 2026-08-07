@@ -40,6 +40,12 @@ import {
   buildVehicleImportErrorsCsv,
 } from "../services/clientVehicleService.js";
 import { listClientNotificationEmails } from "../services/clientNotificationEmailResolver.js";
+import {
+  getTenantSlaConfig,
+  updateTenantSlaConfig,
+  enrichTicketsWithSla,
+} from "../services/tenantSlaService.js";
+import { computeTicketSlaView, SLA_STATUS } from "../services/tenantSlaEngine.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
 import { normalizeTicketState } from "../utils/normalizeTicketState.js";
 import { normalizeTicketPriorityInput } from "../utils/normalizeTicketPriority.js";
@@ -206,6 +212,48 @@ router.get("/dashboard/stats", async (req, res) => {
         return Boolean(s.assignment_breached || s.onsite_breached || s.resolution_breached);
       }).length || 0;
 
+    // Tenant-configurable response/resolution SLA KPIs (snapshot-based, computed).
+    let responseSlaBreached = 0;
+    let resolutionSlaBreached = 0;
+    let ticketsApproachingSla = 0;
+    let responseTimeSum = 0;
+    let responseTimeCount = 0;
+    let resolutionTimeSum = 0;
+    let resolutionTimeCount = 0;
+    let resolutionComplianceDenom = 0;
+    let resolutionComplianceOk = 0;
+
+    for (const t of ticketList) {
+      const view = computeTicketSlaView(t);
+      if (view.response.breached) responseSlaBreached += 1;
+      if (view.resolution.breached) resolutionSlaBreached += 1;
+      if (view.status === SLA_STATUS.APPROACHING) ticketsApproachingSla += 1;
+      if (view.response_time_minutes != null) {
+        responseTimeSum += view.response_time_minutes;
+        responseTimeCount += 1;
+      }
+      if (view.resolution_time_minutes != null) {
+        resolutionTimeSum += view.resolution_time_minutes;
+        resolutionTimeCount += 1;
+      }
+      if (t.resolution_due_at && ["RESOLVED", "CLOSED"].includes(String(t.status || "").toUpperCase())) {
+        resolutionComplianceDenom += 1;
+        if (!view.resolution.breached) resolutionComplianceOk += 1;
+      } else if (t.resolution_due_at && view.resolution.status !== SLA_STATUS.NA) {
+        resolutionComplianceDenom += 1;
+        if (!view.resolution.breached) resolutionComplianceOk += 1;
+      }
+    }
+
+    const avgResponseTimeMinutes =
+      responseTimeCount > 0 ? Math.round(responseTimeSum / responseTimeCount) : null;
+    const avgResolutionTimeMinutes =
+      resolutionTimeCount > 0 ? Math.round(resolutionTimeSum / resolutionTimeCount) : null;
+    const slaCompliancePercent =
+      resolutionComplianceDenom > 0
+        ? Math.round((resolutionComplianceOk / resolutionComplianceDenom) * 1000) / 10
+        : null;
+
     logEvent("dataApi.dashboard.stats", {
       tenantId: req.tenantId ?? null,
       isSuperAdmin: Boolean(req.isSuperAdmin),
@@ -228,11 +276,45 @@ router.get("/dashboard/stats", async (req, res) => {
       resolvedToday,
       avgConfidenceScore,
       slaBreaches,
+      responseSlaBreached,
+      resolutionSlaBreached,
+      ticketsApproachingSla,
+      avgResponseTimeMinutes,
+      avgResolutionTimeMinutes,
+      slaCompliancePercent,
       statsTruncated,
       maxScan,
     });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to compute dashboard stats");
+  }
+});
+
+/* ======================================================
+   Tenant SLA configuration
+====================================================== */
+
+const SLA_ADMIN_ROLES = ["ADMIN", "SUPER_ADMIN"];
+const SLA_READ_ROLES = ["ADMIN", "STAFF", "SUPER_ADMIN"];
+
+router.get("/tenant-sla", requireRole(SLA_READ_ROLES), async (req, res) => {
+  const organisationId = safeTrim(req.query.organisationId);
+  try {
+    const outcome = await getTenantSlaConfig(req, organisationId || null);
+    if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+    return jsonOk(res, outcome.data);
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to load SLA configuration");
+  }
+});
+
+router.put("/tenant-sla", requireRole(SLA_ADMIN_ROLES), async (req, res) => {
+  try {
+    const outcome = await updateTenantSlaConfig(req, req.body ?? {});
+    if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+    return jsonOk(res, outcome.data);
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to save SLA configuration");
   }
 });
 
@@ -601,15 +683,17 @@ router.get("/tickets", async (req, res) => {
     });
     if (error) return jsonError(res, 500, error.message);
 
+    const items = await enrichTicketsWithSla(data || [], { persistEscalation: true });
+
     logEvent("dataApi.tickets.list", {
       tenantId: req.tenantId ?? null,
       isSuperAdmin: Boolean(req.isSuperAdmin),
       limit,
       offset,
       ms: Date.now() - startedAt,
-      count: Array.isArray(data) ? data.length : 0,
+      count: Array.isArray(items) ? items.length : 0,
     });
-    return jsonOk(res, { items: data || [], limit, offset });
+    return jsonOk(res, { items, limit, offset });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to list tickets");
   }

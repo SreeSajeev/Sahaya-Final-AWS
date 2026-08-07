@@ -3,6 +3,13 @@ import { useState, useRef, useEffect, useMemo, type ComponentType } from "react"
 import { useParams, Link, useNavigate, Navigate } from "react-router-dom";
 import { formatIST } from "@/lib/dateUtils";
 import { formatStateDisplay } from "@/lib/indianStates";
+import { cn } from "@/lib/utils";
+import {
+  formatMinutesAsHoursLabel,
+  getTicketSlaView,
+  slaStatusTone,
+  statusDisplayLabel,
+} from "@/lib/tenantSla";
 import {
   ArrowLeft,
   MapPin,
@@ -933,6 +940,72 @@ export default function TicketDetail() {
                 )}
               </CardContent>
             </Card>
+
+            {(() => {
+              const sla = getTicketSlaView(ticket as unknown as Record<string, unknown>);
+              if (!sla) return null;
+              const tone = slaStatusTone(sla.status);
+              const toneClass =
+                tone === "green"
+                  ? "text-emerald-700"
+                  : tone === "orange"
+                    ? "text-amber-700"
+                    : tone === "red"
+                      ? "text-destructive"
+                      : "text-muted-foreground";
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock className="h-5 w-5" />
+                      SLA
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Response SLA</p>
+                      <p className="text-sm text-muted-foreground">
+                        {sla.response_sla_minutes != null
+                          ? formatMinutesAsHoursLabel(Number(sla.response_sla_minutes))
+                          : "—"}
+                      </p>
+                      <p className="text-sm">
+                        Due:{" "}
+                        {sla.response.dueAt ? formatIST(sla.response.dueAt, "PPp") : "—"}
+                      </p>
+                      <p className={cn("text-sm font-medium", toneClass)}>
+                        Status: {statusDisplayLabel(sla.response.status)}
+                      </p>
+                      <p className={cn("text-sm", toneClass)}>
+                        Remaining: {sla.response.remainingLabel ?? "—"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Resolution SLA</p>
+                      <p className="text-sm text-muted-foreground">
+                        {sla.resolution_sla_minutes != null
+                          ? formatMinutesAsHoursLabel(Number(sla.resolution_sla_minutes))
+                          : "—"}
+                      </p>
+                      <p className="text-sm">
+                        Due:{" "}
+                        {sla.resolution.dueAt ? formatIST(sla.resolution.dueAt, "PPp") : "—"}
+                      </p>
+                      <p className={cn("text-sm font-medium", toneClass)}>
+                        Status: {statusDisplayLabel(sla.resolution.status)}
+                      </p>
+                      <p className={cn("text-sm", toneClass)}>
+                        Remaining: {sla.resolution.remainingLabel ?? "—"}
+                      </p>
+                      <p className="text-sm font-medium">
+                        Escalation: {sla.escalation_label}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
             {/* Attempt Failed: show when FE reported resolution failed */}
             {ticket.status === "FE_ATTEMPT_FAILED" && currentAssignment && (
               <Card className="border-amber-200 bg-amber-50/50">

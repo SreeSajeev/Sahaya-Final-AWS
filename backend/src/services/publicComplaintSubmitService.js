@@ -165,6 +165,9 @@ export async function submitPublicComplaint(req, body) {
 
   const clientSlug = await resolveClientSlugForPublicSubmit(oid, point.default_client_slug);
 
+  const { loadSlaSnapshotForOrg } = await import("./tenantSlaService.js");
+  const slaSnapshot = await loadSlaSnapshotForOrg(oid);
+
   const rpcBase = {
     otp_session_id: session.id,
     organisation_id: oid,
@@ -182,6 +185,10 @@ export async function submitPublicComplaint(req, body) {
     confidence_score: 100,
     priority: false,
     priority_level: "LOW",
+    response_sla_minutes: slaSnapshot.response_sla_minutes,
+    resolution_sla_minutes: slaSnapshot.resolution_sla_minutes,
+    response_due_at: slaSnapshot.response_due_at,
+    resolution_due_at: slaSnapshot.resolution_due_at,
   };
 
   let ticketNumber;

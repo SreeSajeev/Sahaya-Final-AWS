@@ -14,6 +14,7 @@ import {
 } from "../repositories/fieldExecutiveRepository.js";
 import { listFeActionTokensByFeAndTicketIds } from "../repositories/feActionTokenRepository.js";
 import { listSlaRowsByTicketIds } from "../repositories/slaRepository.js";
+import { computeTicketSlaView, DEFAULT_TENANT_SLA } from "../services/tenantSlaEngine.js";
 import {
   listAssignmentsByFeId,
   getAssignmentWithTicketByFeAndTicket,
@@ -268,6 +269,10 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       remarks: ticketRemarks,
       short_description: shortDescription ?? t?.short_description ?? null,
       sla: slaByTicketId.get(t.id) ?? null,
+      tenant_sla: computeTicketSlaView(t, {
+        assignedAt: assigned_at,
+        escalationLevels: DEFAULT_TENANT_SLA.escalationLevels,
+      }),
       tokens: {
         onSite: toTokenPayload(onSite, onSiteActionable),
         resolution: toTokenPayload(resolution, resolutionActionable),

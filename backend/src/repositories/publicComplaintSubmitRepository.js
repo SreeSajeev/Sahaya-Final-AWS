@@ -103,6 +103,14 @@ export async function submitPublicComplaintTransaction(payload) {
     }
 
     const vNow = new Date();
+    const responseSlaMinutes =
+      payload.response_sla_minutes != null ? Number(payload.response_sla_minutes) : null;
+    const resolutionSlaMinutes =
+      payload.resolution_sla_minutes != null ? Number(payload.resolution_sla_minutes) : null;
+    const responseDueAt = payload.response_due_at ? new Date(String(payload.response_due_at)) : null;
+    const resolutionDueAt = payload.resolution_due_at
+      ? new Date(String(payload.resolution_due_at))
+      : null;
 
     try {
       const inserted = await tx.$queryRaw`
@@ -124,6 +132,10 @@ export async function submitPublicComplaintTransaction(payload) {
           client_slug,
           priority,
           priority_level,
+          response_sla_minutes,
+          resolution_sla_minutes,
+          response_due_at,
+          resolution_due_at,
           updated_at
         ) VALUES (
           ${ticketNumber},
@@ -143,6 +155,10 @@ export async function submitPublicComplaintTransaction(payload) {
           ${payload.client_slug ? String(payload.client_slug).trim() || null : null},
           ${priorityLevel === "HIGH"},
           ${priorityLevel},
+          ${responseSlaMinutes},
+          ${resolutionSlaMinutes},
+          ${responseDueAt},
+          ${resolutionDueAt},
           ${vNow}
         )
         RETURNING id, ticket_number, status

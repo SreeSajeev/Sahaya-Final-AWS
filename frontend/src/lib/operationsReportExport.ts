@@ -110,6 +110,11 @@ export function buildOperationsReportRows(
     "SLA Assignment Breached",
     "SLA Onsite Breached",
     "SLA Resolution Breached",
+    "Response SLA Minutes",
+    "Resolution SLA Minutes",
+    "Response Due",
+    "Resolution Due",
+    "Escalation Level",
   ];
 
   const rows = tickets.map((t) => {
@@ -171,6 +176,11 @@ export function buildOperationsReportRows(
       sla?.assignment_breached === true ? "Yes" : sla ? "No" : "",
       sla?.onsite_breached === true ? "Yes" : sla ? "No" : "",
       sla?.resolution_breached === true ? "Yes" : sla ? "No" : "",
+      safe(t.response_sla_minutes),
+      safe(t.resolution_sla_minutes),
+      safe(t.response_due_at),
+      safe(t.resolution_due_at),
+      safe(t.escalation_level),
     ];
   });
 

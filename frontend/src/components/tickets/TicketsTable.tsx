@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ExternalLink, MapPin, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatDurationMinutes, getTicketSlaView, statusDisplayLabel, slaStatusTone } from '@/lib/tenantSla';
 import { formatStateDisplay } from '@/lib/indianStates';
 import {
   TicketNumberDisplay,
@@ -261,6 +262,18 @@ function AllTicketsTable({
             <TableHead className={cn(headClass('min-w-[7.5rem]', false), STICKY_HEAD_ROW)}>
               Due
             </TableHead>
+            <TableHead className={cn(headClass('min-w-[8rem]', false), STICKY_HEAD_ROW)}>
+              Response SLA
+            </TableHead>
+            <TableHead className={cn(headClass('min-w-[8rem]', false), STICKY_HEAD_ROW)}>
+              Resolution SLA
+            </TableHead>
+            <TableHead className={cn(headClass('min-w-[6.5rem]', false), STICKY_HEAD_ROW)}>
+              SLA Status
+            </TableHead>
+            <TableHead className={cn(headClass('min-w-[5rem]', false), STICKY_HEAD_ROW)}>
+              Escalation
+            </TableHead>
             <TableHead className={cn(headClass('w-10', false), STICKY_HEAD_ROW)} />
           </TableRow>
         </TableHeader>
@@ -399,6 +412,40 @@ function AllTicketsTable({
                 <TableCell className={cn(typography.meta, 'whitespace-nowrap')}>
                   {ex?.dueAssignment ? formatIST(ex.dueAssignment, 'MMM d, HH:mm') : '—'}
                 </TableCell>
+                {(() => {
+                  const sla = getTicketSlaView(ticket as unknown as Record<string, unknown>);
+                  const tone = slaStatusTone(sla?.status);
+                  const toneClass =
+                    tone === 'green'
+                      ? 'text-emerald-700'
+                      : tone === 'orange'
+                        ? 'text-amber-700'
+                        : tone === 'red'
+                          ? 'text-destructive'
+                          : 'text-muted-foreground';
+                  return (
+                    <>
+                      <TableCell className={cn(typography.meta, 'whitespace-nowrap', toneClass)}>
+                        {sla?.response.remainingLabel ||
+                          (sla?.response.remainingMinutes != null
+                            ? `${formatDurationMinutes(sla.response.remainingMinutes)} remaining`
+                            : '—')}
+                      </TableCell>
+                      <TableCell className={cn(typography.meta, 'whitespace-nowrap', toneClass)}>
+                        {sla?.resolution.remainingLabel ||
+                          (sla?.resolution.remainingMinutes != null
+                            ? `${formatDurationMinutes(sla.resolution.remainingMinutes)} remaining`
+                            : '—')}
+                      </TableCell>
+                      <TableCell className={cn(typography.meta, 'font-medium', toneClass)}>
+                        {statusDisplayLabel(sla?.status)}
+                      </TableCell>
+                      <TableCell className={cn(typography.meta, 'font-mono')}>
+                        {sla?.escalation_label ?? '—'}
+                      </TableCell>
+                    </>
+                  );
+                })()}
                 <TableCell
                   className="w-10"
                   onClick={(e) => e.stopPropagation()}

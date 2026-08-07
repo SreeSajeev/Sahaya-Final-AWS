@@ -151,6 +151,72 @@ export default function Dashboard() {
           </StatGrid>
         </section>
 
+        <section className="space-y-4">
+          <h2 className={typography.sectionTitle}>SLA Overview</h2>
+          <StatGrid>
+            <MetricCard
+              label="Response SLA Breached"
+              value={statsLoading ? "—" : stats?.responseSlaBreached ?? 0}
+              description="Past response due"
+              icon={AlertTriangle}
+              variant="default"
+            />
+            <MetricCard
+              label="Resolution SLA Breached"
+              value={statsLoading ? "—" : stats?.resolutionSlaBreached ?? 0}
+              description="Past resolution due"
+              icon={AlertTriangle}
+              variant="default"
+            />
+            <MetricCard
+              label="Approaching SLA"
+              value={statsLoading ? "—" : stats?.ticketsApproachingSla ?? 0}
+              description="≤20% time remaining"
+              icon={Clock}
+              variant="accent"
+            />
+            <MetricCard
+              label="SLA Compliance %"
+              value={
+                statsLoading
+                  ? "—"
+                  : stats?.slaCompliancePercent != null
+                    ? `${stats.slaCompliancePercent}%`
+                    : "—"
+              }
+              description="Non-breached resolution SLA"
+              icon={TrendingUp}
+              variant="primary"
+            />
+            <MetricCard
+              label="Avg Response Time"
+              value={
+                statsLoading
+                  ? "—"
+                  : stats?.avgResponseTimeMinutes != null
+                    ? `${Math.round(stats.avgResponseTimeMinutes / 60)}h`
+                    : "—"
+              }
+              description="Open → first assignment"
+              icon={Zap}
+              variant="default"
+            />
+            <MetricCard
+              label="Avg Resolution Time"
+              value={
+                statsLoading
+                  ? "—"
+                  : stats?.avgResolutionTimeMinutes != null
+                    ? `${Math.round(stats.avgResolutionTimeMinutes / 60)}h`
+                    : "—"
+              }
+              description="Open → resolved"
+              icon={CheckCircle}
+              variant="default"
+            />
+          </StatGrid>
+        </section>
+
         {stats?.needsReviewCount ? (
           <>
             <GradientDivider />

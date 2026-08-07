@@ -56,10 +56,19 @@ model Ticket {
   rejectionReason       String?   @map("rejection_reason")
   rejectedAt            DateTime? @map("rejected_at") @db.Timestamptz(6)
   rejectedBy            String?   @map("rejected_by") @db.Uuid
+  /// Tenant SLA snapshots at ticket creation (immutable for historical tickets).
+  responseSlaMinutes    Int?      @map("response_sla_minutes")
+  resolutionSlaMinutes  Int?      @map("resolution_sla_minutes")
+  responseDueAt         DateTime? @map("response_due_at") @db.Timestamptz(6)
+  resolutionDueAt       DateTime? @map("resolution_due_at") @db.Timestamptz(6)
+  /// Lazily refreshed escalation level (1–5); null when SLA not configured / not escalated.
+  escalationLevel       Int?      @map("escalation_level")
   assignments           TicketAssignment[]
   clientVehicle         ClientVehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
 
   @@index([vehicleId], map: "tickets_vehicle_id_idx")
+  @@index([responseDueAt], map: "tickets_response_due_at_idx")
+  @@index([resolutionDueAt], map: "tickets_resolution_due_at_idx")
   @@map("tickets")
 }
 
@@ -79,8 +88,29 @@ model Organisation {
   outgoingEmails        Json?     @map("outgoing_emails")
   reviewFieldLabel      String?   @map("review_field_label")
   reviewFieldHelperText String?   @map("review_field_helper_text")
+  tenantSla             TenantSla?
 
   @@map("organisations")
+}
+
+/// One SLA configuration per tenant (response + resolution + escalations + business hours config).
+model TenantSla {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId       String       @unique @map("organisation_id") @db.Uuid
+  responseMinutes      Int          @map("response_minutes")
+  resolutionMinutes    Int          @map("resolution_minutes")
+  /// [{ "level": 1, "percent": 50 }, ...] — 1 to 5 levels
+  escalationLevels     Json         @map("escalation_levels")
+  businessHoursEnabled Boolean      @default(false) @map("business_hours_enabled")
+  startTime            String?      @map("start_time")
+  endTime              String?      @map("end_time")
+  /// Weekday numbers 0–6 (Sun–Sat) or 1–7; stored as JSON array
+  workingDays          Json?        @map("working_days")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  organisation         Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_slas")
 }
 
 model User {

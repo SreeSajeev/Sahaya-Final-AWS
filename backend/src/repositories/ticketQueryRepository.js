@@ -40,6 +40,11 @@ const TICKET_SNAKE_TO_CAMEL = {
   rejection_reason: "rejectionReason",
   rejected_at: "rejectedAt",
   rejected_by: "rejectedBy",
+  response_sla_minutes: "responseSlaMinutes",
+  resolution_sla_minutes: "resolutionSlaMinutes",
+  response_due_at: "responseDueAt",
+  resolution_due_at: "resolutionDueAt",
+  escalation_level: "escalationLevel",
 };
 
 function ticketPatchToPrisma(patch) {

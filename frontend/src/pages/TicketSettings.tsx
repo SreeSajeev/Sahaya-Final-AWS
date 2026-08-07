@@ -21,6 +21,7 @@ import {
   DEFAULT_TICKET_PREFIX_DISPLAY,
   type OrgTicketConfig,
 } from "@/lib/orgTicketConfig";
+import { TenantSlaSettingsPanel } from "@/components/settings/TenantSlaSettingsPanel";
 import {
   Select,
   SelectContent,
@@ -585,6 +586,8 @@ export default function TicketSettings() {
                 </CardContent>
               </Card>
 
+              <TenantSlaSettingsPanel organisationId={effectiveOrgId} readOnly={readOnly} />
+
               <Card>
                 <CardHeader>
                   <CardTitle className={`flex items-center gap-2 ${typography.sectionTitle}`}>
@@ -592,7 +595,9 @@ export default function TicketSettings() {
                     SLA Settings
                   </CardTitle>
                   <CardDescription className={typography.body}>
-                    {readOnly ? "SLA targets (hours) for this tenant." : "Configure SLA targets (hours) for assignment, on-site, and resolution."}
+                    {readOnly
+                      ? "Legacy FE lifecycle SLA targets (hours) for assignment, on-site, and resolution phases."
+                      : "Legacy FE lifecycle targets (hours). Prefer SLA Configuration above for response/resolution CRM SLAs."}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 sm:grid-cols-3">

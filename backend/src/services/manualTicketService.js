@@ -14,6 +14,8 @@ import { generateTicketNumberForCreation } from "../utils/ticketNumber.js";
 import { insertTicket } from "../repositories/ticketQueryRepository.js";
 import { insertComment } from "../repositories/commentRepository.js";
 import { resolveTicketVehicleFields } from "./clientVehicleService.js";
+import { loadSlaSnapshotForOrg } from "./tenantSlaService.js";
+import { createSlaRow } from "./slaService.js";
 
 const optionalTrimmedString = (max) =>
   z
@@ -181,6 +183,8 @@ export async function createManualTicketFromBody(req, body) {
     };
   }
 
+  const slaSnapshot = await loadSlaSnapshotForOrg(organisationId);
+
   const insertPayload = {
     ticket_number: ticketNumber,
     vehicle_number: vehicleResolved.vehicle_number ?? null,
@@ -202,6 +206,11 @@ export async function createManualTicketFromBody(req, body) {
     status: "OPEN",
     opened_at: nowIso,
     updated_at: nowIso,
+    response_sla_minutes: slaSnapshot.response_sla_minutes,
+    resolution_sla_minutes: slaSnapshot.resolution_sla_minutes,
+    response_due_at: slaSnapshot.response_due_at,
+    resolution_due_at: slaSnapshot.resolution_due_at,
+    escalation_level: null,
     opened_by_email:
       data.opened_by_email != null && String(data.opened_by_email).trim() !== ""
         ? String(data.opened_by_email).trim()
@@ -222,6 +231,10 @@ export async function createManualTicketFromBody(req, body) {
       error: safeDbErrorForClient(error, "Unable to create ticket"),
     };
   }
+
+  void createSlaRow(ticket.id).catch((err) =>
+    console.error("[SLA] createSlaRow after manual ticket", ticket.id, err?.message)
+  );
 
   if (descriptionTrimmed) {
     await insertComment({
