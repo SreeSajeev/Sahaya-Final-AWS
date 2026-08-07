@@ -109,6 +109,11 @@ export interface Ticket {
   vehicle_name?: string | null;
   vehicle_type?: string | null;
   registration_number?: string | null;
+  response_sla_minutes?: number | null;
+  resolution_sla_minutes?: number | null;
+  response_due_at?: string | null;
+  resolution_due_at?: string | null;
+  escalation_level?: number | null;
   category: string | null;
   issue_type: string | null;
   location: string | null;
