@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayoutNew } from "@/components/layout/AppLayoutNew";
@@ -41,7 +41,7 @@ import { normalizeOrgSlug } from "@/lib/tenantTicketsSupabase";
 import type { TenantClient, User } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { ClientVehiclesPanel } from "@/components/clients/ClientVehiclesPanel";
-import { ArrowLeft, Briefcase, Plus, RefreshCw, UserPlus } from "lucide-react";
+import { ArrowLeft, Briefcase, Pencil, Plus, RefreshCw, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
 
@@ -68,6 +68,9 @@ export default function ClientDetail() {
   const [addEmail, setAddEmail] = useState("");
   const [addPassword, setAddPassword] = useState("");
   const [addSubmitting, setAddSubmitting] = useState(false);
+  const [companyShortNameDraft, setCompanyShortNameDraft] = useState("");
+  const [editingCompanyShortName, setEditingCompanyShortName] = useState(false);
+  const [savingCompanyShortName, setSavingCompanyShortName] = useState(false);
 
   const isSuperAdmin = userProfile?.role === "SUPER_ADMIN";
   const isTenantAdmin = userProfile?.role === "ADMIN";
@@ -86,6 +89,33 @@ export default function ClientDetail() {
       return await fetchJson<TenantClient>(`/data/clients/${encodeURIComponent(clientId!)}`);
     },
   });
+
+  useEffect(() => {
+    setCompanyShortNameDraft(client?.company_short_name ?? "");
+  }, [client?.company_short_name]);
+
+  const saveCompanyShortName = async () => {
+    if (!client) return;
+    setSavingCompanyShortName(true);
+    try {
+      await fetchJson<TenantClient>(`/data/clients/${encodeURIComponent(client.id)}`, {
+        method: "PATCH",
+        body: { company_short_name: companyShortNameDraft.trim() || null },
+      });
+      await queryClient.invalidateQueries({ queryKey: ["tenant-client", clientId] });
+      await queryClient.invalidateQueries({ queryKey: ["tenant-clients"] });
+      setEditingCompanyShortName(false);
+      toast({ title: "Company short name updated" });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Could not update company short name",
+        description: error instanceof Error ? error.message : "Request failed",
+      });
+    } finally {
+      setSavingCompanyShortName(false);
+    }
+  };
 
   const portalUsersQueryKey = useMemo(
     () => ["portal-users", client?.organisation_id, client?.slug] as const,
@@ -195,7 +225,7 @@ export default function ClientDetail() {
         <div className="space-y-6">
           <PageHeader
             title={client.name}
-            description={`Client short name: ${client.slug}`}
+            description={`Slug: ${client.slug}`}
             icon={Briefcase}
             actions={
               <Button variant="outline" size="sm" asChild>
@@ -226,7 +256,47 @@ export default function ClientDetail() {
                     <p className="mt-1 text-sm font-medium">{client.name}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Short Name</p>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Company Short Name</p>
+                    {editingCompanyShortName ? (
+                      <div className="mt-1 flex gap-2">
+                        <Input
+                          value={companyShortNameDraft}
+                          onChange={(e) => setCompanyShortNameDraft(e.target.value)}
+                          maxLength={80}
+                          aria-label="Company Short Name"
+                        />
+                        <Button size="sm" onClick={saveCompanyShortName} disabled={savingCompanyShortName}>
+                          Save
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setCompanyShortNameDraft(client.company_short_name ?? "");
+                            setEditingCompanyShortName(false);
+                          }}
+                          disabled={savingCompanyShortName}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="mt-1 flex items-center gap-2">
+                        <p className="text-sm font-medium">{client.company_short_name?.trim() || "—"}</p>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => setEditingCompanyShortName(true)}
+                          aria-label="Edit company short name"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Slug</p>
                     <p className="mt-1 font-mono text-sm">{client.slug}</p>
                   </div>
                   <div>

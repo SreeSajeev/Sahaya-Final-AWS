@@ -78,6 +78,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   // Form state
   /** Staff manual flow: selected client slug (required when not clientContext). */
   const [manualClientSlug, setManualClientSlug] = useState('');
+  const [clientSearch, setClientSearch] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [manualVehicleMode, setManualVehicleMode] = useState(false);
@@ -111,6 +112,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   useEffect(() => {
     if (open && !isClientMode) {
       setManualClientSlug('');
+      setClientSearch('');
     }
     if (open) {
       setSelectedVehicleId('');
@@ -187,7 +189,8 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         .map((c) => ({
           client_id: c.id,
           client_slug: c.slug,
-          label: c.name,
+          label: c.company_short_name?.trim() ? `${c.name} (${c.company_short_name.trim()})` : c.name,
+          searchText: [c.name, c.company_short_name, c.slug].filter(Boolean).join(" "),
           organisation_id: c.organisation_id,
         }))
         .filter((row) => row.client_slug.trim() !== '')
@@ -198,17 +201,18 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         .map((o) => ({
           client_slug: o.slug,
           label: o.name,
+          searchText: [o.name, o.slug].filter(Boolean).join(" "),
         }))
         .filter((row) => row.client_slug.trim() !== '')
         .sort((a, b) => a.label.localeCompare(b.label));
     }
-    const bySlug = new Map<string, { client_slug: string; label: string }>();
+    const bySlug = new Map<string, { client_slug: string; label: string; searchText: string }>();
     for (const u of clientUsers) {
       const slug = u.client_slug?.trim();
       if (!slug) continue;
       if (bySlug.has(slug)) continue;
       const name = u.name?.trim();
-      bySlug.set(slug, { client_slug: slug, label: name || slug });
+      bySlug.set(slug, { client_slug: slug, label: name || slug, searchText: `${name || ""} ${slug}` });
     }
     return Array.from(bySlug.values()).sort((a, b) => a.label.localeCompare(b.label));
   }, [
@@ -218,6 +222,12 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     organisationsForPicker,
     clientUsers,
   ]);
+
+  const filteredClientOptions = useMemo(() => {
+    const query = clientSearch.trim().toLowerCase();
+    if (!query) return clientOptions;
+    return clientOptions.filter((client) => client.searchText.toLowerCase().includes(query));
+  }, [clientOptions, clientSearch]);
 
   const organisationIdForCreate = useMemo(() => {
     if (isClientMode) return userProfile?.organisation_id ?? null;
@@ -420,6 +430,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
 
   const resetForm = () => {
     setManualClientSlug('');
+    setClientSearch('');
     setVehicleNumber('');
     setSelectedVehicleId('');
     setManualVehicleMode(false);
@@ -498,6 +509,13 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
           {!isClientMode && (
             <div className="space-y-2">
               <Label htmlFor="clientSlug">Client *</Label>
+              <Input
+                value={clientSearch}
+                onChange={(e) => setClientSearch(e.target.value)}
+                placeholder="Search name, company short name, or slug…"
+                disabled={staffClientSelectDisabled}
+                aria-label="Search clients"
+              />
               <Select
                 value={manualClientSlug || undefined}
                 onValueChange={setManualClientSlug}
@@ -517,11 +535,14 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {clientOptions.map((c) => (
+                  {filteredClientOptions.map((c) => (
                     <SelectItem key={c.client_slug} value={c.client_slug}>
                       {c.label}
                     </SelectItem>
                   ))}
+                  {!clientsLoading && !clientsFetchError && filteredClientOptions.length === 0 ? (
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">No clients match your search.</div>
+                  ) : null}
                 </SelectContent>
               </Select>
               {!clientsLoading && clientsFetchError && (

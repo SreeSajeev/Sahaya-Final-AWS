@@ -9,6 +9,7 @@ import { extractProofImageSources } from "@/lib/extractProofAttachments";
 export type FeTimelineEventType =
   | "ASSIGNED"
   | "ASSIGNMENT_CONTEXT"
+  | "IMAGE_HIDDEN"
   | "INITIAL_REMARKS"
   | "FE_REMARK"
   | "FE_ADDITIONAL_REMARK"
@@ -41,6 +42,15 @@ function attObj(attachments: unknown): Record<string, unknown> {
 
 function proofPathCount(attachments: unknown): number {
   const a = attObj(attachments);
+  const visibility = a.image_visibility as { hidden_at?: string | null } | undefined;
+  const assignmentContext = a.assignment_context as { deleted_at?: string | null; hidden_at?: string | null } | undefined;
+  if (
+    (visibility?.hidden_at != null && String(visibility.hidden_at).trim() !== "") ||
+    (assignmentContext?.deleted_at != null && String(assignmentContext.deleted_at).trim() !== "") ||
+    (assignmentContext?.hidden_at != null && String(assignmentContext.hidden_at).trim() !== "")
+  ) {
+    return 0;
+  }
   return Array.isArray(a.proof_storage_paths) ? a.proof_storage_paths.length : 0;
 }
 
@@ -56,6 +66,18 @@ function classifyFeComment(c: TicketComment): {
   hide: boolean;
 } {
   const a = attObj(c.attachments);
+  const imageHidden = a.image_hidden_event;
+  if (imageHidden != null && typeof imageHidden === "object") {
+    const meta = imageHidden as { reason?: string | null; hidden_by_name?: string | null };
+    const reason = meta.reason != null ? String(meta.reason).trim() : "";
+    return {
+      eventType: "IMAGE_HIDDEN",
+      label: "Image Hidden",
+      body: reason || c.body || null,
+      hide: false,
+    };
+  }
+
   const rejection = a.rejection;
   if (rejection != null && typeof rejection === "object") {
     // Internal rejection metadata is manager-oriented; FE sees a short status note only.
@@ -74,7 +96,7 @@ function classifyFeComment(c: TicketComment): {
       remark?: string | null;
       uploaded_by_name?: string | null;
     };
-    if (meta.deleted_at != null && String(meta.deleted_at).trim() !== "") {
+    if ((meta.deleted_at != null && String(meta.deleted_at).trim() !== "") || (meta.hidden_at != null && String(meta.hidden_at).trim() !== "")) {
       return { eventType: "STATUS_NOTE", label: "Staff note", body: null, hide: true };
     }
     const remark =

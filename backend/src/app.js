@@ -41,6 +41,7 @@ import localAuthRouter from "./routes/localAuth.js";
 import feMeRouter from "./routes/feMe.js";
 import fieldExecutivesRouter from "./routes/fieldExecutives.js";
 import complaintPointsRouter from "./routes/complaintPoints.js";
+import resolutionLocationsRouter from "./routes/resolutionLocations.js";
 import publicOtpRouter from "./routes/publicOtp.js";
 import publicComplaintRouter from "./routes/publicComplaint.js";
 import debugAirtelRouter from "./routes/debugAirtel.js";
@@ -270,6 +271,7 @@ app.use("/field-executives", fieldExecutivesRouter);
 
 // Tenant complaint points (public QR intake — admin APIs only; gated by PUBLIC_COMPLAINTS_ENABLED)
 app.use("/complaint-points", complaintPointsRouter);
+app.use("/data/resolution-locations", resolutionLocationsRouter);
 
 // Public complaint intake (OTP + context/session; no Sahaya auth; gated by PUBLIC_COMPLAINTS_ENABLED)
 app.use("/public", publicOtpRouter);

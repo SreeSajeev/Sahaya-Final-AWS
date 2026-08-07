@@ -47,6 +47,10 @@ export function buildResolutionEmailPlainText({
   location = null,
   closureLocation = null,
   resolvedAt = null,
+  assignedFeName = null,
+  priority = null,
+  closeFormSnapshot = null,
+  timelineSummary = null,
 }) {
   const issueType =
     resolutionCategory != null && String(resolutionCategory).trim() !== ""
@@ -76,6 +80,7 @@ export function buildResolutionEmailPlainText({
 
   lines.push(`Client: ${formatDetail(clientName)}`);
   lines.push(`Reported By: ${formatDetail(reportedByDisplay)}`);
+  lines.push(`Priority: ${formatDetail(priority ?? ticket?.priority)}`);
   lines.push(`Vehicle Number: ${formatDetail(ticket?.vehicle_number)}`);
   if (ticket?.vehicle_name) lines.push(`Vehicle Name: ${formatDetail(ticket.vehicle_name)}`);
   if (ticket?.vehicle_type) lines.push(`Vehicle Type: ${formatDetail(ticket.vehicle_type)}`);
@@ -85,8 +90,11 @@ export function buildResolutionEmailPlainText({
   lines.push(`Issue Type: ${formatDetail(issueType)}`);
   lines.push(`Location: ${formatDetail(loc)}`);
   if (closureLocation != null && String(closureLocation).trim() !== "") {
+    // Preserve the established label for existing recipients/tests; this value is now
+    // populated from resolution_location_name when available.
     lines.push(`Location (closure): ${String(closureLocation).trim()}`);
   }
+  lines.push(`Assigned FE: ${formatDetail(assignedFeName)}`);
   lines.push(`Status: ${formatDetail(ticket?.status ?? "RESOLVED")}`);
   if (resolvedAt) lines.push(`Resolved At: ${formatDetail(resolvedAt)}`);
 
@@ -94,6 +102,15 @@ export function buildResolutionEmailPlainText({
   lines.push(formatDetail(initialRemarks));
   lines.push("", "Resolution Remarks:");
   lines.push(formatDetail(resolutionRemarks));
+  if (closeFormSnapshot?.fields && Array.isArray(closeFormSnapshot.fields)) {
+    lines.push("", "Verification Details:");
+    for (const field of closeFormSnapshot.fields) {
+      lines.push(`${formatDetail(field?.label)}: ${formatDetail(closeFormSnapshot.values?.[field?.id])}`);
+    }
+  }
+  if (timelineSummary != null && String(timelineSummary).trim()) {
+    lines.push("", "Timeline Summary:", String(timelineSummary).trim());
+  }
   lines.push("---------------------------------");
 
   return lines.join("\n");
@@ -113,6 +130,10 @@ export function buildResolutionEmailHtml({
   location = null,
   closureLocation = null,
   resolvedAt = null,
+  assignedFeName = null,
+  priority = null,
+  closeFormSnapshot = null,
+  timelineSummary = null,
 }) {
   const plain = buildResolutionEmailPlainText({
     ticket,
@@ -125,6 +146,10 @@ export function buildResolutionEmailHtml({
     location,
     closureLocation,
     resolvedAt,
+    assignedFeName,
+    priority,
+    closeFormSnapshot,
+    timelineSummary,
   });
   return `<div style="font-family:Georgia,serif;font-size:14px;line-height:1.45;color:#111">${textToHtmlPreservingNewlines(plain)}</div>`;
 }

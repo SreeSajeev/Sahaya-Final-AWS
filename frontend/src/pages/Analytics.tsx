@@ -90,6 +90,8 @@ import { AnalyticsOpsSections } from "@/components/analytics/AnalyticsOpsSection
 import { AnalyticsManagementPolish } from "@/components/analytics/AnalyticsManagementPolish";
 import { cn } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/indianStates';
+import { useTenantClients } from '@/hooks/useTenantClients';
+import { isTenantClientsEnabled } from '@/lib/tenantClientsFeature';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,6 +168,24 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
 
   const organisationId = userProfile?.organisation_id ?? null;
   const isSuperAdmin = userProfile?.role === 'SUPER_ADMIN';
+
+  const { data: tenantClients = [] } = useTenantClients({
+    organisationId: isSuperAdmin ? null : organisationId,
+    enabled: Boolean(userProfile && isTenantClientsEnabled()),
+  });
+
+  const companyShortNameBySlug = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const client of tenantClients) {
+      const short = String(client.company_short_name ?? "").trim();
+      if (!short) continue;
+      const raw = String(client.slug ?? "").trim();
+      if (!raw) continue;
+      map[raw] = short;
+      map[raw.toLowerCase().replace(/\s+/g, "-")] = short;
+    }
+    return map;
+  }, [tenantClients]);
 
   const { data: analyticsData, isLoading, refetch } = useQuery({
     queryKey: ['analytics-data', startDate || null, endDate || null, effectiveClientSlug, effectiveState, organisationId, isSuperAdmin],
@@ -755,7 +775,13 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
     URL.revokeObjectURL(url);
   }, [analyticsData, feScorecards, smScorecards, opsHealth, teamOps]);
 
-  const exportCtx = analyticsData?.exportContext;
+  const exportCtx = useMemo(() => {
+    if (!analyticsData?.exportContext) return undefined;
+    return {
+      ...analyticsData.exportContext,
+      companyShortNameBySlug,
+    };
+  }, [analyticsData?.exportContext, companyShortNameBySlug]);
   const hasTickets = (analyticsData?.tickets?.length ?? 0) > 0;
 
   const handleOpsExport = useCallback(() => {

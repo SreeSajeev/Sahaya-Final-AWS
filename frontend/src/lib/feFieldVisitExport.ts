@@ -2,7 +2,9 @@
  * Field Visit Sheet helpers for FE portal (client-side from JWT-scoped assigned tickets).
  */
 import { createCSVDownload, rowsToCsv } from '@/lib/csvExport';
+import ExcelJS from 'exceljs';
 import { formatIST } from '@/lib/dateUtils';
+import { extractProofImageSources } from '@/lib/extractProofAttachments';
 import { formatStateDisplay } from '@/lib/indianStates';
 import {
   formatComplaintIdDisplay,
@@ -15,6 +17,7 @@ export type FERemarkLine = {
   source?: string | null;
   author?: string | null;
   body: string;
+  attachments?: Record<string, unknown> | null;
 };
 
 function fmt(v: unknown): string {
@@ -64,6 +67,123 @@ export function combineTicketRemarks(
     }
   }
   return parts.join('\n\n') || '—';
+}
+
+function commentIsHidden(remark: FERemarkLine): boolean {
+  const context = remark.attachments?.assignment_context;
+  return Boolean(
+    context &&
+      typeof context === 'object' &&
+      !Array.isArray(context) &&
+      (context as { deleted_at?: unknown }).deleted_at,
+  );
+}
+
+function visibleRemarks(remarks: FERemarkLine[]): FERemarkLine[] {
+  return remarks.filter((remark) => !commentIsHidden(remark));
+}
+
+function latestRemark(
+  remarks: FERemarkLine[],
+  predicate: (remark: FERemarkLine) => boolean,
+): string {
+  const latest = [...visibleRemarks(remarks)]
+    .filter(predicate)
+    .sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')))[0];
+  return latest ? fmt(latest.body) || '—' : '—';
+}
+
+function timelineSummary(ticket: FETicketRow, remarks: FERemarkLine[]): string {
+  const initial = fmt(ticket.remarks);
+  const lines = [
+    initial ? `${fmtDate(ticket.opened_at || ticket.created_at)} · Initial remark: ${initial}` : '',
+    ticket.assigned_at ? `${fmtDate(ticket.assigned_at)} · Assigned` : '',
+    ...visibleRemarks(remarks)
+      .filter((remark) => fmt(remark.body))
+      .sort((a, b) => String(a.at ?? '').localeCompare(String(b.at ?? '')))
+      .map((remark) => {
+        const source = fmt(remark.source).toUpperCase() || 'COMMENT';
+        return `${remark.at ? fmtDate(remark.at) : 'Date unavailable'} · ${source}: ${fmt(remark.body)}`;
+      }),
+  ].filter(Boolean);
+  return lines.join('\n') || '—';
+}
+
+export function buildFieldVisitWorksheetRows(
+  tickets: FETicketRow[],
+  remarksByTicketId: Record<string, FERemarkLine[]> = {},
+  assignedEngineer = '',
+): string[][] {
+  const header = [
+    'Ticket Number', 'Complaint ID', 'Customer', 'Vehicle', 'Issue Type', 'Priority', 'State',
+    'Address (location)', 'Contact Person', 'Contact Number', 'Reported Location',
+    'Resolution Location', 'Assignment Remarks', 'Latest FE Remark', 'Latest Resolution Remark',
+    'Timeline Summary', 'Assigned Engineer',
+  ];
+  return [
+    header,
+    ...tickets.map((ticket) => {
+      const remarks = remarksByTicketId[ticket.id] ?? [];
+      return [
+        fmt(ticket.ticket_number),
+        formatComplaintIdDisplay(ticket.complaint_id) === '—' ? '' : formatComplaintIdDisplay(ticket.complaint_id),
+        fmt(ticket.client_name ?? ticket.client_slug),
+        [ticket.vehicle_number, ticket.vehicle_name, ticket.vehicle_type].map(fmt).filter(Boolean).join(' · '),
+        fmt(ticket.issue_type ?? ticket.category),
+        resolveTicketPriorityLevel(ticket),
+        formatStateDisplay(ticket.state),
+        fmt(ticket.location),
+        fmt(ticket.contact_person),
+        fmt(ticket.contact_number),
+        fmt(ticket.location),
+        fmt(ticket.resolution_location_name),
+        fmt(ticket.remarks),
+        latestRemark(remarks, (remark) => fmt(remark.source).toUpperCase() === 'FE'),
+        fmt(ticket.verification_remarks) ||
+          latestRemark(remarks, (remark) => /resolution/i.test(fmt(remark.body))),
+        timelineSummary(ticket, remarks),
+        assignedEngineer,
+      ];
+    }),
+  ];
+}
+
+export async function downloadFieldVisitExcel(
+  tickets: FETicketRow[],
+  fromYmd: string,
+  toYmd: string,
+  remarksByTicketId: Record<string, FERemarkLine[]> = {},
+  assignedEngineer = '',
+): Promise<void> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('FE Worksheet');
+  const rows = buildFieldVisitWorksheetRows(tickets, remarksByTicketId, assignedEngineer);
+  rows.forEach((values, index) => {
+    const row = sheet.addRow(values);
+    row.alignment = { vertical: 'top', wrapText: true };
+    if (index === 0) {
+      row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+    }
+  });
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  sheet.autoFilter = { from: 'A1', to: { row: rows.length, column: rows[0].length } };
+  sheet.columns.forEach((column) => {
+    let width = 12;
+    column.eachCell?.({ includeEmpty: false }, (cell) => {
+      width = Math.max(width, Math.min(String(cell.value ?? '').length + 2, 45));
+    });
+    column.width = width;
+  });
+  const bytes = await workbook.xlsx.writeBuffer();
+  const url = URL.createObjectURL(new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `fe-worksheet-${fromYmd}-to-${toYmd}.xlsx`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export function buildFieldVisitCsvRows(
@@ -152,7 +272,12 @@ export function openFieldVisitPrintWindow(
   const ticketBlocks = tickets
     .map((t) => {
       const priority = resolveTicketPriorityLevel(t);
-      const remarks = combineTicketRemarks(t, remarksByTicketId[t.id] ?? []);
+      const ticketRemarks = remarksByTicketId[t.id] ?? [];
+      const remarks = combineTicketRemarks(t, ticketRemarks);
+      const timeline = timelineSummary(t, ticketRemarks);
+      const images = visibleRemarks(ticketRemarks)
+        .flatMap((remark) => extractProofImageSources(remark.attachments))
+        .filter((source) => source.startsWith('data:image/'));
       return `
       <section class="ticket">
         <h2>${escapeHtml(fmtDash(t.ticket_number))}</h2>
@@ -161,12 +286,18 @@ export function openFieldVisitPrintWindow(
         ${block('Vehicle', fmtDash(t.vehicle_number))}
         ${block('State', formatStateDisplay(t.state))}
         ${block('Location', fmtDash(t.location))}
+        ${block('Contact Person', fmtDash(t.contact_person))}
+        ${block('Contact Number', fmtDash(t.contact_number))}
+        ${block('Resolution Location', fmtDash(t.resolution_location_name))}
         ${block('Issue Type', fmtDash(t.issue_type ?? t.category))}
         ${block('Priority', priority)}
         ${block('Status', fmtDash(t.status))}
         ${block('Created Date', fmtDate(t.created_at || t.opened_at))}
         ${block('Assigned Date', fmtDate(t.assigned_at))}
         ${block('Remarks', remarks)}
+        ${block('Resolution Remarks', fmtDash(t.verification_remarks))}
+        ${block('Timeline Summary', timeline)}
+        ${images.length ? `<div class="images">${images.map((source) => `<img src="${escapeHtml(source)}" alt="Ticket proof" />`).join('')}</div>` : ''}
       </section>`;
     })
     .join('\n');
@@ -186,6 +317,8 @@ export function openFieldVisitPrintWindow(
     .field { margin: 4px 0 6px; }
     .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.04em; color: #555; }
     .value { white-space: pre-wrap; word-break: break-word; }
+    .images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .images img { max-width: 48%; max-height: 190px; object-fit: contain; border: 1px solid #bbb; }
     .toolbar { margin-bottom: 12px; }
     @media print { .toolbar { display: none !important; } }
   </style>

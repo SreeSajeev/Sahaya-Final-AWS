@@ -253,6 +253,13 @@ export default function FETicketView() {
               <br />
               <span className="font-medium">{fmtMaybe(t.category)}</span>
             </p>
+            {t.resolution_location_name ? (
+              <p className="flex items-start gap-2">
+                <MapPin className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                <span><span className="text-muted-foreground">Attended Location</span><br />
+                  <span className="font-medium break-words">{fmtMaybe(t.resolution_location_name)}</span></span>
+              </p>
+            ) : null}
             <p>
               <span className="text-muted-foreground">Issue Type</span>
               <br />

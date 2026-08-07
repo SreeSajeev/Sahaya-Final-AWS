@@ -43,6 +43,7 @@ import { getDisplayConfidenceScore } from "@/lib/confidence";
 import { FEAssignmentModal } from "@/components/tickets/FEAssignmentModal";
 import { AssignmentContextSection } from "@/components/tickets/AssignmentContextSection";
 import { CloseTicketDialog } from "@/components/tickets/CloseTicketDialog";
+import { HideImageDialog } from "@/components/tickets/HideImageDialog";
 import { RejectTicketDialog } from "@/components/tickets/RejectTicketDialog";
 
 import { ProofImageViewerOverlay } from "@/components/tickets/ProofImageViewerOverlay";
@@ -113,6 +114,8 @@ export default function TicketDetail() {
   const [proofViewerOpen, setProofViewerOpen] = useState(false);
   const [proofViewerSources, setProofViewerSources] = useState<string[] | null>(null);
   const [proofViewerIndex, setProofViewerIndex] = useState(0);
+  const [hideImageCommentId, setHideImageCommentId] = useState<string | null>(null);
+  const [hideImagePending, setHideImagePending] = useState(false);
 
   const canCompleteReview =
     Boolean(ticket?.needs_review) &&
@@ -434,7 +437,9 @@ export default function TicketDetail() {
     resolutionCategory: string,
     recipients: string[],
     notificationEmail?: string | null,
-    resolutionOtherDetails?: string | null
+    resolutionOtherDetails?: string | null,
+    resolutionLocationId?: string,
+    closeFormValues?: Record<string, string | number | null>
   ) => {
     if (isClient) return;
     setClosePending(true);
@@ -460,6 +465,8 @@ export default function TicketDetail() {
             reviewNotes != null && String(reviewNotes).trim() !== ""
               ? String(reviewNotes).trim()
               : null,
+          resolution_location_id: resolutionLocationId,
+          close_form_values: closeFormValues ?? {},
           resolution_category:
             resolutionCategory != null && String(resolutionCategory).trim() !== ""
               ? String(resolutionCategory).trim()
@@ -592,7 +599,30 @@ export default function TicketDetail() {
     setTimeout(() => setProofViewerSources(null), 0);
   };
 
-
+  const handleHideImage = async (reason: string | null) => {
+    if (!ticket?.id || !hideImageCommentId) return;
+    setHideImagePending(true);
+    try {
+      await fetchJson(`/tickets/${ticket.id}/comments/${hideImageCommentId}/hide-images`, {
+        method: "POST",
+        body: { reason },
+      });
+      setHideImageCommentId(null);
+      toast({
+        title: "Image hidden",
+        description: "The image is hidden from Sahaya UI. Storage and audit history are unchanged.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticket.id] });
+    } catch (err) {
+      toast({
+        title: "Hide failed",
+        description: err instanceof Error ? err.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setHideImagePending(false);
+    }
+  };
 
   /* ================= UI ================= */
 
@@ -855,9 +885,14 @@ export default function TicketDetail() {
                           This ticket has no location yet. Add one to keep records complete.
                         </p>
                       </div>
-                    ) : (
-                      <IconInfo icon={MapPin} label="Location" value={ticket.location} />
-                    )}
+                      ) : (
+                        <>
+                          <IconInfo icon={MapPin} label="Location" value={ticket.location} />
+                          {ticket.resolution_location_name ? (
+                            <IconInfo icon={MapPin} label="Attended Location" value={ticket.resolution_location_name} />
+                          ) : null}
+                        </>
+                      )}
                     {canPerformActions ? (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">State</Label>
@@ -1105,6 +1140,18 @@ export default function TicketDetail() {
                       uploaded_by_name?: string;
                       uploaded_at?: string;
                       deleted_at?: string | null;
+                      hidden_at?: string | null;
+                    };
+                    image_visibility?: {
+                      hidden_at?: string | null;
+                      hidden_by_name?: string | null;
+                      hidden_reason?: string | null;
+                    };
+                    image_hidden_event?: {
+                      comment_id?: string;
+                      reason?: string | null;
+                      hidden_at?: string | null;
+                      hidden_by_name?: string | null;
                     };
                   };
 
@@ -1123,31 +1170,76 @@ export default function TicketDetail() {
                       }
                     | undefined;
                   const closureEmail = a.closure_email;
+                  const imageHiddenEvent = a.image_hidden_event;
+                  const imagesHidden = Boolean(
+                    a.image_visibility?.hidden_at != null &&
+                      String(a.image_visibility.hidden_at).trim() !== ""
+                  );
                   const assignmentContext =
                     a.assignment_context != null &&
                     typeof a.assignment_context === "object" &&
                     !(
-                      a.assignment_context.deleted_at != null &&
-                      String(a.assignment_context.deleted_at).trim() !== ""
+                      (a.assignment_context.deleted_at != null &&
+                        String(a.assignment_context.deleted_at).trim() !== "") ||
+                      (a.assignment_context.hidden_at != null &&
+                        String(a.assignment_context.hidden_at).trim() !== "") ||
+                      imagesHidden
                     )
                       ? a.assignment_context
                       : undefined;
                   const isFeAdditional = a.fe_remark?.event_type === "FE_ADDITIONAL_REMARK";
                   const images = extractProofImageSources(c.attachments);
                   const proofGpsLine = formatProofGeoLine(extractFirstProofGeo(c.attachments));
+                  const canHideImages =
+                    canPerformActions && images.length > 0 && !imagesHidden && !imageHiddenEvent;
                   return (
                     <div key={c.id} className="border-l-2 pl-4">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                         <Badge variant="outline">
-                          {assignmentContext
-                            ? "Assignment Image"
-                            : isFeAdditional && !rejection && !closureEmail
-                              ? "Additional Remark"
-                              : c.source}
+                          {imageHiddenEvent
+                            ? "Image Hidden"
+                            : assignmentContext
+                              ? "Assignment Image"
+                              : isFeAdditional && !rejection && !closureEmail
+                                ? "Additional Remark"
+                                : c.source}
                         </Badge>
                         {formatIST(c.created_at, "PPp")}
+                        {canHideImages && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => setHideImageCommentId(c.id)}
+                          >
+                            Hide Image
+                          </Button>
+                        )}
                       </div>
-                      {rejection != null && typeof rejection === "object" ? (
+                      {imageHiddenEvent != null && typeof imageHiddenEvent === "object" ? (
+                        <div className="mt-2 space-y-1 rounded-md border border-amber-200 bg-amber-50/60 p-3 text-sm">
+                          <p className="font-semibold text-amber-900">Image Hidden</p>
+                          {imageHiddenEvent.hidden_by_name?.trim() ? (
+                            <p>
+                              <span className="text-muted-foreground">By: </span>
+                              {imageHiddenEvent.hidden_by_name.trim()}
+                            </p>
+                          ) : null}
+                          {imageHiddenEvent.hidden_at && (
+                            <p>
+                              <span className="text-muted-foreground">When: </span>
+                              {formatIST(imageHiddenEvent.hidden_at, "PPp")}
+                            </p>
+                          )}
+                          {imageHiddenEvent.reason?.trim() ? (
+                            <p className="whitespace-pre-wrap break-words">
+                              <span className="text-muted-foreground">Reason: </span>
+                              {imageHiddenEvent.reason.trim()}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : rejection != null && typeof rejection === "object" ? (
                         <div className="mt-2 space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
                           <p className="font-semibold text-destructive">Ticket Rejected</p>
                           <p>
@@ -1329,6 +1421,17 @@ export default function TicketDetail() {
         onConfirm={handleClose}
         isPending={closePending}
       />
+      )}
+
+      {canPerformActions && (
+        <HideImageDialog
+          open={hideImageCommentId != null}
+          onOpenChange={(open) => {
+            if (!open) setHideImageCommentId(null);
+          }}
+          onConfirm={handleHideImage}
+          isPending={hideImagePending}
+        />
       )}
 
       {canPerformActions && (

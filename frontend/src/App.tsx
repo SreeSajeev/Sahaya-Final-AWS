@@ -131,6 +131,7 @@ import Users from "@/pages/Users";
 import Clients from "@/pages/Clients";
 import ClientDetail from "@/pages/ClientDetail";
 import ComplaintPoints from "@/pages/ComplaintPoints";
+import ResolutionLocations from "@/pages/ResolutionLocations";
 import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
 import { isPublicComplaintsEnabled } from "@/lib/publicComplaintsFeature";
 import NotFound from "@/pages/NotFound";
@@ -289,6 +290,7 @@ export default function App() {
                 />
                 <Route path="/app/settings" element={<Settings />} />
                 <Route path="/app/ticket-settings" element={<TicketSettings />} />
+                <Route path="/app/resolution-locations" element={<ResolutionLocations />} />
               </Route>
 
               {isTenantClientsEnabled() && (

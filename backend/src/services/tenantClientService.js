@@ -1,5 +1,9 @@
 import { safeTrim } from "../utils/http.js";
 import {
+  normalizeCompanyShortName,
+  suggestCompanyShortName,
+} from "../utils/companyShortName.js";
+import {
   getTenantClientByIdRow,
   insertTenantClientRow,
   listTenantClientsQuery,
@@ -89,12 +93,21 @@ export async function createTenantClient(req, body) {
 
   const statusRaw = safeTrim(body?.status);
   const status = statusRaw === "inactive" ? "inactive" : "active";
+  const companyShortName = normalizeCompanyShortName(
+    Object.prototype.hasOwnProperty.call(body ?? {}, "company_short_name")
+      ? body.company_short_name
+      : suggestCompanyShortName(name)
+  );
+  if (!companyShortName.ok) {
+    return { error: { status: 400, message: companyShortName.error } };
+  }
   const nowIso = new Date().toISOString();
 
   const insert = {
     organisation_id: organisationId,
     name,
     slug,
+    company_short_name: companyShortName.value,
     website: safeTrim(body?.website),
     contact_name: safeTrim(body?.contact_name),
     contact_email: safeTrim(body?.contact_email),
@@ -130,6 +143,13 @@ export async function updateTenantClient(req, id, body) {
     const slug = normalizeClientSlug(body.slug);
     if (!slug) return { error: { status: 400, message: "slug cannot be empty" } };
     patch.slug = slug;
+  }
+  if (Object.prototype.hasOwnProperty.call(body ?? {}, "company_short_name")) {
+    const companyShortName = normalizeCompanyShortName(body.company_short_name);
+    if (!companyShortName.ok) {
+      return { error: { status: 400, message: companyShortName.error } };
+    }
+    patch.company_short_name = companyShortName.value;
   }
   if (Object.prototype.hasOwnProperty.call(body ?? {}, "website")) {
     patch.website = safeTrim(body.website);

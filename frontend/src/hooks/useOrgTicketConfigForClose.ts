@@ -38,6 +38,11 @@ export function useOrgTicketConfigForClose(options: {
   const resolutionFromConfig = Array.isArray(value?.resolutionCategories)
     ? (value.resolutionCategories as string[])
     : undefined;
+  const closeFormFields = Array.isArray(value?.closeFormFields)
+    ? (value.closeFormFields as NonNullable<OrgTicketConfig["closeFormFields"]>)
+        .filter((field) => field && typeof field.id === "string" && typeof field.label === "string")
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+    : [];
 
   const useTenantLists =
     tenantConfigEnabled && !isError && !isLoading && Boolean(configRow?.value);
@@ -51,6 +56,7 @@ export function useOrgTicketConfigForClose(options: {
     resolutionCategoryOptions,
     isLoadingConfig: queryEnabled && isLoading,
     usesTenantConfig: useTenantLists,
+    closeFormFields,
   };
 }
 

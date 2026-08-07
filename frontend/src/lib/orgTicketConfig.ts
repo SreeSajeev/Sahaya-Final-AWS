@@ -23,6 +23,15 @@ export interface OrgTicketConfig {
   fieldExecutiveLabel?: string;
   /** When true, ticket create allows free-text "Other…" vehicle entry. Default false. */
   allowManualVehicle?: boolean;
+  closeFormFields?: Array<{
+    id: string;
+    label: string;
+    placeholder?: string;
+    required: boolean;
+    displayOrder: number;
+    fieldType: "text" | "textarea" | "dropdown" | "date" | "number";
+    options?: string[];
+  }>;
 }
 
 export function parseTerminologyFromConfig(raw: Record<string, unknown> | null | undefined): {

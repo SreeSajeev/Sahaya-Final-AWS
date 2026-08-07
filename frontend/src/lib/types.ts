@@ -140,6 +140,8 @@ export interface Ticket {
   resolved_at?: string | null;
   /** Closure / verification remarks (may be absent until close). */
   verification_remarks?: string | null;
+  /** Snapshot of the attended resolution location (may be absent on historical tickets). */
+  resolution_location_name?: string | null;
   /** Review notes captured at close (may be absent on older rows). */
   review_notes?: string | null;
   /** Resolution category chosen at close (may be absent on older rows). */
@@ -216,6 +218,7 @@ export interface TenantClient {
   organisation_id: string;
   name: string;
   slug: string;
+  company_short_name?: string | null;
   website?: string | null;
   contact_name?: string | null;
   contact_email?: string | null;

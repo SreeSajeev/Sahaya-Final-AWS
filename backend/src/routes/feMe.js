@@ -8,6 +8,7 @@ import { logEvent } from "../utils/structuredLog.js";
 import { buildCreatorDisplayByTicketId } from "../utils/ticketDisplayEnrichment.js";
 import { findOrganisationsBySlugs } from "../repositories/organisationRepository.js";
 import { findUsersByEmails } from "../repositories/userRepository.js";
+import { listTenantClientsByOrganisationId } from "../repositories/tenantClientRepository.js";
 import {
   findFieldExecutiveByUserId,
   findFieldExecutiveByName,
@@ -81,6 +82,27 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       for (const o of orgRows) {
         const slug = o?.slug != null ? String(o.slug).trim() : "";
         if (slug) orgNameBySlug.set(slug, o?.name ?? null);
+      }
+    }
+  }
+
+  // Contact details belong to the tenant client rather than the ticket.  Add them to the
+  // FE-scoped payload so printable offline worksheets do not need another client API call.
+  const clientContactBySlug = new Map();
+  if (req.tenantId) {
+    const { data: clientRows, error: clientErr } = await listTenantClientsByOrganisationId(req.tenantId);
+    if (!clientErr && Array.isArray(clientRows)) {
+      for (const client of clientRows) {
+        const slug = client?.slug != null ? String(client.slug).trim() : "";
+        if (!slug) continue;
+        clientContactBySlug.set(slug, {
+          contact_person: client.contact_name != null && String(client.contact_name).trim() !== ""
+            ? String(client.contact_name).trim()
+            : null,
+          contact_number: client.contact_phone != null && String(client.contact_phone).trim() !== ""
+            ? String(client.contact_phone).trim()
+            : null,
+        });
       }
     }
   }
@@ -200,6 +222,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
     const clientNameFromOrg = slug ? orgNameBySlug.get(slug) : null;
     const clientNameFromEmail = deriveClientNameFromOpenedByEmail(t?.opened_by_email);
     const client_name = clientNameFromOrg || clientNameFromEmail || "Not provided";
+    const clientContact = slug ? clientContactBySlug.get(slug) : null;
 
     const onSiteRows = tokenRowsByTicketAndType.get(`${t.id}:ON_SITE`) ?? [];
     const resolutionRows = tokenRowsByTicketAndType.get(`${t.id}:RESOLUTION`) ?? [];
@@ -263,6 +286,8 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
     return {
       ...t,
       client_name,
+      contact_person: clientContact?.contact_person ?? null,
+      contact_number: clientContact?.contact_number ?? null,
       reporter_display,
       creator_display: creatorByTicketId.get(t.id) ?? null,
       // Preserve DB remarks; do not overwrite with short_description.

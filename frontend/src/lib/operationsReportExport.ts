@@ -37,6 +37,39 @@ function safe(v: unknown): string {
   return String(v);
 }
 
+function normalizeSlugKey(slug: string): string {
+  return slug
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+}
+
+/** Prefer ticket field; fall back to client-slug map when Analytics rows only have slug. */
+function companyShortName(
+  ticket: Record<string, unknown>,
+  maps?: { companyShortNameBySlug?: Record<string, string> }
+): string {
+  const direct = safe(ticket.company_short_name).trim();
+  if (direct) return direct;
+  const rawSlug = safe(ticket.client_slug);
+  if (!rawSlug || !maps?.companyShortNameBySlug) return "";
+  const byKey = maps.companyShortNameBySlug[normalizeSlugKey(rawSlug)];
+  if (byKey) return byKey;
+  return maps.companyShortNameBySlug[rawSlug] ?? "";
+}
+
+export type OperationsReportExportContext = {
+  sla?: Record<string, unknown>[];
+  ticket_assignments?: Record<string, unknown>[];
+  field_executives?: Record<string, unknown>[];
+  /** slug (normalized or raw) → company_short_name */
+  companyShortNameBySlug?: Record<string, string>;
+};
+
+type OperationsEnrichmentMaps = TicketExportEnrichmentMaps & {
+  companyShortNameBySlug?: Record<string, string>;
+};
+
 function ticketAgeHours(ticket: Record<string, unknown>): string {
   if (!OPEN_PIPELINE.has(String(ticket.status))) return "";
   const opened = ticket.opened_at ?? ticket.created_at;
@@ -62,35 +95,42 @@ function issueReported(ticket: Record<string, unknown>): string {
   return parts.join(" · ");
 }
 
-export function buildEnrichmentMapsFromContext(ctx: {
-  sla?: Record<string, unknown>[];
-  ticket_assignments?: Record<string, unknown>[];
-  field_executives?: Record<string, unknown>[];
-}): TicketExportEnrichmentMaps {
-  return buildTicketExportEnrichmentMaps(
-    (ctx.sla ?? []) as SlaExportRow[],
-    (ctx.ticket_assignments ?? []) as AssignmentExportRow[],
-    (ctx.field_executives ?? []) as FeExportRow[]
-  );
+export function buildEnrichmentMapsFromContext(
+  ctx: OperationsReportExportContext
+): OperationsEnrichmentMaps {
+  return {
+    ...buildTicketExportEnrichmentMaps(
+      (ctx.sla ?? []) as SlaExportRow[],
+      (ctx.ticket_assignments ?? []) as AssignmentExportRow[],
+      (ctx.field_executives ?? []) as FeExportRow[]
+    ),
+    companyShortNameBySlug: ctx.companyShortNameBySlug,
+  };
 }
 
 /** Comprehensive ops register — closest CRM replacement for manual Excel. */
 export function buildOperationsReportRows(
   tickets: Record<string, unknown>[],
-  maps: TicketExportEnrichmentMaps
+  maps: OperationsEnrichmentMaps
 ): string[][] {
   // Grouped column order for management readability (Ticket → Assignment → Timeline → Resolution → Verification → SLA)
+  const closeFormLabels = Array.from(new Set(tickets.flatMap((ticket) => {
+    const snapshot = ticket.close_form_snapshot as { fields?: Array<{ label?: unknown }> } | null;
+    return Array.isArray(snapshot?.fields) ? snapshot.fields.map((field) => safe(field?.label)).filter(Boolean) : [];
+  })));
   const headers = [
     "Ticket Number",
     "Complaint ID",
     "Client",
+    "Company Short Name",
     "Vehicle Number",
     "Vehicle Name",
     "Vehicle Type",
     "Category",
     "Priority",
     "State",
-    "Location",
+    "Reported Location",
+    "Attended Location",
     "Field Executive",
     "Assigned Date",
     "Current Status",
@@ -115,6 +155,7 @@ export function buildOperationsReportRows(
     "Response Due",
     "Resolution Due",
     "Escalation Level",
+    ...closeFormLabels.map((label) => `Close Form: ${label}`),
   ];
 
   const rows = tickets.map((t) => {
@@ -146,10 +187,15 @@ export function buildOperationsReportRows(
       })
     );
 
+    const snapshot = t.close_form_snapshot as { fields?: Array<{ id?: string; label?: string }>; values?: Record<string, unknown> } | null;
+    const closeValuesByLabel = new Map(
+      (snapshot?.fields ?? []).map((field) => [safe(field.label), safe(snapshot?.values?.[safe(field.id)])])
+    );
     return [
       safe(t.ticket_number),
       safe(t.complaint_id),
       safe(t.client_slug),
+      companyShortName(t, maps),
       safe(t.vehicle_number),
       safe(t.vehicle_name),
       safe(t.vehicle_type),
@@ -157,6 +203,7 @@ export function buildOperationsReportRows(
       priority,
       safe(t.state),
       safe(t.location),
+      safe(t.resolution_location_name),
       feName,
       safe(current?.assigned_at),
       safe(t.status),
@@ -181,6 +228,7 @@ export function buildOperationsReportRows(
       safe(t.response_due_at),
       safe(t.resolution_due_at),
       safe(t.escalation_level),
+      ...closeFormLabels.map((label) => closeValuesByLabel.get(label) ?? ""),
     ];
   });
 
@@ -189,12 +237,13 @@ export function buildOperationsReportRows(
 
 export function buildSlaReportRows(
   tickets: Record<string, unknown>[],
-  maps: TicketExportEnrichmentMaps
+  maps: OperationsEnrichmentMaps
 ): string[][] {
   const headers = [
     "Ticket Number",
     "Status",
     "Client",
+    "Company Short Name",
     "Field Executive",
     "Assignment SLA Breached",
     "Onsite SLA Breached",
@@ -223,6 +272,7 @@ export function buildSlaReportRows(
       safe(t.ticket_number),
       safe(t.status),
       safe(t.client_slug),
+      companyShortName(t, maps),
       feName,
       sla.assignment_breached === true ? "Yes" : "No",
       sla.onsite_breached === true ? "Yes" : "No",
@@ -238,7 +288,7 @@ export function buildSlaReportRows(
 
 export function buildResolutionReportRows(
   tickets: Record<string, unknown>[],
-  maps?: TicketExportEnrichmentMaps
+  maps?: OperationsEnrichmentMaps
 ): string[][] {
   const headers = [
     "Ticket Number",
@@ -247,6 +297,7 @@ export function buildResolutionReportRows(
     "Vehicle Name",
     "Vehicle Type",
     "Client",
+    "Company Short Name",
     "Reported Issue",
     "Resolution Category",
     "Resolution Category Display",
@@ -273,6 +324,7 @@ export function buildResolutionReportRows(
       safe(t.vehicle_name),
       safe(t.vehicle_type),
       safe(t.client_slug),
+      companyShortName(t, maps),
       issue,
       cat,
       formatResolutionCategoryDisplay(cat, remarks),
@@ -288,7 +340,7 @@ export function buildResolutionReportRows(
 
 export function buildVerificationReportRows(
   tickets: Record<string, unknown>[],
-  maps: TicketExportEnrichmentMaps
+  maps: OperationsEnrichmentMaps
 ): string[][] {
   const headers = [
     "Ticket Number",
@@ -297,6 +349,7 @@ export function buildVerificationReportRows(
     "Vehicle Name",
     "Vehicle Type",
     "Client",
+    "Company Short Name",
     "Status",
     "Field Executive",
     "Resolution Category",
@@ -335,6 +388,7 @@ export function buildVerificationReportRows(
       safe(t.vehicle_name),
       safe(t.vehicle_type),
       safe(t.client_slug),
+      companyShortName(t, maps),
       safe(t.status),
       feName,
       cat,
@@ -356,11 +410,7 @@ export function downloadFePerformanceReport(feScorecards: FeScorecard[]): void {
 
 export function downloadOperationsReport(
   tickets: Record<string, unknown>[],
-  ctx: {
-    sla?: Record<string, unknown>[];
-    ticket_assignments?: Record<string, unknown>[];
-    field_executives?: Record<string, unknown>[];
-  }
+  ctx: OperationsReportExportContext
 ): void {
   const maps = buildEnrichmentMapsFromContext(ctx);
   createCSVDownload(
@@ -371,11 +421,7 @@ export function downloadOperationsReport(
 
 export function downloadSlaReport(
   tickets: Record<string, unknown>[],
-  ctx: {
-    sla?: Record<string, unknown>[];
-    ticket_assignments?: Record<string, unknown>[];
-    field_executives?: Record<string, unknown>[];
-  }
+  ctx: OperationsReportExportContext
 ): void {
   const maps = buildEnrichmentMapsFromContext(ctx);
   createCSVDownload(buildSlaReportRows(tickets, maps), `sla-report-${todayIST()}.csv`);
@@ -383,11 +429,7 @@ export function downloadSlaReport(
 
 export function downloadResolutionReport(
   tickets: Record<string, unknown>[],
-  ctx?: {
-    sla?: Record<string, unknown>[];
-    ticket_assignments?: Record<string, unknown>[];
-    field_executives?: Record<string, unknown>[];
-  }
+  ctx?: OperationsReportExportContext
 ): void {
   const maps = ctx ? buildEnrichmentMapsFromContext(ctx) : undefined;
   createCSVDownload(
@@ -398,11 +440,7 @@ export function downloadResolutionReport(
 
 export function downloadVerificationReport(
   tickets: Record<string, unknown>[],
-  ctx: {
-    sla?: Record<string, unknown>[];
-    ticket_assignments?: Record<string, unknown>[];
-    field_executives?: Record<string, unknown>[];
-  }
+  ctx: OperationsReportExportContext
 ): void {
   const maps = buildEnrichmentMapsFromContext(ctx);
   createCSVDownload(

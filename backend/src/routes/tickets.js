@@ -79,6 +79,9 @@ import { updateSlaByTicketId } from "../repositories/slaRepository.js";
 import { getAssignmentById } from "../repositories/assignmentRepository.js";
 import { findUserNameById } from "../repositories/userRepository.js";
 import { findActiveResolutionTokenForTicket } from "../repositories/feActionTokenRepository.js";
+import { hideCommentImages } from "../services/imageVisibilityService.js";
+import { getCloseFormFields, validateCloseFormSnapshot } from "../services/closeFormService.js";
+import { resolveResolutionLocationForClose } from "../services/resolutionLocationService.js";
 
 const router = express.Router();
 
@@ -89,6 +92,23 @@ router.use(requireTenantOrSuperAdmin);
 router.use(logTicketsAuthObservability);
 
 router.param("id", validateUuidParam);
+
+router.post("/:id/comments/:commentId/hide-images", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
+  const parsed = z.object({ reason: z.string().max(2000).optional().nullable() }).safeParse(req.body ?? {});
+  if (!parsed.success) return jsonRes(res, 400, { error: "Invalid body", details: parsed.error.flatten() });
+  try {
+    const outcome = await hideCommentImages({
+      req,
+      ticketId: req.params.id,
+      commentId: req.params.commentId,
+      reason: parsed.data.reason,
+    });
+    if (!outcome.ok) return jsonRes(res, outcome.status ?? 400, { error: outcome.error });
+    return jsonOk(res, outcome);
+  } catch (error) {
+    return jsonRes(res, 500, { error: safeDbErrorForClient(error, "Failed to hide image") });
+  }
+});
 
 const assignBodySchema = z.object({
   feId: z.string().uuid(),
@@ -165,6 +185,7 @@ const rejectBodySchema = z.object({
 });
 
 const closeBodySchema = z.object({
+  resolution_location_id: z.string().uuid({ message: "Resolution location is required." }),
   /** UI: Resolution Remarks — required non-empty after trim. Stored as verification_remarks. */
   verification_remarks: z
     .string({ required_error: "Resolution remarks are required." })
@@ -183,6 +204,7 @@ const closeBodySchema = z.object({
    * Backward-compatible with pre-checkbox clients that only sent this field.
    */
   notification_email: z.string().max(2000).optional().nullable(),
+  close_form_values: z.record(z.union([z.string().max(12000), z.number(), z.null()])).optional().default({}),
 });
 
 const reviewCompleteBodySchema = z.object({
@@ -1284,8 +1306,10 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
     review_notes,
     resolution_category,
     resolution_other_details,
+    resolution_location_id,
     notification_email,
     recipients: requestedRecipientsRaw,
+    close_form_values,
   } = bodyParsed.data;
   const requestedRecipients = requestedRecipientsRaw ?? [];
   console.log("[TENANT_GUARD] close_attempt", {
@@ -1327,7 +1351,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
 
   try {
     const selectFields =
-      "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, organisation_id, status, current_assignment_id, client_slug, remarks, short_description";
+      "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location, organisation_id, status, current_assignment_id, client_slug, remarks, short_description, priority, resolution_location_name";
 
     const { data: existing, error: loadErr } = await getTicketByIdUnscoped(ticketId, selectFields);
 
@@ -1348,6 +1372,16 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
     }
     if (!isTenantAllowed(req, existing.organisation_id)) {
       return denyTenantMismatch(res);
+    }
+    const closeFormFields = await getCloseFormFields(existing.organisation_id);
+    const closeFormResult = validateCloseFormSnapshot(closeFormFields, close_form_values);
+    if (!closeFormResult.ok) return jsonRes(res, 400, { error: closeFormResult.error });
+    const resolutionLocation = await resolveResolutionLocationForClose(
+      resolution_location_id,
+      existing.organisation_id
+    );
+    if (resolutionLocation.error) {
+      return jsonRes(res, resolutionLocation.error.status, { error: resolutionLocation.error.message });
     }
 
     const closeValidation = await validateTicketClosePreconditions({
@@ -1411,12 +1445,18 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       verification_remarks: remarksValue,
       review_notes: reviewNotesValue,
       resolution_category: resolutionCategoryValue,
+      close_form_snapshot: closeFormResult.snapshot,
+      resolution_location_id: resolutionLocation.data.id,
+      resolution_location_name: resolutionLocation.data.name,
     };
 
     let result = await updateTicketCloseWithFallback(ticketId, updatePayload, {
       status: "RESOLVED",
       resolved_at: new Date(),
       ...(remarksValue ? { verification_remarks: remarksValue } : {}),
+      ...(closeFormFields.length > 0 ? { close_form_snapshot: closeFormResult.snapshot } : {}),
+      resolution_location_id: resolutionLocation.data.id,
+      resolution_location_name: resolutionLocation.data.name,
     });
 
     if (result.error) {
@@ -1493,6 +1533,14 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       });
     } else {
       try {
+        let assignedFeName = null;
+        if (existing.current_assignment_id) {
+          const { data: assignment } = await getAssignmentById(existing.current_assignment_id, "fe_id");
+          if (assignment?.fe_id) {
+            const { data: fe } = await findUserNameById(assignment.fe_id);
+            assignedFeName = fe?.name?.trim() || null;
+          }
+        }
         let sentCount = 0;
         let attemptedAny = false;
         const reasons = [];
@@ -1515,6 +1563,11 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
             category: ticket.category ?? null,
             issueType: resolutionCategoryValue || ticket.issue_type || null,
             location: ticket.location ?? null,
+            assignedFeName,
+            priority: ticket.priority ?? existing.priority ?? null,
+            resolutionLocationName: ticket.resolution_location_name ?? existing.resolution_location_name ?? null,
+            closeFormSnapshot: closeFormResult.snapshot,
+            timelineSummary: `Ticket resolved by ${closedByName}`,
           });
           attemptedAny = attemptedAny || Boolean(emailResult?.attempted);
           if (emailResult?.sent) sentCount += 1;
@@ -1569,9 +1622,11 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
         author_id: req.appUser.id,
         organisation_id: existing.organisation_id ?? ticket.organisation_id ?? null,
         body:
-          closeRecipients.length > 0
+          `${closeRecipients.length > 0
             ? `Closure email sent to ${closeRecipients.length} recipient(s)`
-            : "Ticket closed (no closure email recipients)",
+            : "Ticket closed (no closure email recipients)"}${
+              closeFormFields.length ? ` · Verify & Close form submitted (${closeFormFields.length} field(s))` : ""
+            }`,
         attachments: {
           closure_email: {
             closed_by_user_id: req.appUser.id,
@@ -1579,6 +1634,8 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
             closed_at: nowIso,
             recipients: closeRecipients,
             resolution_email_status,
+            close_form_snapshot: closeFormResult.snapshot,
+            resolution_location_name: resolutionLocation.data.name,
           },
         },
       });

@@ -19,6 +19,7 @@ import {
   buildSlaReportRows,
   buildResolutionReportRows,
   buildVerificationReportRows,
+  type OperationsReportExportContext,
 } from "@/lib/operationsReportExport";
 import { todayIST } from "@/lib/dateUtils";
 
@@ -35,11 +36,7 @@ const SECTION_FILLS = {
 
 export type CompleteOperationsReportInput = {
   tickets: Record<string, unknown>[];
-  ctx: {
-    sla?: Record<string, unknown>[];
-    ticket_assignments?: Record<string, unknown>[];
-    field_executives?: Record<string, unknown>[];
-  };
+  ctx: OperationsReportExportContext;
   feScorecards: FeScorecard[];
   opsHealth?: OperationalHealth;
   executiveSummary?: ExecutiveSummary;

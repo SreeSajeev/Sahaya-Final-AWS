@@ -10,6 +10,9 @@ export type FEActionTokenLite = {
 
 export type FETicketRow = Ticket & {
   client_name?: string | null;
+  /** Tenant client contact details, enriched by the JWT-scoped FE API. */
+  contact_person?: string | null;
+  contact_number?: string | null;
   remarks?: string | null;
   /** Manager-selected due from ticket_assignments.assignment_due_at (optional). */
   assignment_due?: string | null;

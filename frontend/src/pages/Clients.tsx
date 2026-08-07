@@ -62,6 +62,7 @@ import type { Organisation, TenantClient } from "@/lib/types";
 import { Link, Navigate } from "react-router-dom";
 import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
 import { cn } from "@/lib/utils";
+import { suggestCompanyShortName } from "@/lib/companyShortName";
 
 function slugifyName(name: string): string {
   return name
@@ -76,6 +77,7 @@ function slugifyName(name: string): string {
 type ClientFormState = {
   name: string;
   slug: string;
+  company_short_name: string;
   website: string;
   contact_name: string;
   contact_email: string;
@@ -87,6 +89,7 @@ type ClientFormState = {
 const emptyForm = (organisationId: string): ClientFormState => ({
   name: "",
   slug: "",
+  company_short_name: "",
   website: "",
   contact_name: "",
   contact_email: "",
@@ -141,6 +144,7 @@ export default function Clients() {
     return clients.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
+        (c.company_short_name ?? "").toLowerCase().includes(q) ||
         c.slug.toLowerCase().includes(q) ||
         (c.contact_email ?? "").toLowerCase().includes(q)
     );
@@ -159,6 +163,7 @@ export default function Clients() {
     setForm({
       name: c.name,
       slug: c.slug,
+      company_short_name: c.company_short_name ?? "",
       website: c.website ?? "",
       contact_name: c.contact_name ?? "",
       contact_email: c.contact_email ?? "",
@@ -171,7 +176,7 @@ export default function Clients() {
 
   const handleSave = async () => {
     if (!form.name.trim() || !form.slug.trim()) {
-      toast({ variant: "destructive", title: "Name and short name are required" });
+      toast({ variant: "destructive", title: "Name and slug are required" });
       return;
     }
     if (isSuperAdmin && !form.organisation_id) {
@@ -182,6 +187,7 @@ export default function Clients() {
     const body = {
       name: form.name.trim(),
       slug: form.slug.trim(),
+      company_short_name: form.company_short_name.trim() || null,
       website: form.website.trim() || null,
       contact_name: form.contact_name.trim() || null,
       contact_email: form.contact_email.trim() || null,
@@ -237,7 +243,7 @@ export default function Clients() {
         <div className="space-y-6">
           <PageHeader
             title="Clients"
-            description="Manage clients for your tenant. Tickets use the client short name."
+            description="Manage official client names, display short names, and ticket slugs."
             icon={Briefcase}
             actions={
               <Button onClick={openCreate} size="sm" className="gap-2">
@@ -297,8 +303,9 @@ export default function Clients() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className={dataTableHeadClassName}>Name</TableHead>
-                      <TableHead className={dataTableHeadClassName}>Short Name</TableHead>
+                      <TableHead className={dataTableHeadClassName}>Official Name</TableHead>
+                      <TableHead className={dataTableHeadClassName}>Company Short Name</TableHead>
+                      <TableHead className={dataTableHeadClassName}>Slug</TableHead>
                       {isSuperAdmin ? <TableHead className={dataTableHeadClassName}>Tenant</TableHead> : null}
                       <TableHead className={dataTableHeadClassName}>Contact</TableHead>
                       <TableHead className={dataTableHeadClassName}>Status</TableHead>
@@ -313,6 +320,7 @@ export default function Clients() {
                             {c.name}
                           </Link>
                         </TableCell>
+                        <TableCell className={typography.body}>{c.company_short_name?.trim() || "—"}</TableCell>
                         <TableCell className={cn(typography.body, "font-mono")}>{c.slug}</TableCell>
                         {isSuperAdmin ? (
                           <TableCell className={typography.body}>
@@ -356,7 +364,7 @@ export default function Clients() {
             <DialogHeader>
               <DialogTitle>{editing ? "Edit client" : "Add client"}</DialogTitle>
               <DialogDescription>
-                Short Name is stored on tickets as client_slug. Use lowercase letters, numbers, and hyphens.
+                The slug is stored on tickets as client_slug. Company Short Name is a display label.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-2">
@@ -391,17 +399,28 @@ export default function Clients() {
                       ...f,
                       name,
                       slug: !editing && !f.slug ? slugifyName(name) : f.slug,
+                      company_short_name:
+                        !editing && !f.company_short_name ? suggestCompanyShortName(name) : f.company_short_name,
                     }));
                   }}
                 />
               </div>
               <div className="space-y-2">
-                <Label>Short Name *</Label>
+                <Label>Company Short Name</Label>
+                <Input
+                  value={form.company_short_name}
+                  onChange={(e) => setForm((f) => ({ ...f, company_short_name: e.target.value }))}
+                  placeholder="Suggested from official name"
+                  maxLength={80}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Slug *</Label>
                 <Input
                   value={form.slug}
                   onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))}
                   className="font-mono"
-                  placeholder="Enter short name"
+                  placeholder="Enter slug"
                   disabled={Boolean(editing)}
                 />
               </div>
@@ -465,7 +484,7 @@ export default function Clients() {
               <AlertDialogTitle>Deactivate client?</AlertDialogTitle>
               <AlertDialogDescription>
                 This sets {deleteTarget?.name} ({deleteTarget?.slug}) to inactive. Existing tickets keep their
-                client short name (`client_slug`).
+                client slug (`client_slug`).
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

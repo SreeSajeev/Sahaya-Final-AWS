@@ -21,6 +21,7 @@ export const TICKET_EXPORT_APPENDED_HEADERS = [
   "sla_resolution_deadline",
   "resolution_time_hours",
   "resolution_category",
+  "close_form_values",
 ] as const;
 
 export type TicketExportRow = Record<string, unknown>;
@@ -61,6 +62,20 @@ function safeStr(v: unknown): string {
 
 function boolYesNo(v: boolean | undefined | null): string {
   return v === true ? "Yes" : v === false ? "No" : "";
+}
+
+function flattenCloseFormSnapshot(snapshot: unknown): string {
+  if (!snapshot || typeof snapshot !== "object") return "";
+  const value = snapshot as { fields?: Array<{ id?: unknown; label?: unknown }>; values?: Record<string, unknown> };
+  if (!Array.isArray(value.fields)) return "";
+  return value.fields
+    .map((field) => {
+      const id = typeof field.id === "string" ? field.id : "";
+      const label = typeof field.label === "string" ? field.label : id;
+      return id && value.values?.[id] != null ? `${label}: ${safeStr(value.values[id])}` : "";
+    })
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function countProofImages(attachments: unknown): number {
@@ -193,5 +208,6 @@ export function getAppendedTicketExportValues(
     safeStr(sla?.resolution_deadline),
     resolutionTimeHours(ticket),
     resolutionCategory,
+    flattenCloseFormSnapshot(ticket.close_form_snapshot),
   ];
 }

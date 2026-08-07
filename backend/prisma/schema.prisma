@@ -52,6 +52,12 @@ model Ticket {
   shortDescription      String?   @map("short_description")
   reviewNotes           String?   @map("review_notes")
   resolutionCategory    String?   @map("resolution_category")
+  /// FK to tenant_resolution_locations (nullable for historical tickets).
+  resolutionLocationId  String?   @map("resolution_location_id") @db.Uuid
+  /// Snapshot of attended location name at Verify & Close (immutable).
+  resolutionLocationName String?  @map("resolution_location_name")
+  /// Immutable snapshot of configurable Verify & Close field defs + values.
+  closeFormSnapshot     Json?     @map("close_form_snapshot")
   /// Manager rejection reason (queryable for reports). Historical rows may be null.
   rejectionReason       String?   @map("rejection_reason")
   rejectedAt            DateTime? @map("rejected_at") @db.Timestamptz(6)
@@ -65,10 +71,12 @@ model Ticket {
   escalationLevel       Int?      @map("escalation_level")
   assignments           TicketAssignment[]
   clientVehicle         ClientVehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  resolutionLocation    TenantResolutionLocation? @relation(fields: [resolutionLocationId], references: [id], onDelete: SetNull)
 
   @@index([vehicleId], map: "tickets_vehicle_id_idx")
   @@index([responseDueAt], map: "tickets_response_due_at_idx")
   @@index([resolutionDueAt], map: "tickets_resolution_due_at_idx")
+  @@index([resolutionLocationId], map: "tickets_resolution_location_id_idx")
   @@map("tickets")
 }
 
@@ -241,20 +249,24 @@ model AuditLog {
 }
 
 model TenantClient {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organisationId String    @map("organisation_id") @db.Uuid
-  name           String
-  slug           String
-  website        String?
-  contactName    String?   @map("contact_name")
-  contactEmail   String?   @map("contact_email")
-  contactPhone   String?   @map("contact_phone")
-  status         String    @default("active")
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  vehicles       ClientVehicle[]
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId    String    @map("organisation_id") @db.Uuid
+  name              String
+  slug              String
+  /// Operator-friendly search alias (not the slug). Nullable for historical rows.
+  companyShortName  String?   @map("company_short_name")
+  website           String?
+  contactName       String?   @map("contact_name")
+  contactEmail      String?   @map("contact_email")
+  contactPhone      String?   @map("contact_phone")
+  status            String    @default("active")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  vehicles          ClientVehicle[]
 
   @@unique([organisationId, slug], map: "tenant_clients_organisation_slug_unique")
+  @@index([companyShortName], map: "tenant_clients_company_short_name_idx")
+  @@index([organisationId], map: "tenant_clients_organisation_id_idx")
   @@map("tenant_clients")
 }
 
@@ -281,6 +293,26 @@ model ClientVehicle {
   @@index([clientId], map: "client_vehicles_client_id_idx")
   @@index([vehicleNumber], map: "client_vehicles_vehicle_number_idx")
   @@map("client_vehicles")
+}
+
+/// Tenant-scoped master of attended / resolution locations (Verify & Close).
+model TenantResolutionLocation {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String    @map("organisation_id") @db.Uuid
+  name           String
+  code           String?
+  description    String?
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  createdBy      String?   @map("created_by") @db.Uuid
+  updatedBy      String?   @map("updated_by") @db.Uuid
+  tickets        Ticket[]
+
+  @@unique([organisationId, name], map: "tenant_resolution_locations_org_name_unique")
+  @@index([organisationId], map: "tenant_resolution_locations_organisation_id_idx")
+  @@index([isActive], map: "tenant_resolution_locations_is_active_idx")
+  @@map("tenant_resolution_locations")
 }
 
 model FieldExecutive {

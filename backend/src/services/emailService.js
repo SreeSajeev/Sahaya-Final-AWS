@@ -237,6 +237,19 @@ export async function resolveClientDisplayNameForEmail(ticket) {
   return null;
 }
 
+/** Compact email label that preserves the official name and adds a configured short name. */
+export async function resolveConstrainedClientDisplayNameForEmail(ticket) {
+  const slug = ticket?.client_slug != null ? String(ticket.client_slug).trim() : "";
+  const orgId = ticket?.organisation_id ?? null;
+  if (slug) {
+    const { data: client } = await findActiveTenantClientBySlug(slug, orgId);
+    const officialName = client?.name != null ? String(client.name).trim() : "";
+    const shortName = client?.company_short_name != null ? String(client.company_short_name).trim() : "";
+    if (officialName) return shortName ? `${officialName} (${shortName})` : officialName;
+  }
+  return resolveClientDisplayNameForEmail(ticket);
+}
+
 async function fetchSlaDeadlines(ticketId) {
   if (!ticketId) return null;
   const { data: slaRows, error } = await listSlaRowsByTicketIds(
@@ -262,8 +275,10 @@ function buildTicketDetailsTable({
   assignmentDueAt = null,
   /** Human-readable reporter line (staff / email). */
   reportedByDisplay = null,
+  /** Compact official client label for operational email detail lines. */
+  clientName = null,
 }) {
-  const clientName = deriveClientName(ticket?.opened_by_email);
+  const displayClientName = clientName ?? deriveClientName(ticket?.opened_by_email);
 
   const priorityLabel = priorityDisplayLabel(ticket?.priority_level, ticket?.priority);
 
@@ -297,7 +312,7 @@ function buildTicketDetailsTable({
     `Vehicle Type: ${formatDetail(ticket?.vehicle_type)}`,
     `Registration Number: ${formatDetail(ticket?.registration_number)}`,
     `Priority: ${formatDetail(priorityLabel)}`,
-    `Client Name: ${formatDetail(clientName)}`,
+    `Client Name: ${formatDetail(displayClientName)}`,
     `Reported by: ${formatDetail(reportedByDisplay)}`,
     `Ticket Created Time: ${formatDetail(createdAt)}`,
     `Current Status: ${formatDetail(ticket?.status)}`,
@@ -549,7 +564,8 @@ export async function sendFEAssignmentEmail({
 
     const ticket = await fetchTicketByNumber(ticketNumber);
     const sla = ticket?.id ? await fetchSlaDeadlines(ticket.id) : null;
-    const detailsBlock = ticket ? buildTicketDetailsTable({ ticket, sla }) : "Ticket details unavailable.";
+    const clientName = ticket ? await resolveConstrainedClientDisplayNameForEmail(ticket) : null;
+    const detailsBlock = ticket ? buildTicketDetailsTable({ ticket, sla, clientName }) : "Ticket details unavailable.";
 
     const subjectTag = generateTicketSubjectTag(ticketNumber);
     console.log("EMAIL_TRIGGER_ASSIGNMENT", redactEmail(fe.email), "ticketNumber=", ticketNumber);
@@ -600,9 +616,14 @@ export async function sendFEAssignmentWorkflowEmail({
 
     const ticket = await fetchTicketByNumber(ticketNumber);
     const sla = ticket?.id ? await fetchSlaDeadlines(ticket.id) : null;
-    const reportedByDisplay = ticket ? await resolveReporterDisplayForEmail(ticket.opened_by_email) : null;
+    const [clientName, reportedByDisplay] = ticket
+      ? await Promise.all([
+          resolveConstrainedClientDisplayNameForEmail(ticket),
+          resolveReporterDisplayForEmail(ticket.opened_by_email),
+        ])
+      : [null, null];
     const detailsBlock = ticket
-      ? buildTicketDetailsTable({ ticket, sla, assignmentDueAt, reportedByDisplay })
+      ? buildTicketDetailsTable({ ticket, sla, assignmentDueAt, reportedByDisplay, clientName })
       : "Ticket details unavailable.";
     const assignmentDueIntro = formatAssignmentDueEmailIntro(assignmentDueAt);
 
@@ -664,7 +685,8 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
 
     const ticket = await fetchTicketByNumber(ticketNumber);
     const sla = ticket?.id ? await fetchSlaDeadlines(ticket.id) : null;
-    const detailsBlock = ticket ? buildTicketDetailsTable({ ticket, sla }) : "Ticket details unavailable.";
+    const clientName = ticket ? await resolveConstrainedClientDisplayNameForEmail(ticket) : null;
+    const detailsBlock = ticket ? buildTicketDetailsTable({ ticket, sla, clientName }) : "Ticket details unavailable.";
 
     const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
     const actionUrl = `${APP_BASE_URL}/fe/action/${token}`;
@@ -709,6 +731,11 @@ export async function sendClientResolutionEmail({
   /** Manager resolution remarks (preferred over merged OTHER+remarks when provided). */
   resolutionRemarks = null,
   reviewNotes = null,
+  assignedFeName = null,
+  priority = null,
+  resolutionLocationName = null,
+  closeFormSnapshot = null,
+  timelineSummary = null,
 }) {
   /** @type {{ attempted: boolean; sent: boolean; skipped: boolean; reason: string | null }} */
   const out = {
@@ -775,7 +802,9 @@ export async function sendClientResolutionEmail({
         : mergedTicket.location;
 
     const closureLocation =
-      reviewNotes != null && String(reviewNotes).trim() !== ""
+      resolutionLocationName != null && String(resolutionLocationName).trim() !== ""
+        ? String(resolutionLocationName).trim()
+        : reviewNotes != null && String(reviewNotes).trim() !== ""
         ? String(reviewNotes).trim()
         : mergedTicket.review_notes != null && String(mergedTicket.review_notes).trim() !== ""
           ? String(mergedTicket.review_notes).trim()
@@ -794,6 +823,10 @@ export async function sendClientResolutionEmail({
       resolvedAt: mergedTicket.resolved_at
         ? formatDateTime(mergedTicket.resolved_at)
         : null,
+      assignedFeName,
+      priority: priority ?? mergedTicket.priority,
+      closeFormSnapshot,
+      timelineSummary,
     };
 
     const detailsBlock = buildResolutionEmailPlainText(detailsArgs);

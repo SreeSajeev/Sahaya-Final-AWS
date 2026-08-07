@@ -64,6 +64,9 @@ export function extractProofImageSources(attachments: unknown): string[] {
   if (typeof attachments !== "object") return [];
 
   const att = attachments as Record<string, unknown>;
+  const visibility = att.image_visibility as Record<string, unknown> | undefined;
+  const assignmentContext = att.assignment_context as Record<string, unknown> | undefined;
+  if (visibility?.hidden_at || assignmentContext?.deleted_at) return [];
   const collected: string[] = [];
 
   if (Array.isArray(att.images)) {

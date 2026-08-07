@@ -46,6 +46,7 @@ const defaultConfig: OrgTicketConfig = {
   ticketPrefixDisplay: DEFAULT_TICKET_PREFIX_DISPLAY,
   fieldExecutiveLabel: DEFAULT_FIELD_EXECUTIVE_LABEL,
   allowManualVehicle: false,
+  closeFormFields: [],
 };
 
 function normalizeLoadedConfig(raw: Record<string, unknown> | null | undefined): OrgTicketConfig {
@@ -79,6 +80,9 @@ function normalizeLoadedConfig(raw: Record<string, unknown> | null | undefined):
         ? v.fieldExecutiveLabel.trim()
         : DEFAULT_FIELD_EXECUTIVE_LABEL,
     allowManualVehicle: v.allowManualVehicle === true,
+    closeFormFields: Array.isArray(v.closeFormFields)
+      ? (v.closeFormFields as OrgTicketConfig["closeFormFields"])
+      : [],
   };
 }
 
@@ -92,6 +96,7 @@ function buildSavePayload(
     categories: local.categories,
     issueTypes: local.issueTypes,
     resolutionCategories: local.resolutionCategories ?? [],
+    closeFormFields: local.closeFormFields ?? [],
     sla: local.sla,
     ...(isTenantConfigurationEnabled()
       ? {
@@ -280,6 +285,30 @@ export default function TicketSettings() {
       resolutionCategories: (c.resolutionCategories ?? []).filter((x) => x !== item),
     }));
   };
+  const addCloseFormField = () => {
+    const fields = localConfig.closeFormFields ?? [];
+    if (fields.length >= 20) return;
+    setLocalConfig((config) => ({
+      ...config,
+      closeFormFields: [...fields, {
+        id: `close_${crypto.randomUUID()}`,
+        label: "New field",
+        required: false,
+        displayOrder: fields.length,
+        fieldType: "text",
+      }],
+    }));
+  };
+  const updateCloseFormField = (id: string, patch: Partial<NonNullable<OrgTicketConfig["closeFormFields"]>[number]>) =>
+    setLocalConfig((config) => ({
+      ...config,
+      closeFormFields: (config.closeFormFields ?? []).map((field) => field.id === id ? { ...field, ...patch } : field),
+    }));
+  const removeCloseFormField = (id: string) =>
+    setLocalConfig((config) => ({
+      ...config,
+      closeFormFields: (config.closeFormFields ?? []).filter((field) => field.id !== id).map((field, displayOrder) => ({ ...field, displayOrder })),
+    }));
 
   if (!isSuperAdmin && !organisationId) {
     return (
@@ -583,6 +612,33 @@ export default function TicketSettings() {
                       </div>
                     )}
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className={typography.sectionTitle}>Verify &amp; Close form</CardTitle>
+                  <CardDescription className={typography.body}>
+                    Add configurable fields captured when a ticket is closed. Saved ticket snapshots preserve historical fields.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(localConfig.closeFormFields ?? []).map((field, index) => (
+                    <div key={field.id} className="grid gap-2 rounded-md border p-3 md:grid-cols-[2fr_1fr_1fr_auto]">
+                      <Input value={field.label} onChange={(e) => updateCloseFormField(field.id, { label: e.target.value })} placeholder="Field label" disabled={readOnly} />
+                      <Select value={field.fieldType} onValueChange={(fieldType) => updateCloseFormField(field.id, { fieldType: fieldType as typeof field.fieldType })} disabled={readOnly}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {["text", "textarea", "dropdown", "date", "number"].map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={field.required} onChange={(e) => updateCloseFormField(field.id, { required: e.target.checked })} disabled={readOnly} /> Required</label>
+                      {!readOnly && <Button type="button" variant="ghost" size="icon" onClick={() => removeCloseFormField(field.id)} aria-label={`Remove ${field.label || `field ${index + 1}`}`}><X className="h-4 w-4" /></Button>}
+                      <Input className="md:col-span-2" value={field.placeholder ?? ""} onChange={(e) => updateCloseFormField(field.id, { placeholder: e.target.value })} placeholder="Placeholder (optional)" disabled={readOnly} />
+                      {field.fieldType === "dropdown" && <Input className="md:col-span-2" value={(field.options ?? []).join(", ")} onChange={(e) => updateCloseFormField(field.id, { options: e.target.value.split(",").map((option) => option.trim()).filter(Boolean) })} placeholder="Options, comma-separated" disabled={readOnly} />}
+                    </div>
+                  ))}
+                  {!readOnly && <Button type="button" variant="outline" onClick={addCloseFormField}><Plus className="mr-2 h-4 w-4" />Add close form field</Button>}
                 </CardContent>
               </Card>
 

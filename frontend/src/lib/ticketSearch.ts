@@ -87,6 +87,7 @@ export type TicketSearchFields = {
 /** Serializable lookup for client/org display names (All Tickets search). */
 export type TicketClientSearchLookup = {
   clientNameBySlug: Record<string, string>;
+  clientCompanyShortNameBySlug: Record<string, string>;
   organisationNameById: Record<string, string>;
   organisationSlugById: Record<string, string>;
 };
@@ -114,14 +115,17 @@ function normalizeSlugKey(slug: string | null | undefined): string {
  */
 export function buildTicketClientSearchLookup(
   organisations: { id: string; name: string; slug?: string | null }[],
-  tenantClients: { slug: string; name: string }[]
+  tenantClients: { slug: string; name: string; company_short_name?: string | null }[]
 ): TicketClientSearchLookup {
   const clientNameBySlug: Record<string, string> = {};
+  const clientCompanyShortNameBySlug: Record<string, string> = {};
   for (const client of tenantClients) {
     const key = normalizeSlugKey(client.slug);
     if (!key) continue;
     const name = String(client.name ?? "").trim();
     if (name) clientNameBySlug[key] = name;
+    const companyShortName = String(client.company_short_name ?? "").trim();
+    if (companyShortName) clientCompanyShortNameBySlug[key] = companyShortName;
   }
 
   const organisationNameById: Record<string, string> = {};
@@ -139,7 +143,7 @@ export function buildTicketClientSearchLookup(
     }
   }
 
-  return { clientNameBySlug, organisationNameById, organisationSlugById };
+  return { clientNameBySlug, clientCompanyShortNameBySlug, organisationNameById, organisationSlugById };
 }
 
 /**
@@ -149,7 +153,7 @@ export function buildTicketClientSearchLookup(
 export function resolveTicketSearchHints(
   searchRaw: string,
   organisations: { id: string; name: string; slug?: string | null; short_name?: string | null }[],
-  tenantClients: { slug: string; name: string }[]
+  tenantClients: { slug: string; name: string; company_short_name?: string | null }[]
 ): TicketSearchHints {
   const term = sanitizeTicketSearchInput(searchRaw).toLowerCase();
   if (!term) return {};
@@ -158,7 +162,12 @@ export function resolveTicketSearchHints(
   for (const client of tenantClients) {
     const slug = String(client.slug ?? "").toLowerCase();
     const name = String(client.name ?? "").toLowerCase();
-    if ((slug && slug.includes(term)) || (name && name.includes(term))) {
+    const companyShortName = String(client.company_short_name ?? "").toLowerCase();
+    if (
+      (slug && slug.includes(term)) ||
+      (name && name.includes(term)) ||
+      (companyShortName && companyShortName.includes(term))
+    ) {
       if (client.slug) extraClientSlugs.add(String(client.slug).trim());
     }
   }
@@ -243,6 +252,10 @@ function collectTicketSearchFieldValues(
     clientSlugKey && lookup?.clientNameBySlug?.[clientSlugKey]
       ? lookup.clientNameBySlug[clientSlugKey]
       : null;
+  const clientCompanyShortName =
+    clientSlugKey && lookup?.clientCompanyShortNameBySlug?.[clientSlugKey]
+      ? lookup.clientCompanyShortNameBySlug[clientSlugKey]
+      : null;
   const organisationName =
     ticket.organisation_id && lookup?.organisationNameById?.[ticket.organisation_id]
       ? lookup.organisationNameById[ticket.organisation_id]
@@ -272,6 +285,7 @@ function collectTicketSearchFieldValues(
     ticket.resolution_category,
     ticket.client_slug,
     clientName,
+    clientCompanyShortName,
     organisationName,
     organisationSlug,
     extras?.assignedFeName,

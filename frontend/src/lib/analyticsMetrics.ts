@@ -783,7 +783,7 @@ export function computeOperationalHealth(
     const status = String(t.status ?? "");
     const ageH = ticketAgeHours(t, nowMs);
     const ageDays = ageH / 24;
-    const location = String(t.location ?? "Unknown").trim() || "Unknown";
+    const location = String(t.resolution_location_name ?? t.location ?? "Unknown").trim() || "Unknown";
     const category = String(t.category ?? "Uncategorized").trim() || "Uncategorized";
 
     if (

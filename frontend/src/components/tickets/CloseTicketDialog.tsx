@@ -37,6 +37,7 @@ import {
 } from "@/constants/complaintCategories";
 import { useOrgTicketConfigForClose } from "@/hooks/useOrgTicketConfigForClose";
 import { fetchJson } from "@/lib/backendDataApi";
+import { listResolutionLocations, type ResolutionLocation } from "@/lib/resolutionLocationsApi";
 
 type ClosureRecipient = {
   id: string;
@@ -67,7 +68,9 @@ interface CloseTicketDialogProps {
     resolutionCategory: string,
     recipients: string[],
     notificationEmail?: string | null,
-    resolutionOtherDetails?: string | null
+    resolutionOtherDetails?: string | null,
+    resolutionLocationId?: string,
+    closeFormValues?: Record<string, string | number | null>
   ) => void;
   isPending: boolean;
 }
@@ -104,9 +107,12 @@ export function CloseTicketDialog({
   const [context, setContext] = useState<ClosureContext | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
+  const [resolutionLocations, setResolutionLocations] = useState<ResolutionLocation[]>([]);
+  const [resolutionLocationId, setResolutionLocationId] = useState("");
+  const [closeFormValues, setCloseFormValues] = useState<Record<string, string | number | null>>({});
 
   const isOtherCategory = resolutionCategory === RESOLUTION_CATEGORY_OTHER;
-  const { resolutionCategoryOptions } = useOrgTicketConfigForClose({
+  const { resolutionCategoryOptions, closeFormFields } = useOrgTicketConfigForClose({
     organisationId: ticket.organisation_id ?? null,
     enabled: open,
   });
@@ -115,10 +121,12 @@ export function CloseTicketDialog({
     canClose &&
     resolutionCategory.trim() !== "" &&
     remarks.trim() !== "" &&
+    resolutionLocationId !== "" &&
     (!isOtherCategory || resolutionOtherDetails.trim() !== "") &&
     isValidNotificationEmailField(notificationEmail) &&
     !contextLoading &&
-    !contextError;
+    !contextError &&
+    closeFormFields.every((field) => !field.required || String(closeFormValues[field.id] ?? "").trim() !== "");
 
   useEffect(() => {
     if (!open) {
@@ -130,6 +138,8 @@ export function CloseTicketDialog({
       setSelectedEmails(new Set());
       setContext(null);
       setContextError(null);
+      setResolutionLocationId("");
+      setCloseFormValues({});
       return;
     }
 
@@ -143,6 +153,7 @@ export function CloseTicketDialog({
         setContext(data);
         const emails = (data.recipients ?? []).map((r) => r.email);
         setSelectedEmails(new Set(emails));
+        setResolutionLocations(await listResolutionLocations(true));
       } catch (err) {
         if (cancelled) return;
         setContextError(err instanceof Error ? err.message : "Failed to load closure recipients");
@@ -174,7 +185,9 @@ export function CloseTicketDialog({
       resolutionCategory.trim(),
       Array.from(selectedEmails),
       emailTrim !== "" ? emailTrim : null,
-      isOtherCategory ? resolutionOtherDetails.trim() : null
+      isOtherCategory ? resolutionOtherDetails.trim() : null,
+      resolutionLocationId,
+      closeFormValues
     );
   };
 
@@ -274,10 +287,25 @@ export function CloseTicketDialog({
                         ) : null}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="close-review-notes">Location</Label>
+                        <Label htmlFor="close-resolution-location">Resolution Location *</Label>
+                        <Select value={resolutionLocationId} onValueChange={setResolutionLocationId}>
+                          <SelectTrigger id="close-resolution-location">
+                            <SelectValue placeholder="Select attended location" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {resolutionLocations.map((location) => (
+                              <SelectItem key={location.id} value={location.id}>
+                                {location.name}{location.code ? ` (${location.code})` : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="close-review-notes">Optional closure notes</Label>
                         <Textarea
                           id="close-review-notes"
-                          placeholder="Site or work location for this resolution (optional)"
+                          placeholder="Optional notes for this closure"
                           value={reviewNotes}
                           onChange={(e) => setReviewNotes(e.target.value)}
                           className="min-h-[100px] whitespace-pre-wrap"
@@ -287,6 +315,31 @@ export function CloseTicketDialog({
                           replace the ticket site location.
                         </p>
                       </div>
+                      {closeFormFields.map((field) => {
+                        const value = closeFormValues[field.id] ?? "";
+                        const setValue = (next: string) =>
+                          setCloseFormValues((current) => ({
+                            ...current,
+                            [field.id]: field.fieldType === "number" && next !== "" ? Number(next) : next || null,
+                          }));
+                        return (
+                          <div key={field.id} className="space-y-2">
+                            <Label htmlFor={`close-form-${field.id}`}>
+                              {field.label}{field.required ? " *" : ""}
+                            </Label>
+                            {field.fieldType === "textarea" ? (
+                              <Textarea id={`close-form-${field.id}`} placeholder={field.placeholder} value={String(value)} onChange={(e) => setValue(e.target.value)} />
+                            ) : field.fieldType === "dropdown" ? (
+                              <Select value={String(value)} onValueChange={setValue}>
+                                <SelectTrigger id={`close-form-${field.id}`}><SelectValue placeholder={field.placeholder || `Select ${field.label}`} /></SelectTrigger>
+                                <SelectContent>{(field.options ?? []).map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent>
+                              </Select>
+                            ) : (
+                              <Input id={`close-form-${field.id}`} type={field.fieldType === "number" ? "number" : field.fieldType === "date" ? "date" : "text"} placeholder={field.placeholder} value={String(value)} onChange={(e) => setValue(e.target.value)} />
+                            )}
+                          </div>
+                        );
+                      })}
 
                       <div className="space-y-2">
                         <Label>Recipients</Label>

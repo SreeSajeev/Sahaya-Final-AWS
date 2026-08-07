@@ -7,6 +7,7 @@ function tenantClientInsertToPrisma(insert) {
     organisationId: insert.organisation_id,
     name: insert.name,
     slug: insert.slug,
+    companyShortName: insert.company_short_name ?? null,
     website: insert.website ?? null,
     contactName: insert.contact_name ?? null,
     contactEmail: insert.contact_email ?? null,
@@ -21,6 +22,9 @@ function tenantClientPatchToPrisma(patch) {
   const data = {};
   if (Object.prototype.hasOwnProperty.call(patch, "name")) data.name = patch.name;
   if (Object.prototype.hasOwnProperty.call(patch, "slug")) data.slug = patch.slug;
+  if (Object.prototype.hasOwnProperty.call(patch, "company_short_name")) {
+    data.companyShortName = patch.company_short_name;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "website")) data.website = patch.website;
   if (Object.prototype.hasOwnProperty.call(patch, "contact_name")) data.contactName = patch.contact_name;
   if (Object.prototype.hasOwnProperty.call(patch, "contact_email")) data.contactEmail = patch.contact_email;

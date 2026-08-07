@@ -34,11 +34,15 @@ export function listAssignmentContextItems(comments: TicketComment[]): Assignmen
     if (!meta || typeof meta !== "object" || Array.isArray(meta)) continue;
     const m = meta as {
       deleted_at?: string | null;
+      hidden_at?: string | null;
       remark?: string | null;
       uploaded_at?: string | null;
       uploaded_by_name?: string | null;
     };
-    if (m.deleted_at != null && String(m.deleted_at).trim() !== "") continue;
+    if (
+      (m.deleted_at != null && String(m.deleted_at).trim() !== "") ||
+      (m.hidden_at != null && String(m.hidden_at).trim() !== "")
+    ) continue;
     out.push({
       commentId: c.id,
       remark: m.remark != null ? String(m.remark) : c.body != null ? String(c.body) : "",

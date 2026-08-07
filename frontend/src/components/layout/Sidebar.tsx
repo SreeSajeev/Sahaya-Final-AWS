@@ -39,6 +39,7 @@ const adminNavigation = [
   { name: 'Users', href: '/app/users', icon: Users },
   { name: 'Clients', href: '/app/clients', icon: Briefcase },
   { name: 'Complaint Points', href: '/app/complaint-points', icon: MapPin },
+  { name: 'Resolution Locations', href: '/app/resolution-locations', icon: MapPin },
   { name: 'Settings', href: '/app/settings', icon: Settings },
 ];
 
@@ -68,6 +69,7 @@ const tenantAdminAdminNav = [
   { name: 'Users', href: '/app/users', icon: Users },
   { name: 'Clients', href: '/app/clients', icon: Briefcase },
   { name: 'Complaint Points', href: '/app/complaint-points', icon: MapPin },
+  { name: 'Resolution Locations', href: '/app/resolution-locations', icon: MapPin },
   { name: 'Ticket Settings', href: '/app/ticket-settings', icon: Sliders },
   { name: 'Settings', href: '/app/settings', icon: Settings },
 ];

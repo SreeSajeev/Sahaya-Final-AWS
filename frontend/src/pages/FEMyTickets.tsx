@@ -26,6 +26,7 @@ import {
 } from '@/lib/feTicketList';
 import {
   downloadFieldVisitCsv,
+  downloadFieldVisitExcel,
   openFieldVisitPrintWindow,
   type FERemarkLine,
 } from '@/lib/feFieldVisitExport';
@@ -165,6 +166,7 @@ export default function FEMyTickets() {
             source: c.source,
             author: c.author_id,
             body: c.body ?? '',
+            attachments: c.attachments,
           }));
         } catch {
           map[t.id] = [];
@@ -182,8 +184,7 @@ export default function FEMyTickets() {
       setVisitError(check.error);
       return;
     }
-    const assigned = tickets ?? [];
-    const matched = filterFETicketsByDateRange(assigned, visitFrom, visitTo);
+    const matched = filterFETicketsByDateRange(displayedTickets, visitFrom, visitTo);
     if (matched.length === 0) {
       setVisitSheetTickets([]);
       setVisitRemarks({});
@@ -212,6 +213,26 @@ export default function FEMyTickets() {
     if (!visitSheetTickets?.length) return;
     downloadFieldVisitCsv(visitSheetTickets, visitFrom, visitTo, visitRemarks);
     toast({ title: 'CSV downloaded', description: 'Field visit sheet exported.' });
+  };
+
+  const downloadVisitExcel = async () => {
+    if (!visitSheetTickets?.length) return;
+    await downloadFieldVisitExcel(
+      visitSheetTickets,
+      visitFrom,
+      visitTo,
+      visitRemarks,
+      userProfile?.name || user?.email || '',
+    );
+    toast({ title: 'Excel downloaded', description: 'Field worksheet exported.' });
+  };
+
+  const downloadVisitPdf = () => {
+    printVisitSheet();
+    toast({
+      title: 'Printable PDF opened',
+      description: 'Choose “Save as PDF” in the browser print dialog.',
+    });
   };
 
   if (!isFieldExecutive && userProfile) {
@@ -420,8 +441,9 @@ export default function FEMyTickets() {
             <div>
               <h3 className="text-base font-semibold">Field Visit Sheet / Print Tickets</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Date range uses assignment date when available (otherwise created date). Only your
-                assigned tickets are included.
+                Date range uses assignment date when available (otherwise created date). The worksheet
+                uses the active Status, Customer, State, Location, and search filters. Assigned FE:{' '}
+                {userProfile?.name || user?.email || 'Current user'}.
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -466,6 +488,19 @@ export default function FEMyTickets() {
                 <Button type="button" variant="outline" className="gap-1" onClick={printVisitSheet}>
                   <Printer className="h-4 w-4" />
                   Print
+                </Button>
+                <Button type="button" variant="outline" className="gap-1" onClick={downloadVisitPdf}>
+                  <Download className="h-4 w-4" />
+                  Download PDF
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-1"
+                  onClick={() => void downloadVisitExcel()}
+                >
+                  <Download className="h-4 w-4" />
+                  Download Excel
                 </Button>
                 <Button type="button" variant="outline" className="gap-1" onClick={downloadVisitCsv}>
                   <Download className="h-4 w-4" />
