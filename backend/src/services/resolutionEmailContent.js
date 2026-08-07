@@ -88,11 +88,9 @@ export function buildResolutionEmailPlainText({
     lines.push(`Registration Number: ${formatDetail(ticket.registration_number)}`);
   }
   lines.push(`Issue Type: ${formatDetail(issueType)}`);
-  lines.push(`Location: ${formatDetail(loc)}`);
+  lines.push(`Reported Location: ${formatDetail(loc)}`);
   if (closureLocation != null && String(closureLocation).trim() !== "") {
-    // Preserve the established label for existing recipients/tests; this value is now
-    // populated from resolution_location_name when available.
-    lines.push(`Location (closure): ${String(closureLocation).trim()}`);
+    lines.push(`Resolution Location: ${String(closureLocation).trim()}`);
   }
   lines.push(`Assigned FE: ${formatDetail(assignedFeName)}`);
   lines.push(`Status: ${formatDetail(ticket?.status ?? "RESOLVED")}`);

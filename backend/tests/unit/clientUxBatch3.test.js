@@ -120,7 +120,7 @@ describe("resolution email field semantics", () => {
       closureLocation: "Bay 4 reconnect",
       resolutionRemarks: "OK",
     });
-    expect(plain).toContain("Location: Depot A");
-    expect(plain).toContain("Location (closure): Bay 4 reconnect");
+    expect(plain).toContain("Reported Location: Depot A");
+    expect(plain).toContain("Resolution Location: Bay 4 reconnect");
   });
 });
