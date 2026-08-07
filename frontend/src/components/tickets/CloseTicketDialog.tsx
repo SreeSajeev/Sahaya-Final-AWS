@@ -117,11 +117,12 @@ export function CloseTicketDialog({
     enabled: open,
   });
   const canClose = CLOSEABLE_STATUSES.includes(ticket.status);
+  const requiresResolutionLocation = resolutionLocations.length > 0;
   const canConfirm =
     canClose &&
     resolutionCategory.trim() !== "" &&
     remarks.trim() !== "" &&
-    resolutionLocationId !== "" &&
+    (!requiresResolutionLocation || resolutionLocationId !== "") &&
     (!isOtherCategory || resolutionOtherDetails.trim() !== "") &&
     isValidNotificationEmailField(notificationEmail) &&
     !contextLoading &&
@@ -287,19 +288,29 @@ export function CloseTicketDialog({
                         ) : null}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="close-resolution-location">Resolution Location *</Label>
-                        <Select value={resolutionLocationId} onValueChange={setResolutionLocationId}>
-                          <SelectTrigger id="close-resolution-location">
-                            <SelectValue placeholder="Select attended location" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {resolutionLocations.map((location) => (
-                              <SelectItem key={location.id} value={location.id}>
-                                {location.name}{location.code ? ` (${location.code})` : ""}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <Label htmlFor="close-resolution-location">
+                          Resolution Location{requiresResolutionLocation ? " *" : ""}
+                        </Label>
+                        {resolutionLocations.length === 0 ? (
+                          <p className="text-sm text-amber-800 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                            No active resolution locations are configured for this organisation.
+                            Closing will proceed without an attended-location snapshot. Add locations
+                            under Data → Resolution Locations to make this mandatory.
+                          </p>
+                        ) : (
+                          <Select value={resolutionLocationId} onValueChange={setResolutionLocationId}>
+                            <SelectTrigger id="close-resolution-location">
+                              <SelectValue placeholder="Select attended location" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {resolutionLocations.map((location) => (
+                                <SelectItem key={location.id} value={location.id}>
+                                  {location.name}{location.code ? ` (${location.code})` : ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="close-review-notes">Optional closure notes</Label>

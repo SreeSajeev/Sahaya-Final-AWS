@@ -3,8 +3,13 @@
 import { sendClientResolutionEmail } from "./emailService.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { redactEmail } from "../utils/redact.js";
-import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
+import { buildResolutionEmailArgsFromTicketId } from "./resolutionEmailEnrichment.js";
+import { findResolutionNotificationByTicketId } from "../repositories/ticketResolutionNotificationRepository.js";
 
+/**
+ * Legacy thin hook — only sends when the primary close path has not already
+ * recorded a resolution notification. Payload is fully enriched from the ticket.
+ */
 export async function handleClientResolutionNotification(ticketId) {
   try {
     if (!ticketId) {
@@ -12,28 +17,26 @@ export async function handleClientResolutionNotification(ticketId) {
       return;
     }
 
-    const { data: ticket, error } = await getTicketByIdUnscopedSingle(
-      ticketId,
-      "opened_by_email, ticket_number"
-    );
-
-    if (error || !ticket) {
-      console.error("[CLIENT_NOTIFY] Ticket fetch failed", error?.message || error);
+    const { data: alreadySent } = await findResolutionNotificationByTicketId(ticketId);
+    if (alreadySent) {
+      logEvent("client_notify_resolution_skipped", { ticketId, reason: "email_already_sent" });
       return;
     }
 
-    if (!ticket.opened_by_email) {
+    const enriched = await buildResolutionEmailArgsFromTicketId(ticketId);
+    if (!enriched.toEmail) {
       logEvent("client_notify_resolution_skipped", { ticketId, reason: "no_opened_by_email" });
       console.error("[CLIENT_NOTIFY] No client email found");
       return;
     }
+    if (!enriched.ticketNumber) {
+      logEvent("client_notify_resolution_skipped", { ticketId, reason: "no_ticket_number" });
+      return;
+    }
 
-    console.log("📧 Sending resolution email to:", redactEmail(ticket.opened_by_email));
+    console.log("📧 Sending resolution email to:", redactEmail(enriched.toEmail));
 
-    const emailResult = await sendClientResolutionEmail({
-      toEmail: ticket.opened_by_email,
-      ticketNumber: ticket.ticket_number,
-    });
+    const emailResult = await sendClientResolutionEmail(enriched.args);
     logEvent("client_notify_resolution_email", {
       ticketId,
       attempted: emailResult?.attempted,
@@ -41,7 +44,6 @@ export async function handleClientResolutionNotification(ticketId) {
       skipped: emailResult?.skipped,
       reason: emailResult?.reason ?? null,
     });
-
   } catch (err) {
     console.error("[CLIENT_NOTIFY ERROR]", err.message);
   }

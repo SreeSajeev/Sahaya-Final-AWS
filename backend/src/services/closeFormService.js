@@ -50,6 +50,16 @@ export function validateCloseFormSnapshot(fields, rawValues) {
     if (field.fieldType === "number" && trimmed != null && trimmed !== "" && !Number.isFinite(Number(trimmed))) {
       return { ok: false, error: `${field.label} must be a number` };
     }
+    if (field.fieldType === "date" && trimmed != null && trimmed !== "") {
+      const dateStr = String(trimmed);
+      // Accept YYYY-MM-DD from <input type="date"> or ISO datetime.
+      const okDate =
+        /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ||
+        !Number.isNaN(Date.parse(dateStr));
+      if (!okDate || (/^\d{4}-\d{2}-\d{2}$/.test(dateStr) && Number.isNaN(Date.parse(`${dateStr}T00:00:00Z`)))) {
+        return { ok: false, error: `${field.label} must be a valid date` };
+      }
+    }
     normalized[field.id] = trimmed;
   }
   return { ok: true, snapshot: { fields, values: normalized, submitted_at: new Date().toISOString() } };

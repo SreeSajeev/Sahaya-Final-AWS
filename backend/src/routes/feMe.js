@@ -21,7 +21,8 @@ import {
   getAssignmentWithTicketByFeAndTicket,
 } from "../repositories/assignmentRepository.js";
 import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
-import { insertComment } from "../repositories/commentRepository.js";
+import { insertComment, listCommentsForTicketIds } from "../repositories/commentRepository.js";
+import { z } from "zod";
 
 const router = express.Router();
 
@@ -551,6 +552,63 @@ router.post("/tickets/:id/status-action", async (req, res) => {
     return jsonOk(res, updated);
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to update status");
+  }
+});
+
+/**
+ * POST /fe/me/tickets/comments-batch
+ * Batch-load comments for assigned tickets (FE printable worksheet). Avoids N+1.
+ */
+router.post("/me/tickets/comments-batch", async (req, res) => {
+  const startedAt = Date.now();
+  const parsed = z
+    .object({
+      ticket_ids: z.array(z.string().uuid()).min(1).max(100),
+    })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return jsonError(res, 400, "ticket_ids (1–100 UUIDs) required");
+  }
+
+  try {
+    const feId = await resolveFeIdFromAppUser(req);
+    if (!feId) return jsonError(res, 403, "Field executive identity required");
+
+    const ticketIds = parsed.data.ticket_ids;
+    const { data: assignments, error: aErr } = await listAssignmentsByFeId(feId);
+    if (aErr) return jsonError(res, 500, aErr.message);
+
+    const allowed = new Set();
+    for (const row of assignments ?? []) {
+      const ticket = row.tickets;
+      if (!ticket?.id) continue;
+      const currentId = ticket.current_assignment_id;
+      if (
+        currentId == null ||
+        String(currentId).trim() === "" ||
+        String(currentId) !== String(row.id)
+      ) {
+        continue;
+      }
+      if (!isTenantAllowed(req, ticket.organisation_id)) continue;
+      allowed.add(String(ticket.id));
+    }
+
+    const scopedIds = ticketIds.filter((id) => allowed.has(id));
+    const { data: byTicket, error } = await listCommentsForTicketIds(scopedIds, {
+      limitPerTicket: 200,
+    });
+    if (error) return jsonError(res, 500, error.message);
+
+    logEvent("feMe.commentsBatch", {
+      tenantId: req.tenantId ?? null,
+      requested: ticketIds.length,
+      allowed: scopedIds.length,
+      ms: Date.now() - startedAt,
+    });
+    return jsonOk(res, { by_ticket_id: byTicket ?? {} });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to load comments");
   }
 });
 

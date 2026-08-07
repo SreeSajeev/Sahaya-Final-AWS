@@ -310,7 +310,7 @@ export function getAssignmentContextMeta(attachments) {
  * @param {Array<{ id: string; created_at?: string | null; body?: string | null; attachments?: unknown }>} comments
  */
 export function listVisibleAssignmentContextItems(comments) {
-  /** @type {Array<{ commentId: string; remark: string; uploadedAt: string | null; managerName: string | null; attachments: unknown }>} */
+  /** @type {Array<{ commentId: string; remark: string; uploadedAt: string | null; sortIndex: number; managerName: string | null; attachments: unknown }>} */
   const out = [];
   for (const c of comments ?? []) {
     const meta = getAssignmentContextMeta(c.attachments);
@@ -321,6 +321,7 @@ export function listVisibleAssignmentContextItems(comments) {
         : c.body != null
           ? String(c.body)
           : "";
+    const sortIndex = Number.isFinite(Number(meta.sort_index)) ? Number(meta.sort_index) : 0;
     out.push({
       commentId: String(c.id),
       remark,
@@ -330,6 +331,7 @@ export function listVisibleAssignmentContextItems(comments) {
           : c.created_at != null
             ? String(c.created_at)
             : null,
+      sortIndex,
       managerName:
         meta.uploaded_by_name != null && String(meta.uploaded_by_name).trim() !== ""
           ? String(meta.uploaded_by_name).trim()
@@ -338,6 +340,7 @@ export function listVisibleAssignmentContextItems(comments) {
     });
   }
   out.sort((a, b) => {
+    if (a.sortIndex !== b.sortIndex) return a.sortIndex - b.sortIndex;
     const ta = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
     const tb = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
     return ta - tb;

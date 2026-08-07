@@ -4,6 +4,17 @@ import {
 } from "../repositories/tenantResolutionLocationRepository.js";
 
 const csvEscape = (v) => `"${String(v ?? "").replaceAll('"', '""')}"`;
+
+/** Coerce query/body flags like "true" / "1" from Express query strings. */
+export function coerceActiveOnly(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    const s = value.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes";
+  }
+  return false;
+}
+
 export function parseResolutionLocationCsvRows(rows) {
   if (!Array.isArray(rows)) return { rows: [], errors: [{ row: 0, message: "rows must be an array" }] };
   const errors = [];
@@ -21,7 +32,11 @@ function org(req, body) { return req.isSuperAdmin ? body?.organisation_id || req
 export async function listResolutionLocations(req, opts = {}) {
   const organisationId = req.isSuperAdmin ? opts.organisation_id || undefined : req.tenantId;
   if (!organisationId && !req.isSuperAdmin) return { error: { status: 403, message: "Tenant context missing" } };
-  return listResolutionLocationsRepo({ organisationId, search: opts.search, activeOnly: opts.active_only === true });
+  return listResolutionLocationsRepo({
+    organisationId,
+    search: opts.search,
+    activeOnly: coerceActiveOnly(opts.active_only),
+  });
 }
 export async function getResolutionLocation(req, id) {
   const result = await getResolutionLocationById(id);
@@ -66,8 +81,24 @@ export function validateResolutionLocationForClose(location, organisationId) {
   }
   return { data: { id: location.id, name: location.name } };
 }
+
+/**
+ * Resolve location for close.
+ * When the tenant has zero active master rows, allow close without a location
+ * (back-compat / empty catalog) so ops are not blocked.
+ * When active rows exist, a valid UUID is mandatory.
+ */
 export async function resolveResolutionLocationForClose(id, organisationId) {
-  const result = await getResolutionLocationById(id);
+  const trimmed = id != null ? String(id).trim() : "";
+  if (!trimmed) {
+    const active = await listResolutionLocationsRepo({ organisationId, activeOnly: true });
+    if (active.error) return { error: { status: 500, message: active.error.message } };
+    if (!active.data?.length) {
+      return { data: { id: null, name: null }, skipped: true };
+    }
+    return { error: { status: 400, message: "Resolution location is required." } };
+  }
+  const result = await getResolutionLocationById(trimmed);
   if (result.error) return { error: { status: 500, message: result.error.message } };
   return validateResolutionLocationForClose(result.data, organisationId);
 }

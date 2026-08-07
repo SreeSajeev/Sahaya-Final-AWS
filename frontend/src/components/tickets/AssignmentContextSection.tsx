@@ -27,7 +27,7 @@ function attObj(attachments: unknown): Record<string, unknown> {
 }
 
 export function listAssignmentContextItems(comments: TicketComment[]): AssignmentContextItem[] {
-  const out: AssignmentContextItem[] = [];
+  const out: Array<AssignmentContextItem & { sortIndex: number }> = [];
   for (const c of comments ?? []) {
     const a = attObj(c.attachments);
     const meta = a.assignment_context;
@@ -38,11 +38,13 @@ export function listAssignmentContextItems(comments: TicketComment[]): Assignmen
       remark?: string | null;
       uploaded_at?: string | null;
       uploaded_by_name?: string | null;
+      sort_index?: number | null;
     };
     if (
       (m.deleted_at != null && String(m.deleted_at).trim() !== "") ||
       (m.hidden_at != null && String(m.hidden_at).trim() !== "")
     ) continue;
+    const sortIndex = Number.isFinite(Number(m.sort_index)) ? Number(m.sort_index) : 0;
     out.push({
       commentId: c.id,
       remark: m.remark != null ? String(m.remark) : c.body != null ? String(c.body) : "",
@@ -52,6 +54,7 @@ export function listAssignmentContextItems(comments: TicketComment[]): Assignmen
           : c.created_at != null
             ? String(c.created_at)
             : null,
+      sortIndex,
       managerName:
         m.uploaded_by_name != null && String(m.uploaded_by_name).trim() !== ""
           ? String(m.uploaded_by_name).trim()
@@ -60,11 +63,12 @@ export function listAssignmentContextItems(comments: TicketComment[]): Assignmen
     });
   }
   out.sort((a, b) => {
+    if (a.sortIndex !== b.sortIndex) return a.sortIndex - b.sortIndex;
     const ta = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
     const tb = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
     return ta - tb;
   });
-  return out;
+  return out.map(({ sortIndex: _s, ...item }) => item);
 }
 
 type Props = {

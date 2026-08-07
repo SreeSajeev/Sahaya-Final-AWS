@@ -945,6 +945,10 @@ router.get("/tickets/:id/comments/:commentId/proofs/:index/url", async (req, res
       comment.attachments && typeof comment.attachments === "object" && !Array.isArray(comment.attachments)
         ? comment.attachments
         : {};
+    const { isCommentImagesHidden } = await import("../services/imageVisibilityService.js");
+    if (isCommentImagesHidden(att)) {
+      return jsonError(res, 404, "Proof is no longer available");
+    }
     const paths = Array.isArray(att.proof_storage_paths) ? att.proof_storage_paths : [];
     const key = paths[index];
     if (!key || typeof key !== "string") {

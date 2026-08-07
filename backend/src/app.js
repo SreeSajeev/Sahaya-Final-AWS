@@ -30,6 +30,7 @@ import { runDailyTenantReportWorker } from "./workers/dailyTenantReportWorker.js
 import { evaluateBreaches } from "./services/slaService.js";
 
 import { sendResolutionEmail } from "./services/emailService.js";
+import { buildResolutionEmailArgsFromTicketId } from "./services/resolutionEmailEnrichment.js";
 import ticketsRouter from "./routes/tickets.js";
 import feActionsRouter from "./routes/feActions.js";
 import adminUsersRouter from "./routes/adminUsers.js";
@@ -533,7 +534,9 @@ app.post(
       toEmailRedacted: redactEmail(ticket.opened_by_email),
     });
     try {
+      const enriched = await buildResolutionEmailArgsFromTicketId(ticket.id);
       const emailResult = await sendResolutionEmail({
+        ...enriched.args,
         toEmail: ticket.opened_by_email,
         ticketNumber: ticket.ticket_number,
       });

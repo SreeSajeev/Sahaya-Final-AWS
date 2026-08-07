@@ -142,6 +142,19 @@ export interface Ticket {
   verification_remarks?: string | null;
   /** Snapshot of the attended resolution location (may be absent on historical tickets). */
   resolution_location_name?: string | null;
+  /** Immutable Verify & Close form snapshot captured at resolve time. */
+  close_form_snapshot?: {
+    fields?: Array<{
+      id: string;
+      label: string;
+      fieldType?: string;
+      required?: boolean;
+      displayOrder?: number;
+      options?: string[];
+    }>;
+    values?: Record<string, string | number | null>;
+    submitted_at?: string;
+  } | null;
   /** Review notes captured at close (may be absent on older rows). */
   review_notes?: string | null;
   /** Resolution category chosen at close (may be absent on older rows). */

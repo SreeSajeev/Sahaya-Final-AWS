@@ -1,4 +1,5 @@
 import { getCommentById, insertComment, updateCommentById } from "../repositories/commentRepository.js";
+import { getTicketByIdUnscopedSingle } from "../repositories/ticketQueryRepository.js";
 import { insertAuditLog } from "./auditLogService.js";
 import { findUserNameById } from "../repositories/userRepository.js";
 
@@ -20,7 +21,16 @@ export async function hideCommentImages({ req, ticketId, commentId, reason }) {
   const { data: comment, error } = await getCommentById(commentId);
   if (error) throw error;
   if (!comment || comment.ticket_id !== ticketId) return { ok: false, status: 404, error: "Comment not found" };
-  if (req.tenantId && comment.organisation_id && req.tenantId !== comment.organisation_id && !req.isSuperAdmin) {
+
+  let organisationId = comment.organisation_id ?? null;
+  if (!organisationId) {
+    const { data: ticket } = await getTicketByIdUnscopedSingle(ticketId, "id, organisation_id");
+    organisationId = ticket?.organisation_id ?? null;
+  }
+  if (req.tenantId && organisationId && req.tenantId !== organisationId && !req.isSuperAdmin) {
+    return { ok: false, status: 403, error: "Ticket does not belong to your organisation" };
+  }
+  if (req.tenantId && !organisationId && !req.isSuperAdmin) {
     return { ok: false, status: 403, error: "Ticket does not belong to your organisation" };
   }
 
@@ -30,29 +40,66 @@ export async function hideCommentImages({ req, ticketId, commentId, reason }) {
   if (isCommentImagesHidden(attachments)) return { ok: true, idempotent: true };
 
   const now = new Date().toISOString();
+  const reasonTrim = String(reason ?? "").trim() || null;
   const { data: user } = req?.appUser?.id ? await findUserNameById(req.appUser.id) : { data: null };
   const hiddenByName = user?.name?.trim() || "Unknown";
+  const actorId = req.appUser?.id ?? null;
+
   attachments.image_visibility = {
     hidden_at: now,
-    hidden_by_user_id: req.appUser?.id ?? null,
+    hidden_by_user_id: actorId,
     hidden_by_name: hiddenByName,
-    hidden_reason: String(reason ?? "").trim() || null,
+    hidden_reason: reasonTrim,
+    deleted_at: now,
+    deleted_by: actorId,
+    deleted_by_name: hiddenByName,
+    deleted_reason: reasonTrim,
   };
   if (attachments.assignment_context && typeof attachments.assignment_context === "object") {
-    attachments.assignment_context = { ...attachments.assignment_context, deleted_at: now, hidden_at: now };
+    attachments.assignment_context = {
+      ...attachments.assignment_context,
+      deleted_at: now,
+      deleted_by: actorId,
+      deleted_by_name: hiddenByName,
+      deleted_reason: reasonTrim,
+      hidden_at: now,
+    };
   }
   const update = await updateCommentById(commentId, { attachments });
   if (update.error) throw update.error;
 
   void insertAuditLog({
-    req, entity_type: "ticket_comment", entity_id: commentId, action: "image_hidden",
-    organisation_id: comment.organisation_id ?? null,
-    metadata: { ticket_id: ticketId, reason: attachments.image_visibility.hidden_reason },
+    req,
+    entity_type: "ticket_comment",
+    entity_id: commentId,
+    action: "image_hidden",
+    organisation_id: organisationId,
+    metadata: {
+      ticket_id: ticketId,
+      reason: reasonTrim,
+      deleted_at: now,
+      deleted_by: actorId,
+      s3_untouched: true,
+    },
   });
   await insertComment({
-    ticket_id: ticketId, source: "STAFF", author_id: req.appUser?.id ?? null,
-    organisation_id: comment.organisation_id ?? null, body: "Image Hidden",
-    attachments: { image_hidden_event: { comment_id: commentId, reason: attachments.image_visibility.hidden_reason, hidden_at: now, hidden_by_name: hiddenByName } },
+    ticket_id: ticketId,
+    source: "STAFF",
+    author_id: actorId,
+    organisation_id: organisationId,
+    body: "Image Hidden",
+    attachments: {
+      image_hidden_event: {
+        comment_id: commentId,
+        reason: reasonTrim,
+        hidden_at: now,
+        hidden_by_name: hiddenByName,
+        deleted_at: now,
+        deleted_by: actorId,
+        deleted_by_name: hiddenByName,
+        deleted_reason: reasonTrim,
+      },
+    },
   });
   return { ok: true, hidden_at: now, hidden_by_name: hiddenByName };
 }

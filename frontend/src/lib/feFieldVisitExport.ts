@@ -13,6 +13,7 @@ import {
 import { resolveTicketPriorityLevel } from '@/lib/priority';
 
 export type FERemarkLine = {
+  id?: string | null;
   at?: string | null;
   source?: string | null;
   author?: string | null;
@@ -70,13 +71,13 @@ export function combineTicketRemarks(
 }
 
 function commentIsHidden(remark: FERemarkLine): boolean {
-  const context = remark.attachments?.assignment_context;
-  return Boolean(
-    context &&
-      typeof context === 'object' &&
-      !Array.isArray(context) &&
-      (context as { deleted_at?: unknown }).deleted_at,
-  );
+  const att = remark.attachments;
+  if (!att || typeof att !== 'object' || Array.isArray(att)) return false;
+  const a = att as Record<string, unknown>;
+  const visibility = a.image_visibility as { hidden_at?: unknown } | undefined;
+  if (visibility?.hidden_at != null && String(visibility.hidden_at).trim() !== '') return true;
+  const context = a.assignment_context as { deleted_at?: unknown } | undefined;
+  return Boolean(context?.deleted_at != null && String(context.deleted_at).trim() !== '');
 }
 
 function visibleRemarks(remarks: FERemarkLine[]): FERemarkLine[] {
@@ -259,33 +260,99 @@ function block(label: string, value: string): string {
   return `<div class="field"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div></div>`;
 }
 
-export function openFieldVisitPrintWindow(
+async function toDataUrl(source: string): Promise<string | null> {
+  const trimmed = source.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:image/')) return trimmed;
+  try {
+    const res = await fetch(trimmed, { credentials: 'include' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) return null;
+    return await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve proof sources (data URLs or http(s)/signed URLs) into embeddable data URLs for print/PDF.
+ * Also fetches short-lived signed URLs when only S3 storage paths exist on the comment.
+ */
+export async function resolveWorksheetImageDataUrls(
+  tickets: FETicketRow[],
+  remarksByTicketId: Record<string, FERemarkLine[]>,
+  opts: {
+    fetchSignedUrl?: (ticketId: string, commentId: string, index: number) => Promise<string | null>;
+  } = {},
+): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  for (const ticket of tickets) {
+    const resolved: string[] = [];
+    for (const remark of visibleRemarks(remarksByTicketId[ticket.id] ?? [])) {
+      const inline = extractProofImageSources(remark.attachments);
+      if (inline.length > 0) {
+        for (const source of inline) {
+          const dataUrl = await toDataUrl(source);
+          if (dataUrl) resolved.push(dataUrl);
+        }
+        continue;
+      }
+      if (!opts.fetchSignedUrl || !remark.id) continue;
+      const att = remark.attachments;
+      const paths =
+        att && typeof att === 'object' && !Array.isArray(att)
+          ? (att as { proof_storage_paths?: unknown }).proof_storage_paths
+          : null;
+      const count = Array.isArray(paths) ? paths.length : 0;
+      for (let i = 0; i < count; i += 1) {
+        const url = await opts.fetchSignedUrl(ticket.id, String(remark.id), i);
+        if (!url) continue;
+        const dataUrl = await toDataUrl(url);
+        if (dataUrl) resolved.push(dataUrl);
+      }
+    }
+    out[ticket.id] = resolved;
+  }
+  return out;
+}
+
+export async function openFieldVisitPrintWindow(
   tickets: FETicketRow[],
   fromYmd: string,
   toYmd: string,
   opts: {
     feName?: string | null;
     remarksByTicketId?: Record<string, FERemarkLine[]>;
+    imagesByTicketId?: Record<string, string[]>;
   } = {},
-): void {
+): Promise<void> {
   const remarksByTicketId = opts.remarksByTicketId ?? {};
+  const imagesByTicketId =
+    opts.imagesByTicketId ??
+    (await resolveWorksheetImageDataUrls(tickets, remarksByTicketId));
   const ticketBlocks = tickets
     .map((t) => {
       const priority = resolveTicketPriorityLevel(t);
       const ticketRemarks = remarksByTicketId[t.id] ?? [];
       const remarks = combineTicketRemarks(t, ticketRemarks);
       const timeline = timelineSummary(t, ticketRemarks);
-      const images = visibleRemarks(ticketRemarks)
-        .flatMap((remark) => extractProofImageSources(remark.attachments))
-        .filter((source) => source.startsWith('data:image/'));
+      const images = imagesByTicketId[t.id] ?? [];
       return `
       <section class="ticket">
         <h2>${escapeHtml(fmtDash(t.ticket_number))}</h2>
         ${block('Complaint ID', formatComplaintIdDisplay(t.complaint_id))}
         ${block('Customer', fmtDash(t.client_name ?? t.client_slug))}
-        ${block('Vehicle', fmtDash(t.vehicle_number))}
+        ${block('Vehicle', fmtDash(
+          [t.vehicle_number, t.vehicle_name, t.vehicle_type].map(fmt).filter(Boolean).join(' · ') || t.vehicle_number,
+        ))}
         ${block('State', formatStateDisplay(t.state))}
-        ${block('Location', fmtDash(t.location))}
+        ${block('Address (Reported Location)', fmtDash(t.location))}
         ${block('Contact Person', fmtDash(t.contact_person))}
         ${block('Contact Number', fmtDash(t.contact_number))}
         ${block('Resolution Location', fmtDash(t.resolution_location_name))}
@@ -294,10 +361,11 @@ export function openFieldVisitPrintWindow(
         ${block('Status', fmtDash(t.status))}
         ${block('Created Date', fmtDate(t.created_at || t.opened_at))}
         ${block('Assigned Date', fmtDate(t.assigned_at))}
-        ${block('Remarks', remarks)}
+        ${block('Assignment Remarks', fmtDash(t.remarks))}
+        ${block('Remarks / Timeline', remarks)}
         ${block('Resolution Remarks', fmtDash(t.verification_remarks))}
         ${block('Timeline Summary', timeline)}
-        ${images.length ? `<div class="images">${images.map((source) => `<img src="${escapeHtml(source)}" alt="Ticket proof" />`).join('')}</div>` : ''}
+        ${images.length ? `<div class="images">${images.map((source) => `<img src="${escapeHtml(source)}" alt="Ticket proof" loading="lazy" />`).join('')}</div>` : ''}
       </section>`;
     })
     .join('\n');
@@ -312,15 +380,18 @@ export function openFieldVisitPrintWindow(
     body { font-family: Georgia, "Times New Roman", serif; color: #111; font-size: 11pt; line-height: 1.35; }
     h1 { font-size: 16pt; margin: 0 0 4px; }
     .meta { color: #444; font-size: 10pt; margin-bottom: 16px; }
-    .ticket { break-inside: avoid; border-top: 1px solid #333; padding: 12px 0 16px; }
+    .ticket { break-inside: avoid; page-break-inside: avoid; border-top: 1px solid #333; padding: 12px 0 16px; margin-bottom: 8px; }
     .ticket h2 { font-size: 13pt; margin: 0 0 8px; font-family: ui-monospace, monospace; }
     .field { margin: 4px 0 6px; }
     .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.04em; color: #555; }
-    .value { white-space: pre-wrap; word-break: break-word; }
-    .images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .value { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+    .images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; break-inside: avoid; }
     .images img { max-width: 48%; max-height: 190px; object-fit: contain; border: 1px solid #bbb; }
     .toolbar { margin-bottom: 12px; }
-    @media print { .toolbar { display: none !important; } }
+    @media print {
+      .toolbar { display: none !important; }
+      .ticket { page-break-after: auto; }
+    }
   </style>
 </head>
 <body>

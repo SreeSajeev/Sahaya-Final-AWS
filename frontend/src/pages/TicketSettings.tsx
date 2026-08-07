@@ -11,7 +11,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useOrganisationsTable } from "@/hooks/useOrganisationsTable";
 import { useToast } from "@/hooks/use-toast";
-import { Sliders, Clock, ListOrdered, Plus, X, RefreshCw, Type } from "lucide-react";
+import { Sliders, Clock, ListOrdered, Plus, X, RefreshCw, Type, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchJson } from "@/lib/backendDataApi";
 import { isTenantConfigurationEnabled } from "@/lib/tenantConfigurationFeature";
 import { fetchOrganisationById } from "@/lib/tenantTicketsSupabase";
@@ -309,6 +309,19 @@ export default function TicketSettings() {
       ...config,
       closeFormFields: (config.closeFormFields ?? []).filter((field) => field.id !== id).map((field, displayOrder) => ({ ...field, displayOrder })),
     }));
+  const moveCloseFormField = (id: string, direction: -1 | 1) =>
+    setLocalConfig((config) => {
+      const fields = [...(config.closeFormFields ?? [])].sort((a, b) => a.displayOrder - b.displayOrder);
+      const index = fields.findIndex((field) => field.id === id);
+      const swapWith = index + direction;
+      if (index < 0 || swapWith < 0 || swapWith >= fields.length) return config;
+      const next = [...fields];
+      [next[index], next[swapWith]] = [next[swapWith], next[index]];
+      return {
+        ...config,
+        closeFormFields: next.map((field, displayOrder) => ({ ...field, displayOrder })),
+      };
+    });
 
   if (!isSuperAdmin && !organisationId) {
     return (
@@ -624,7 +637,7 @@ export default function TicketSettings() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {(localConfig.closeFormFields ?? []).map((field, index) => (
-                    <div key={field.id} className="grid gap-2 rounded-md border p-3 md:grid-cols-[2fr_1fr_1fr_auto]">
+                    <div key={field.id} className="grid gap-2 rounded-md border p-3 md:grid-cols-[2fr_1fr_1fr_auto_auto]">
                       <Input value={field.label} onChange={(e) => updateCloseFormField(field.id, { label: e.target.value })} placeholder="Field label" disabled={readOnly} />
                       <Select value={field.fieldType} onValueChange={(fieldType) => updateCloseFormField(field.id, { fieldType: fieldType as typeof field.fieldType })} disabled={readOnly}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
@@ -633,7 +646,17 @@ export default function TicketSettings() {
                         </SelectContent>
                       </Select>
                       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={field.required} onChange={(e) => updateCloseFormField(field.id, { required: e.target.checked })} disabled={readOnly} /> Required</label>
-                      {!readOnly && <Button type="button" variant="ghost" size="icon" onClick={() => removeCloseFormField(field.id)} aria-label={`Remove ${field.label || `field ${index + 1}`}`}><X className="h-4 w-4" /></Button>}
+                      {!readOnly && (
+                        <div className="flex items-center gap-1">
+                          <Button type="button" variant="ghost" size="icon" disabled={index === 0} onClick={() => moveCloseFormField(field.id, -1)} aria-label="Move field up">
+                            <ChevronUp className="h-4 w-4" />
+                          </Button>
+                          <Button type="button" variant="ghost" size="icon" disabled={index === (localConfig.closeFormFields?.length ?? 0) - 1} onClick={() => moveCloseFormField(field.id, 1)} aria-label="Move field down">
+                            <ChevronDown className="h-4 w-4" />
+                          </Button>
+                          <Button type="button" variant="ghost" size="icon" onClick={() => removeCloseFormField(field.id)} aria-label={`Remove ${field.label || `field ${index + 1}`}`}><X className="h-4 w-4" /></Button>
+                        </div>
+                      )}
                       <Input className="md:col-span-2" value={field.placeholder ?? ""} onChange={(e) => updateCloseFormField(field.id, { placeholder: e.target.value })} placeholder="Placeholder (optional)" disabled={readOnly} />
                       {field.fieldType === "dropdown" && <Input className="md:col-span-2" value={(field.options ?? []).join(", ")} onChange={(e) => updateCloseFormField(field.id, { options: e.target.value.split(",").map((option) => option.trim()).filter(Boolean) })} placeholder="Options, comma-separated" disabled={readOnly} />}
                     </div>

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseResolutionLocationCsvRows, validateResolutionLocationForClose } from "../../src/services/resolutionLocationService.js";
+import {
+  coerceActiveOnly,
+  parseResolutionLocationCsvRows,
+  validateResolutionLocationForClose,
+} from "../../src/services/resolutionLocationService.js";
 
 describe("resolution location CSV parsing", () => {
   it("normalizes valid rows and active values", () => {
@@ -11,6 +15,13 @@ describe("resolution location CSV parsing", () => {
   it("rejects missing names and invalid booleans", () => {
     const result = parseResolutionLocationCsvRows([{ name: "", is_active: "maybe" }]);
     expect(result.errors).toHaveLength(2);
+  });
+});
+
+describe("active_only query coercion", () => {
+  it("accepts string true from Express query", () => {
+    expect(coerceActiveOnly("true")).toBe(true);
+    expect(coerceActiveOnly(false)).toBe(false);
   });
 });
 

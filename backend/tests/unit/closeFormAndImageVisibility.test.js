@@ -26,4 +26,17 @@ describe("image visibility", () => {
     expect(isCommentImagesHidden({ assignment_context: { deleted_at: "2026-01-01T00:00:00Z" } })).toBe(true);
     expect(isCommentImagesHidden({ images: [] })).toBe(false);
   });
+
+  it("treats deleted_at on image_visibility as hidden", () => {
+    expect(
+      isCommentImagesHidden({
+        image_visibility: {
+          hidden_at: "2026-01-01T00:00:00Z",
+          deleted_at: "2026-01-01T00:00:00Z",
+          deleted_by: "user-1",
+          deleted_reason: "privacy",
+        },
+      })
+    ).toBe(true);
+  });
 });

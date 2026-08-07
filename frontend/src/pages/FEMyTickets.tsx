@@ -28,6 +28,7 @@ import {
   downloadFieldVisitCsv,
   downloadFieldVisitExcel,
   openFieldVisitPrintWindow,
+  resolveWorksheetImageDataUrls,
   type FERemarkLine,
 } from '@/lib/feFieldVisitExport';
 import {
@@ -155,24 +156,61 @@ export default function FEMyTickets() {
 
   const loadRemarksForTickets = async (rows: FETicketRow[]) => {
     const map: Record<string, FERemarkLine[]> = {};
-    await Promise.all(
-      rows.map(async (t) => {
-        try {
-          const res = await fetchJson<{ items: TicketComment[] }>(
-            `/data/tickets/${encodeURIComponent(t.id)}/comments?limit=200&offset=0`,
-          );
-          map[t.id] = (res.items ?? []).map((c) => ({
-            at: c.created_at,
-            source: c.source,
-            author: c.author_id,
-            body: c.body ?? '',
-            attachments: c.attachments,
-          }));
-        } catch {
-          map[t.id] = [];
+    for (const t of rows) map[t.id] = [];
+    if (rows.length === 0) return map;
+    try {
+      const res = await fetchJson<{
+        by_ticket_id: Record<
+          string,
+          Array<{
+            id: string;
+            created_at?: string | null;
+            source?: string | null;
+            author_id?: string | null;
+            body?: string | null;
+            attachments?: Record<string, unknown> | null;
+          }>
+        >;
+      }>("/fe/me/tickets/comments-batch", {
+        method: "POST",
+        body: { ticket_ids: rows.map((t) => t.id) },
+      });
+      for (const t of rows) {
+        map[t.id] = (res.by_ticket_id?.[t.id] ?? []).map((c) => ({
+          id: c.id,
+          at: c.created_at,
+          source: c.source,
+          author: c.author_id,
+          body: c.body ?? "",
+          attachments: c.attachments,
+        }));
+      }
+    } catch {
+      // Fallback: bounded concurrency if batch endpoint unavailable
+      const concurrency = 5;
+      let idx = 0;
+      const workers = Array.from({ length: Math.min(concurrency, rows.length) }, async () => {
+        while (idx < rows.length) {
+          const current = rows[idx++];
+          try {
+            const res = await fetchJson<{ items: TicketComment[] }>(
+              `/data/tickets/${encodeURIComponent(current.id)}/comments?limit=200&offset=0`,
+            );
+            map[current.id] = (res.items ?? []).map((c) => ({
+              id: c.id,
+              at: c.created_at,
+              source: c.source,
+              author: c.author_id,
+              body: c.body ?? "",
+              attachments: c.attachments,
+            }));
+          } catch {
+            map[current.id] = [];
+          }
         }
-      }),
-    );
+      });
+      await Promise.all(workers);
+    }
     return map;
   };
 
@@ -201,11 +239,27 @@ export default function FEMyTickets() {
     }
   };
 
-  const printVisitSheet = () => {
+  const printVisitSheet = async () => {
     if (!visitSheetTickets?.length) return;
-    openFieldVisitPrintWindow(visitSheetTickets, visitFrom, visitTo, {
+    const fetchSignedUrl = async (ticketId: string, commentId: string, index: number) => {
+      try {
+        const res = await fetchJson<{ url?: string }>(
+          `/data/tickets/${encodeURIComponent(ticketId)}/comments/${encodeURIComponent(commentId)}/proofs/${index}/url`,
+        );
+        return res?.url ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const imagesByTicketId = await resolveWorksheetImageDataUrls(
+      visitSheetTickets,
+      visitRemarks,
+      { fetchSignedUrl },
+    );
+    await openFieldVisitPrintWindow(visitSheetTickets, visitFrom, visitTo, {
       feName: userProfile?.name || user?.email,
       remarksByTicketId: visitRemarks,
+      imagesByTicketId,
     });
   };
 

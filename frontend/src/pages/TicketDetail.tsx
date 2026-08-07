@@ -891,6 +891,31 @@ export default function TicketDetail() {
                           {ticket.resolution_location_name ? (
                             <IconInfo icon={MapPin} label="Attended Location" value={ticket.resolution_location_name} />
                           ) : null}
+                          {ticket.close_form_snapshot?.fields &&
+                          Array.isArray(ticket.close_form_snapshot.fields) &&
+                          ticket.close_form_snapshot.fields.length > 0 ? (
+                            <div className="sm:col-span-2 space-y-2 rounded-md border border-border/60 px-3 py-3">
+                              <p className="text-sm font-medium">Verify &amp; Close form (snapshot)</p>
+                              {ticket.close_form_snapshot.submitted_at ? (
+                                <p className="text-xs text-muted-foreground">
+                                  Submitted {formatIST(ticket.close_form_snapshot.submitted_at, "PPp")}
+                                </p>
+                              ) : null}
+                              <dl className="grid gap-2 sm:grid-cols-2">
+                                {ticket.close_form_snapshot.fields.map((field) => {
+                                  const raw = ticket.close_form_snapshot?.values?.[field.id];
+                                  const value =
+                                    raw == null || String(raw).trim() === "" ? "—" : String(raw);
+                                  return (
+                                    <div key={field.id}>
+                                      <dt className="text-xs text-muted-foreground">{field.label}</dt>
+                                      <dd className="text-sm whitespace-pre-wrap break-words">{value}</dd>
+                                    </div>
+                                  );
+                                })}
+                              </dl>
+                            </div>
+                          ) : null}
                         </>
                       )}
                     {canPerformActions ? (
@@ -1134,6 +1159,12 @@ export default function TicketDetail() {
                       closed_by_name?: string;
                       closed_at?: string;
                       recipients?: string[];
+                      close_form_snapshot?: {
+                        fields?: Array<{ id?: string; label?: string }>;
+                        values?: Record<string, unknown>;
+                        submitted_at?: string;
+                      } | null;
+                      resolution_location_name?: string | null;
                     };
                     assignment_context?: {
                       remark?: string;
@@ -1353,6 +1384,47 @@ export default function TicketDetail() {
                               <p className="font-medium">None</p>
                             )}
                           </div>
+                          {closureEmail.resolution_location_name?.trim() ? (
+                            <p>
+                              <span className="text-muted-foreground">Resolution Location: </span>
+                              <span className="font-medium">
+                                {closureEmail.resolution_location_name.trim()}
+                              </span>
+                            </p>
+                          ) : null}
+                          {closureEmail.close_form_snapshot?.fields &&
+                          Array.isArray(closureEmail.close_form_snapshot.fields) &&
+                          closureEmail.close_form_snapshot.fields.length > 0 ? (
+                            <div className="space-y-1">
+                              <p className="font-medium text-green-900">Verify &amp; Close form</p>
+                              {closureEmail.close_form_snapshot.submitted_at ? (
+                                <p className="text-xs text-muted-foreground">
+                                  Submitted {formatIST(closureEmail.close_form_snapshot.submitted_at, "PPp")}
+                                </p>
+                              ) : null}
+                              <dl className="space-y-1">
+                                {closureEmail.close_form_snapshot.fields.map((field) => {
+                                  const id = field?.id != null ? String(field.id) : "";
+                                  const label = field?.label != null ? String(field.label) : "Field";
+                                  const raw = id
+                                    ? closureEmail.close_form_snapshot?.values?.[id]
+                                    : null;
+                                  const value =
+                                    raw == null || String(raw).trim() === ""
+                                      ? "—"
+                                      : String(raw);
+                                  return (
+                                    <div key={id || label}>
+                                      <dt className="text-muted-foreground text-xs">{label}</dt>
+                                      <dd className="whitespace-pre-wrap break-words font-medium">
+                                        {value}
+                                      </dd>
+                                    </div>
+                                  );
+                                })}
+                              </dl>
+                            </div>
+                          ) : null}
                         </div>
                       ) : (
                         <p className="mt-1 whitespace-pre-wrap break-words">{c.body}</p>

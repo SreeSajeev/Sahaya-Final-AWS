@@ -56,6 +56,47 @@ export async function listCommentsForTicket(req, ticketId, { limit, offset }) {
   }
 }
 
+/** Unscoped list for internal email enrichment (trusted server paths only). */
+export async function listCommentsForTicketUnscoped(ticketId, { limit = 200, offset = 0 } = {}) {
+  try {
+    const rows = await prisma.ticketComment.findMany({
+      where: { ticketId },
+      orderBy: { createdAt: "asc" },
+      skip: offset,
+      take: limit,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
+/**
+ * Batch-load comments for multiple tickets (FE worksheet / exports).
+ * Caller must already enforce ticket ownership / tenant scope.
+ */
+export async function listCommentsForTicketIds(ticketIds, { limitPerTicket = 200 } = {}) {
+  try {
+    const ids = [...new Set((ticketIds ?? []).map((id) => String(id)).filter(Boolean))];
+    if (ids.length === 0) return { data: {}, error: null };
+    const rows = await prisma.ticketComment.findMany({
+      where: { ticketId: { in: ids } },
+      orderBy: { createdAt: "asc" },
+      take: Math.min(ids.length * Math.max(1, limitPerTicket), 10000),
+    });
+    /** @type {Record<string, ReturnType<typeof mapPrismaRowsToSnake>>} */
+    const byTicket = Object.fromEntries(ids.map((id) => [id, []]));
+    for (const row of mapPrismaRowsToSnake(rows)) {
+      const tid = row.ticket_id;
+      if (!byTicket[tid]) byTicket[tid] = [];
+      if (byTicket[tid].length < limitPerTicket) byTicket[tid].push(row);
+    }
+    return { data: byTicket, error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
+}
+
 export async function insertCommentReturning(row) {
   return insertComment(row);
 }
