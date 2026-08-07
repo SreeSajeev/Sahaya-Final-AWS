@@ -13,6 +13,7 @@ import {
 import { generateTicketNumberForCreation } from "../utils/ticketNumber.js";
 import { insertTicket } from "../repositories/ticketQueryRepository.js";
 import { insertComment } from "../repositories/commentRepository.js";
+import { resolveTicketVehicleFields } from "./clientVehicleService.js";
 
 const optionalTrimmedString = (max) =>
   z
@@ -30,6 +31,10 @@ const optionalTrimmedString = (max) =>
 export const createTicketBodySchema = z.object({
   ticket_number: z.string().max(120).optional().nullable(),
   vehicle_number: optionalTrimmedString(80),
+  vehicle_id: z.preprocess(
+    (v) => (v == null || String(v).trim() === "" ? null : String(v).trim()),
+    z.string().uuid().nullable().optional()
+  ),
   category: optionalTrimmedString(200),
   issue_type: optionalTrimmedString(200),
   location: z
@@ -162,9 +167,27 @@ export async function createManualTicketFromBody(req, body) {
     shortFromField ||
     (descriptionTrimmed ? descriptionTrimmed.slice(0, 2000) : null);
 
+  const vehicleResolved = await resolveTicketVehicleFields(req, {
+    clientSlug: data.client_slug,
+    organisationId,
+    vehicleId: data.vehicle_id,
+    vehicleNumber: data.vehicle_number,
+  });
+  if (vehicleResolved.error) {
+    return {
+      ok: false,
+      status: vehicleResolved.error.status,
+      error: vehicleResolved.error.message,
+    };
+  }
+
   const insertPayload = {
     ticket_number: ticketNumber,
-    vehicle_number: data.vehicle_number ?? null,
+    vehicle_number: vehicleResolved.vehicle_number ?? null,
+    vehicle_id: vehicleResolved.vehicle_id ?? null,
+    vehicle_name: vehicleResolved.vehicle_name ?? null,
+    vehicle_type: vehicleResolved.vehicle_type ?? null,
+    registration_number: vehicleResolved.registration_number ?? null,
     category: data.category ?? null,
     issue_type: data.issue_type ?? null,
     location: normalizeLocation(data.location),
@@ -221,6 +244,9 @@ export async function createManualTicketFromBody(req, body) {
           ticketNumber: ticket.ticket_number,
           complaintId: ticket.complaint_id,
           vehicleNumber: ticket.vehicle_number,
+          vehicleName: ticket.vehicle_name,
+          vehicleType: ticket.vehicle_type,
+          registrationNumber: ticket.registration_number,
           category: ticket.category,
           issueType: ticket.issue_type,
           location: ticket.location,

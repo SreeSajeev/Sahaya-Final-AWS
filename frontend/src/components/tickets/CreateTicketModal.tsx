@@ -79,6 +79,8 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   /** Staff manual flow: selected client slug (required when not clientContext). */
   const [manualClientSlug, setManualClientSlug] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
+  const [selectedVehicleId, setSelectedVehicleId] = useState('');
+  const [manualVehicleMode, setManualVehicleMode] = useState(false);
   const [category, setCategory] = useState('');
   const [issueType, setIssueType] = useState('');
   const [customIssueType, setCustomIssueType] = useState('');
@@ -110,7 +112,18 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     if (open && !isClientMode) {
       setManualClientSlug('');
     }
+    if (open) {
+      setSelectedVehicleId('');
+      setManualVehicleMode(false);
+      setVehicleNumber('');
+    }
   }, [open, isClientMode]);
+
+  useEffect(() => {
+    setSelectedVehicleId('');
+    setManualVehicleMode(false);
+    setVehicleNumber('');
+  }, [manualClientSlug]);
 
   const {
     data: organisationsForPicker = [],
@@ -172,6 +185,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     if (canPickFromAllOrganisations && useTenantClientRegistry) {
       return tenantClientsForPicker
         .map((c) => ({
+          client_id: c.id,
           client_slug: c.slug,
           label: c.name,
           organisation_id: c.organisation_id,
@@ -259,9 +273,34 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     return clientNotificationEmails.filter((row) => row.email.toLowerCase().includes(q));
   }, [clientNotificationEmails, recipientSearch]);
 
-  const { categoryOptions, issueTypeOptions } = useOrgTicketConfigForCreate({
+  const { categoryOptions, issueTypeOptions, allowManualVehicle } = useOrgTicketConfigForCreate({
     organisationId: organisationIdForCreate,
     enabled: Boolean(open && organisationIdForCreate && session?.access_token),
+  });
+
+  const selectedClientId = useMemo(() => {
+    const slug = normalizeOrgSlug(manualClientSlug || clientContext?.clientSlug || '');
+    if (!slug) return null;
+    const match = clientOptions.find((c) => normalizeOrgSlug(c.client_slug) === slug) as
+      | { client_id?: string }
+      | undefined;
+    return match?.client_id ?? null;
+  }, [manualClientSlug, clientContext?.clientSlug, clientOptions]);
+
+  const { data: clientVehicles = [], isLoading: vehiclesLoading } = useQuery({
+    queryKey: ['client-vehicles-active', selectedClientId],
+    enabled: Boolean(open && selectedClientId && session?.access_token),
+    queryFn: async () => {
+      const res = await fetchJson<{
+        items: Array<{
+          id: string;
+          vehicle_number: string;
+          vehicle_name: string | null;
+          vehicle_type: string | null;
+        }>;
+      }>(`/data/clients/${encodeURIComponent(selectedClientId!)}/vehicles?activeOnly=true`);
+      return res.items ?? [];
+    },
   });
 
   // Mutation to create the ticket with validation
@@ -278,8 +317,21 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         throw new Error('Client short name is required to create a ticket.');
       }
 
+      if (selectedClientId && clientVehicles.length > 0) {
+        if (!manualVehicleMode && !selectedVehicleId) {
+          throw new Error('Please select an affected vehicle.');
+        }
+        if (manualVehicleMode && !allowManualVehicle) {
+          throw new Error('Manual vehicle entry is not enabled for this tenant.');
+        }
+        if (manualVehicleMode && !vehicleNumber.trim()) {
+          throw new Error('Please enter a vehicle number.');
+        }
+      }
+
       const validatedTicket = CreateTicketSchema.parse({
-        vehicle_number: vehicleNumber.trim() || null,
+        vehicle_number:
+          manualVehicleMode || !selectedVehicleId ? vehicleNumber.trim() || null : null,
         category: effectiveCategory,
         issue_type: effectiveIssueType,
         location: location.trim(),
@@ -294,9 +346,11 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
       type TicketInsert = Record<string, unknown> & {
         client_slug?: string;
         organisation_id?: string;
+        vehicle_id?: string | null;
       };
       const insertPayload: TicketInsert = {
         vehicle_number: validatedTicket.vehicle_number,
+        vehicle_id: !manualVehicleMode && selectedVehicleId ? selectedVehicleId : null,
         category: validatedTicket.category,
         issue_type: validatedTicket.issue_type,
         location: validatedTicket.location,
@@ -367,6 +421,8 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   const resetForm = () => {
     setManualClientSlug('');
     setVehicleNumber('');
+    setSelectedVehicleId('');
+    setManualVehicleMode(false);
     setCategory('');
     setIssueType('');
     setCustomIssueType('');
@@ -562,16 +618,72 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
             />
           </div>
 
-          {/* Vehicle Number */}
+          {/* Affected Vehicle */}
           <div className="space-y-2">
-            <Label htmlFor="vehicleNumber">Vehicle Number (Optional)</Label>
-            <Input
-              id="vehicleNumber"
-              placeholder="e.g., MH-12-AB-1234"
-              value={vehicleNumber}
-              onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
-              className="w-full font-mono"
-            />
+            <Label htmlFor="affectedVehicle">
+              Affected Vehicle
+              {selectedClientId && clientVehicles.length > 0 ? ' *' : ' (Optional)'}
+            </Label>
+            {selectedClientId ? (
+              <>
+                <Select
+                  value={manualVehicleMode ? '__OTHER__' : selectedVehicleId || undefined}
+                  onValueChange={(v) => {
+                    if (v === '__OTHER__') {
+                      setManualVehicleMode(true);
+                      setSelectedVehicleId('');
+                      return;
+                    }
+                    setManualVehicleMode(false);
+                    setSelectedVehicleId(v);
+                    const match = clientVehicles.find((x) => x.id === v);
+                    setVehicleNumber(match?.vehicle_number ?? '');
+                  }}
+                  disabled={vehiclesLoading}
+                >
+                  <SelectTrigger id="affectedVehicle" className="w-full">
+                    <SelectValue
+                      placeholder={
+                        vehiclesLoading
+                          ? 'Loading vehicles…'
+                          : clientVehicles.length === 0
+                            ? 'No vehicles in master — enter manually'
+                            : 'Select vehicle'
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {clientVehicles.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        <span className="font-mono text-xs">{v.vehicle_number}</span>
+                        {v.vehicle_name ? ` — ${v.vehicle_name}` : ''}
+                        {v.vehicle_type ? ` (${v.vehicle_type})` : ''}
+                      </SelectItem>
+                    ))}
+                    {allowManualVehicle || clientVehicles.length === 0 ? (
+                      <SelectItem value="__OTHER__">Other… (manual entry)</SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+                {(manualVehicleMode || clientVehicles.length === 0) && (
+                  <Input
+                    id="vehicleNumber"
+                    placeholder="e.g., MH-12-AB-1234"
+                    value={vehicleNumber}
+                    onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                    className="w-full font-mono"
+                  />
+                )}
+              </>
+            ) : (
+              <Input
+                id="vehicleNumber"
+                placeholder="Select a client first, or enter vehicle number"
+                value={vehicleNumber}
+                onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                className="w-full font-mono"
+              />
+            )}
           </div>
 
           {/* Category — tenant Ticket Settings lists when configured, else constants */}

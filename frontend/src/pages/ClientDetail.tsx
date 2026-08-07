@@ -40,6 +40,7 @@ import { formatIST } from "@/lib/dateUtils";
 import { normalizeOrgSlug } from "@/lib/tenantTicketsSupabase";
 import type { TenantClient, User } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
+import { ClientVehiclesPanel } from "@/components/clients/ClientVehiclesPanel";
 import { ArrowLeft, Briefcase, Plus, RefreshCw, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
@@ -209,6 +210,7 @@ export default function ClientDetail() {
           <Tabs defaultValue="overview" className="w-full">
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="vehicles">Vehicles</TabsTrigger>
               <TabsTrigger value="portal-users">Portal Users</TabsTrigger>
             </TabsList>
 
@@ -243,6 +245,14 @@ export default function ClientDetail() {
                   </div>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="vehicles" className="mt-4">
+              <ClientVehiclesPanel
+                clientId={client.id}
+                clientName={client.name}
+                canWrite={isSuperAdmin || isTenantAdmin}
+              />
             </TabsContent>
 
             <TabsContent value="portal-users" className="mt-4 space-y-4">

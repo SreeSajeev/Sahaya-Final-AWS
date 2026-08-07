@@ -550,7 +550,7 @@ export default function Analytics({ clientReportsMode = false }: AnalyticsProps)
   const handleExportTickets = useCallback(() => {
     const tickets = analyticsData?.tickets as Record<string, unknown>[] | undefined;
     if (!tickets || tickets.length === 0) return;
-    const baseHeaders = ['ticket_number', 'status', 'complaint_id', 'vehicle_number', 'category', 'issue_type', 'state', 'location', 'opened_at', 'created_at', 'priority', 'priority_level', 'confidence_score', 'needs_review', 'client_slug', 'resolution_category'];
+    const baseHeaders = ['ticket_number', 'status', 'complaint_id', 'vehicle_number', 'vehicle_name', 'vehicle_type', 'category', 'issue_type', 'state', 'location', 'opened_at', 'created_at', 'priority', 'priority_level', 'confidence_score', 'needs_review', 'client_slug', 'resolution_category'];
     const headerDisplay = [
       ...baseHeaders.map((h) => (h === 'client_slug' ? 'Client' : h)),
       ...TICKET_EXPORT_APPENDED_HEADERS,

@@ -208,7 +208,7 @@ async function fetchTicketByNumber(ticketNumber) {
 
   const { data: ticket, error } = await getTicketByIdUnscoped(
     row.id,
-    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, opened_by_email, opened_at, created_at, resolved_at, priority, priority_level, short_description, remarks, complaint_id, client_slug, organisation_id, verification_remarks, resolution_category, review_notes, rejection_reason, rejected_at, rejected_by"
+    "id, ticket_number, status, category, issue_type, location, state, vehicle_number, vehicle_name, vehicle_type, registration_number, opened_by_email, opened_at, created_at, resolved_at, priority, priority_level, short_description, remarks, complaint_id, client_slug, organisation_id, verification_remarks, resolution_category, review_notes, rejection_reason, rejected_at, rejected_by"
   );
 
   if (error) {
@@ -293,6 +293,9 @@ function buildTicketDetailsTable({
     `Location / Address: ${formatDetail(ticket?.location)}`,
     `State: ${formatDetail(ticket?.state)}`,
     `Vehicle Number / Device ID: ${formatDetail(ticket?.vehicle_number)}`,
+    `Vehicle Name: ${formatDetail(ticket?.vehicle_name)}`,
+    `Vehicle Type: ${formatDetail(ticket?.vehicle_type)}`,
+    `Registration Number: ${formatDetail(ticket?.registration_number)}`,
     `Priority: ${formatDetail(priorityLabel)}`,
     `Client Name: ${formatDetail(clientName)}`,
     `Reported by: ${formatDetail(reportedByDisplay)}`,
@@ -393,6 +396,9 @@ export async function sendTicketConfirmation({
   ticketNumber,
   complaintId = null,
   vehicleNumber = null,
+  vehicleName = null,
+  vehicleType = null,
+  registrationNumber = null,
   category = null,
   issueType = null,
   location = null,
@@ -407,6 +413,9 @@ Ticket Details:
 ---------------------------------
 Complaint ID: ${formatDetail(complaintId)}
 Vehicle Number: ${formatDetail(vehicleNumber)}
+Vehicle Name: ${formatDetail(vehicleName)}
+Vehicle Type: ${formatDetail(vehicleType)}
+Registration Number: ${formatDetail(registrationNumber)}
 Category: ${formatDetail(category)}
 Issue Type: ${formatDetail(issueType)}
 Location: ${formatDetail(location)}

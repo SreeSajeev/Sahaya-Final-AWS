@@ -44,6 +44,7 @@ const defaultConfig: OrgTicketConfig = {
   },
   ticketPrefixDisplay: DEFAULT_TICKET_PREFIX_DISPLAY,
   fieldExecutiveLabel: DEFAULT_FIELD_EXECUTIVE_LABEL,
+  allowManualVehicle: false,
 };
 
 function normalizeLoadedConfig(raw: Record<string, unknown> | null | undefined): OrgTicketConfig {
@@ -76,6 +77,7 @@ function normalizeLoadedConfig(raw: Record<string, unknown> | null | undefined):
       typeof v.fieldExecutiveLabel === "string" && v.fieldExecutiveLabel.trim()
         ? v.fieldExecutiveLabel.trim()
         : DEFAULT_FIELD_EXECUTIVE_LABEL,
+    allowManualVehicle: v.allowManualVehicle === true,
   };
 }
 
@@ -94,6 +96,7 @@ function buildSavePayload(
       ? {
           ticketPrefixDisplay: local.ticketPrefixDisplay?.trim() || DEFAULT_TICKET_PREFIX_DISPLAY,
           fieldExecutiveLabel: local.fieldExecutiveLabel?.trim() || DEFAULT_FIELD_EXECUTIVE_LABEL,
+          allowManualVehicle: local.allowManualVehicle === true,
         }
       : {}),
   };
@@ -396,6 +399,35 @@ export default function TicketSettings() {
                   </CardContent>
                 </Card>
               )}
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className={typography.sectionTitle}>Vehicle selection</CardTitle>
+                  <CardDescription className={typography.body}>
+                    Tickets normally pick an Affected Vehicle from the client vehicle master.
+                    Enable manual entry only when operators must type a vehicle not in the master list.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <label className="flex items-start gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      disabled={readOnly}
+                      checked={localConfig.allowManualVehicle === true}
+                      onChange={(e) =>
+                        setLocalConfig((c) => ({ ...c, allowManualVehicle: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">Allow Manual Vehicle</span>
+                      <span className="mt-0.5 block text-muted-foreground">
+                        Shows an &quot;Other…&quot; option on ticket create for free-text vehicle numbers.
+                      </span>
+                    </span>
+                  </label>
+                </CardContent>
+              </Card>
 
               <Card>
                 <CardHeader>

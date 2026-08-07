@@ -153,6 +153,8 @@ export function matchesFETicketSearch(ticket: FETicketRow, query: string): boole
     ticket.location,
     ticket.state,
     ticket.vehicle_number,
+    ticket.vehicle_name,
+    ticket.registration_number,
     ticket.category,
     ticket.issue_type,
     ticket.remarks,

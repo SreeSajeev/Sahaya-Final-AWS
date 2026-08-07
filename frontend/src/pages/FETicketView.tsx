@@ -274,12 +274,38 @@ export default function FETicketView() {
               <br />
               <span className="font-mono font-semibold">{fmtMaybe(t.vehicle_number)}</span>
             </p>
-            <div className="rounded-md bg-muted/50 p-3">
+            <div className="rounded-md bg-muted/50 p-3 sm:col-span-2">
               <p className="text-muted-foreground text-xs flex items-center gap-1">
                 <FileText className="h-3 w-3" /> Description
               </p>
               <p className="whitespace-pre-wrap break-words mt-1">
                 {fmtMaybe(t.short_description)}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3 space-y-2">
+            <p className="text-sm font-medium">Vehicle Information</p>
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <p>
+                <span className="text-muted-foreground">Vehicle Number</span>
+                <br />
+                <span className="font-mono font-semibold">{fmtMaybe(t.vehicle_number)}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Vehicle Name</span>
+                <br />
+                <span className="font-medium">{fmtMaybe(t.vehicle_name)}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Vehicle Type</span>
+                <br />
+                <span className="font-medium">{fmtMaybe(t.vehicle_type)}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Registration</span>
+                <br />
+                <span className="font-medium">{fmtMaybe(t.registration_number)}</span>
               </p>
             </div>
           </div>

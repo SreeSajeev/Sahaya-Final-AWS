@@ -807,8 +807,12 @@ export default function TicketDetail() {
                 ) : (
                   <>
                     <Info label="Vehicle Number" value={ticket.vehicle_number} mono />
+                    <Info label="Vehicle Name" value={ticket.vehicle_name} />
+                    <Info label="Vehicle Type" value={ticket.vehicle_type} />
+                    <Info label="Registration Number" value={ticket.registration_number} />
                     <Info label="Category" value={ticket.category} />
                     <Info label="Issue Type" value={ticket.issue_type} />
+                    <Info label="Client" value={ticket.client_slug} />
                     {canPerformActions && !ticket.location?.trim() ? (
                       <div className="space-y-2">
                         <Label htmlFor="ticket-location" className="text-sm font-medium">

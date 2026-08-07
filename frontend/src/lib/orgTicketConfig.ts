@@ -21,6 +21,8 @@ export interface OrgTicketConfig {
   };
   ticketPrefixDisplay?: string;
   fieldExecutiveLabel?: string;
+  /** When true, ticket create allows free-text "Other…" vehicle entry. Default false. */
+  allowManualVehicle?: boolean;
 }
 
 export function parseTerminologyFromConfig(raw: Record<string, unknown> | null | undefined): {

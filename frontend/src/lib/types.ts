@@ -105,6 +105,10 @@ export interface Ticket {
   status: TicketStatus;
   complaint_id: string | null;
   vehicle_number: string | null;
+  vehicle_id?: string | null;
+  vehicle_name?: string | null;
+  vehicle_type?: string | null;
+  registration_number?: string | null;
   category: string | null;
   issue_type: string | null;
   location: string | null;

@@ -30,6 +30,15 @@ import {
   updateTenantClient,
   deleteTenantClient,
 } from "../services/tenantClientService.js";
+import {
+  listClientVehicles,
+  createClientVehicle,
+  updateClientVehicle,
+  deleteClientVehicle,
+  importClientVehicles,
+  buildVehicleExportCsv,
+  buildVehicleImportErrorsCsv,
+} from "../services/clientVehicleService.js";
 import { listClientNotificationEmails } from "../services/clientNotificationEmailResolver.js";
 import { normalizeLocation } from "../utils/normalizeLocation.js";
 import { normalizeTicketState } from "../utils/normalizeTicketState.js";
@@ -1064,6 +1073,167 @@ router.delete("/clients/:id", requireTenantClientsEnabled, requireRole(CLIENT_WR
     return jsonError(res, 500, err?.message || "Failed to delete client");
   }
 });
+
+/* ======================================================
+   Client vehicles (tenant-scoped vehicle master)
+====================================================== */
+
+router.get(
+  "/clients/:id/vehicles",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_READ_ROLES),
+  async (req, res) => {
+    const startedAt = Date.now();
+    const clientId = safeTrim(req.params.id);
+    const activeOnly = String(req.query.activeOnly ?? "").toLowerCase() === "true";
+    const search = safeTrim(req.query.search);
+    try {
+      const outcome = await listClientVehicles(req, clientId, {
+        activeOnly,
+        search: search || null,
+      });
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      logEvent("dataApi.clientVehicles.list", {
+        tenantId: req.tenantId ?? null,
+        clientId,
+        ms: Date.now() - startedAt,
+        count: outcome.data.length,
+      });
+      return jsonOk(res, {
+        items: outcome.data,
+        total: outcome.total,
+        active: outcome.active,
+      });
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to list vehicles");
+    }
+  }
+);
+
+router.get(
+  "/clients/:id/vehicles/export",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_WRITE_ROLES),
+  async (req, res) => {
+    const clientId = safeTrim(req.params.id);
+    try {
+      const outcome = await listClientVehicles(req, clientId, {});
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      const csv = buildVehicleExportCsv(outcome.data);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="client-vehicles-${clientId.slice(0, 8)}.csv"`
+      );
+      return res.status(200).send(csv);
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to export vehicles");
+    }
+  }
+);
+
+router.post(
+  "/clients/:id/vehicles/import",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_WRITE_ROLES),
+  async (req, res) => {
+    const startedAt = Date.now();
+    const clientId = safeTrim(req.params.id);
+    const rows = req.body?.rows;
+    try {
+      const outcome = await importClientVehicles(req, clientId, rows);
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      const errorCsv =
+        outcome.errors.length > 0 ? buildVehicleImportErrorsCsv(outcome.errors) : null;
+      logEvent("dataApi.clientVehicles.import", {
+        tenantId: req.tenantId ?? null,
+        clientId,
+        ms: Date.now() - startedAt,
+        ...outcome.summary,
+      });
+      return jsonOk(res, {
+        summary: outcome.summary,
+        errors: outcome.errors,
+        error_csv: errorCsv,
+      });
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to import vehicles");
+    }
+  }
+);
+
+router.post(
+  "/clients/:id/vehicles",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_WRITE_ROLES),
+  async (req, res) => {
+    const startedAt = Date.now();
+    const clientId = safeTrim(req.params.id);
+    try {
+      const outcome = await createClientVehicle(req, clientId, req.body ?? {});
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      logEvent("dataApi.clientVehicles.create", {
+        tenantId: req.tenantId ?? null,
+        clientId,
+        ms: Date.now() - startedAt,
+        vehicleId: outcome.data.id,
+      });
+      return jsonOk(res, outcome.data);
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to create vehicle");
+    }
+  }
+);
+
+router.patch(
+  "/clients/:id/vehicles/:vehicleId",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_WRITE_ROLES),
+  async (req, res) => {
+    const startedAt = Date.now();
+    const clientId = safeTrim(req.params.id);
+    const vehicleId = safeTrim(req.params.vehicleId);
+    if (!vehicleId) return jsonError(res, 400, "vehicleId required");
+    try {
+      const outcome = await updateClientVehicle(req, clientId, vehicleId, req.body ?? {});
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      logEvent("dataApi.clientVehicles.patch", {
+        tenantId: req.tenantId ?? null,
+        clientId,
+        vehicleId,
+        ms: Date.now() - startedAt,
+      });
+      return jsonOk(res, outcome.data);
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to update vehicle");
+    }
+  }
+);
+
+router.delete(
+  "/clients/:id/vehicles/:vehicleId",
+  requireTenantClientsEnabled,
+  requireRole(CLIENT_WRITE_ROLES),
+  async (req, res) => {
+    const startedAt = Date.now();
+    const clientId = safeTrim(req.params.id);
+    const vehicleId = safeTrim(req.params.vehicleId);
+    if (!vehicleId) return jsonError(res, 400, "vehicleId required");
+    try {
+      const outcome = await deleteClientVehicle(req, clientId, vehicleId);
+      if (outcome.error) return jsonError(res, outcome.error.status, outcome.error.message);
+      logEvent("dataApi.clientVehicles.delete", {
+        tenantId: req.tenantId ?? null,
+        clientId,
+        vehicleId,
+        ms: Date.now() - startedAt,
+      });
+      return jsonOk(res, { success: true, id: vehicleId });
+    } catch (err) {
+      return jsonError(res, 500, err?.message || "Failed to delete vehicle");
+    }
+  }
+);
 
 /* ======================================================
    Organisations (read)

@@ -22,6 +22,12 @@ model Ticket {
   status                String    @default("OPEN")
   complaintId           String?   @map("complaint_id")
   vehicleNumber         String?   @map("vehicle_number")
+  /// FK to client_vehicles (nullable for legacy / free-text / email tickets).
+  vehicleId             String?   @map("vehicle_id") @db.Uuid
+  /// Snapshots captured at ticket create/update so renames do not rewrite history.
+  vehicleName           String?   @map("vehicle_name")
+  vehicleType           String?   @map("vehicle_type")
+  registrationNumber    String?   @map("registration_number")
   category              String?
   issueType             String?   @map("issue_type")
   location              String?
@@ -51,7 +57,9 @@ model Ticket {
   rejectedAt            DateTime? @map("rejected_at") @db.Timestamptz(6)
   rejectedBy            String?   @map("rejected_by") @db.Uuid
   assignments           TicketAssignment[]
+  clientVehicle         ClientVehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
 
+  @@index([vehicleId], map: "tickets_vehicle_id_idx")
   @@map("tickets")
 }
 
@@ -214,9 +222,35 @@ model TenantClient {
   status         String    @default("active")
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  vehicles       ClientVehicle[]
 
   @@unique([organisationId, slug], map: "tenant_clients_organisation_slug_unique")
   @@map("tenant_clients")
+}
+
+/// Per-client vehicle master (tenant-scoped). Unique vehicle_number per client.
+model ClientVehicle {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId     String    @map("organisation_id") @db.Uuid
+  clientId           String    @map("client_id") @db.Uuid
+  vehicleNumber      String    @map("vehicle_number")
+  vehicleType        String?   @map("vehicle_type")
+  vehicleName        String?   @map("vehicle_name")
+  registrationNumber String?   @map("registration_number")
+  description        String?
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  createdBy          String?   @map("created_by") @db.Uuid
+  updatedBy          String?   @map("updated_by") @db.Uuid
+  client             TenantClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tickets            Ticket[]
+
+  @@unique([clientId, vehicleNumber], map: "client_vehicles_client_vehicle_number_unique")
+  @@index([organisationId], map: "client_vehicles_organisation_id_idx")
+  @@index([clientId], map: "client_vehicles_client_id_idx")
+  @@index([vehicleNumber], map: "client_vehicles_vehicle_number_idx")
+  @@map("client_vehicles")
 }
 
 model FieldExecutive {

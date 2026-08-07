@@ -48,6 +48,8 @@ export const TICKET_SEARCH_TEXT_COLUMNS = [
   'ticket_number',
   'complaint_id',
   'vehicle_number',
+  'vehicle_name',
+  'registration_number',
   'short_description',
   'location',
   'state',
@@ -65,6 +67,8 @@ export type TicketSearchFields = {
   ticket_number: string;
   complaint_id?: string | null;
   vehicle_number?: string | null;
+  vehicle_name?: string | null;
+  registration_number?: string | null;
   short_description?: string | null;
   category?: string | null;
   issue_type?: string | null;
@@ -253,6 +257,8 @@ function collectTicketSearchFieldValues(
     ticket.ticket_number,
     ticket.complaint_id,
     ticket.vehicle_number,
+    ticket.vehicle_name,
+    ticket.registration_number,
     ticket.short_description,
     ticket.category,
     ticket.issue_type,

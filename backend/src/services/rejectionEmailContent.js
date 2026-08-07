@@ -56,6 +56,12 @@ export function buildRejectionEmailPlainText({
 
   lines.push(`Client: ${formatDetail(clientName)}`);
   lines.push(`Reported By: ${formatDetail(reportedByDisplay)}`);
+  lines.push(`Vehicle Number: ${formatDetail(ticket?.vehicle_number)}`);
+  if (ticket?.vehicle_name) lines.push(`Vehicle Name: ${formatDetail(ticket.vehicle_name)}`);
+  if (ticket?.vehicle_type) lines.push(`Vehicle Type: ${formatDetail(ticket.vehicle_type)}`);
+  if (ticket?.registration_number) {
+    lines.push(`Registration Number: ${formatDetail(ticket.registration_number)}`);
+  }
   lines.push(
     `Issue Type: ${formatDetail(
       issueType != null && String(issueType).trim() !== "" ? issueType : ticket?.issue_type

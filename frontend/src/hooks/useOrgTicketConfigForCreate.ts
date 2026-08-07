@@ -35,6 +35,7 @@ export function useOrgTicketConfigForCreate(options: {
   const value = configRow?.value;
   const categoriesFromConfig = Array.isArray(value?.categories) ? (value.categories as string[]) : undefined;
   const issueTypesFromConfig = Array.isArray(value?.issueTypes) ? (value.issueTypes as string[]) : undefined;
+  const allowManualVehicle = value?.allowManualVehicle === true;
 
   const useTenantLists =
     tenantConfigEnabled &&
@@ -55,6 +56,7 @@ export function useOrgTicketConfigForCreate(options: {
   return {
     categoryOptions,
     issueTypeOptions,
+    allowManualVehicle,
     isLoadingConfig: queryEnabled && isLoading,
     usesTenantConfig: useTenantLists,
   };
