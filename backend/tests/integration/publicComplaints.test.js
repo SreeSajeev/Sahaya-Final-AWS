@@ -31,7 +31,8 @@ describeIfDb("public complaints integration", () => {
     const res = await request(app).get(`/public/complaint-points/${publicToken}/context`);
     expect([200, 404, 503]).toContain(res.status);
     if (res.status === 200) {
-      expect(res.body.point || res.body.complaint_point).toBeTruthy();
+      // Public context returns top-level name/defaults (no internal IDs).
+      expect(res.body.name || res.body.point || res.body.complaint_point).toBeTruthy();
     }
   });
 

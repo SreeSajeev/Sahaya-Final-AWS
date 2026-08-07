@@ -64,7 +64,7 @@ describeIfDb("tickets integration", () => {
     const res = await request(app)
       .post(`/tickets/${ticket.id}/assign`)
       .set(authHeaders())
-      .send({ fe_id: fe.id });
+      .send({ feId: fe.id });
     expect([200, 201, 400, 403, 404, 409]).toContain(res.status);
   });
 

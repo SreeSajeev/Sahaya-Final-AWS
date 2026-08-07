@@ -40,6 +40,7 @@ import {
 } from "../constants/assignmentTypes.js";
 import { insertComment } from "../repositories/commentRepository.js";
 import { sendServiceManagerAssignmentEmail } from "./emailService.js";
+import { insertAuditLog } from "./auditLogService.js";
 
 export const BULK_ASSIGN_MAX_TICKETS = 25;
 export const BULK_ASSIGNABLE_STATUSES = ["OPEN", "FE_ATTEMPT_FAILED"];

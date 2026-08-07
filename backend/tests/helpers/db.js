@@ -118,10 +118,48 @@ export async function createTestTicket(organisationId, overrides = {}) {
       vehicleNumber: overrides.vehicleNumber || "KA01TEST1234",
       location: overrides.location || "Test Location",
       source: overrides.source || "MANUAL",
+      complaintId: overrides.complaintId ?? null,
+      shortDescription: overrides.shortDescription ?? null,
+      remarks: overrides.remarks ?? null,
+      issueType: overrides.issueType ?? null,
+      category: overrides.category ?? null,
+      state: overrides.state ?? null,
+      currentAssignmentId: overrides.currentAssignmentId ?? null,
     },
   });
   trackCleanup("ticket", ticket.id);
   return ticket;
+}
+
+/**
+ * Create a ticket assignment (FE or SM) and optionally wire ticket.current_assignment_id.
+ */
+export async function createTestAssignment(ticketId, organisationId, overrides = {}) {
+  const assignmentType = overrides.assignmentType || "FIELD_EXECUTIVE";
+  const assignment = await prisma.ticketAssignment.create({
+    data: {
+      ticketId,
+      organisationId,
+      assignmentType,
+      feId: overrides.feId ?? null,
+      assignedUserId: overrides.assignedUserId ?? null,
+      assignedRole: overrides.assignedRole ?? (assignmentType === "SERVICE_MANAGER" ? "STAFF" : null),
+      assignedBy: overrides.assignedBy ?? null,
+      assignmentRemarks: overrides.assignmentRemarks ?? null,
+      assignedAt: overrides.assignedAt ?? new Date(),
+    },
+  });
+  trackCleanup("assignment", assignment.id);
+  if (overrides.linkAsCurrent !== false) {
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: {
+        currentAssignmentId: assignment.id,
+        status: overrides.ticketStatus || "ASSIGNED",
+      },
+    });
+  }
+  return assignment;
 }
 
 export async function createTestTenantClient(organisationId, overrides = {}) {

@@ -34,7 +34,8 @@ describeIfDb("auth integration", () => {
     const user = await createTestUser(org.id, { role: "ADMIN" });
     const res = await request(app)
       .get("/auth/me")
-      .set("x-test-auth-id", user.authId)
+      // Production JWT puts users.id in claims.userId → req.user.id
+      .set("x-test-auth-id", user.id)
       .set("Authorization", "Bearer test-token");
     expect(res.status).toBe(200);
     expect(res.body.profile?.id).toBe(user.id);

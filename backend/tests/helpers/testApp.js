@@ -12,6 +12,7 @@ import fePublicRouter from "../../src/routes/fePublic.js";
 import authProvisionRouter from "../../src/routes/authProvision.js";
 import publicAuthRouter from "../../src/routes/publicAuth.js";
 import feMeRouter from "../../src/routes/feMe.js";
+import smMeRouter from "../../src/routes/smMe.js";
 import fieldExecutivesRouter from "../../src/routes/fieldExecutives.js";
 import complaintPointsRouter from "../../src/routes/complaintPoints.js";
 import publicOtpRouter from "../../src/routes/publicOtp.js";
@@ -53,6 +54,7 @@ export function buildTestApp() {
   app.post("/fe/proof", uploadFeProof);
   app.use("/fe", fePublicRouter);
   app.use("/fe", feMeRouter);
+  app.use("/sm", smMeRouter);
   app.use("/auth/public", publicAuthRouter);
   app.use("/auth", authProvisionRouter);
   app.use("/field-executives", fieldExecutivesRouter);

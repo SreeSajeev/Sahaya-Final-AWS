@@ -150,7 +150,7 @@ export async function findRawEmailByMessageId(messageId) {
   try {
     const row = await prisma.rawEmail.findFirst({
       where: { messageId },
-      select: { id: true },
+      select: { id: true, messageId: true },
     });
     return { data: mapPrismaRowToSnake(row), error: null };
   } catch (err) {

@@ -24,6 +24,21 @@ vi.mock("../../src/middleware/auth.js", () => ({
     const authId = req.headers["x-test-auth-id"] || "00000000-0000-0000-0000-000000000001";
     const email = req.headers["x-test-email"] || "admin@test.sahaya.local";
     req.user = { id: authId, email };
+    // Populate appUser early so attachTenantContext (often mounted before requireAppUser)
+    // can resolve tenantId the same way production JWT resolution does.
+    if (req.headers["x-test-user-id"]) {
+      const role = req.headers["x-test-role"] || "ADMIN";
+      const organisationId = req.headers["x-test-org-id"] || null;
+      req.appUser = {
+        id: req.headers["x-test-user-id"],
+        role,
+        organisation_id: organisationId,
+        organisationId,
+        is_active: true,
+        active: true,
+        email,
+      };
+    }
     next();
   },
   requireAppUser(req, res, next) {
