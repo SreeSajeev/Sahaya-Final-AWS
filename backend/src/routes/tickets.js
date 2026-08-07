@@ -6,6 +6,11 @@ import {
   validateNotifyEmailsAgainstAllowed,
 } from "../services/clientNotificationEmailResolver.js";
 import {
+  parseAdditionalNotifyEmails,
+  mergeCloseEmailRecipients,
+  mapNotificationEmailsForContext,
+} from "../services/closureEmailRecipients.js";
+import {
   buildRejectionEvidenceOptions,
   resolveRejectionEvidence,
   parseRejectionUploadImage,
@@ -145,36 +150,15 @@ const closeBodySchema = z.object({
   resolution_category: z.string().max(500).optional().nullable(),
   /** Required when resolution_category is OTHER; persisted via verification_remarks + audit metadata. */
   resolution_other_details: z.string().max(12000).optional().nullable(),
-  /** Optional extra notify address(es); comma/semicolon-separated. Merged with opened_by_email (deduped). */
+  /** Selected Client notification emails (must be in listClientNotificationEmails allow-list). */
+  recipients: z.array(z.string().max(320)).max(50).optional().default([]),
+  /**
+   * Optional additional notify address(es); comma/semicolon-separated.
+   * Format-validated only; merged with selected recipients (deduped).
+   * Backward-compatible with pre-checkbox clients that only sent this field.
+   */
   notification_email: z.string().max(2000).optional().nullable(),
 });
-
-const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function parseNotificationEmailList(raw) {
-  if (raw == null) return [];
-  const s = String(raw).trim();
-  if (!s) return [];
-  return s.split(/[,;]/).map((p) => p.trim()).filter((p) => SIMPLE_EMAIL_RE.test(p));
-}
-
-/** @param {string | null | undefined} openedBy @param {string | null | undefined} notificationRaw */
-function buildCloseResolutionRecipients(openedBy, notificationRaw) {
-  const extras = parseNotificationEmailList(notificationRaw);
-  const seen = new Set();
-  const out = [];
-  function push(email) {
-    const t = email == null ? "" : String(email).trim();
-    if (!t || !SIMPLE_EMAIL_RE.test(t)) return;
-    const low = t.toLowerCase();
-    if (seen.has(low)) return;
-    seen.add(low);
-    out.push(t);
-  }
-  push(openedBy);
-  for (const e of extras) push(e);
-  return out;
-}
 
 const reviewCompleteBodySchema = z.object({
   category: z.string().min(1).max(200),
@@ -548,12 +532,7 @@ router.get("/:id/rejection-context", requireRole(STAFF_OPERATION_ROLES), async (
       if (result.error) {
         return jsonRes(res, result.status ?? 500, { error: result.error });
       }
-      recipients = (result.items ?? []).map((item) => ({
-        id: String(item.email).toLowerCase(),
-        email: item.email,
-        name: item.source === "contact_email" && client?.name ? String(client.name) : null,
-        source: item.source,
-      }));
+      recipients = mapNotificationEmailsForContext(result.items ?? [], client);
     }
 
     const { data: comments, error: commentsErr } = await listCommentsForTicket(req, ticketId, {
@@ -589,6 +568,77 @@ router.get("/:id/rejection-context", requireRole(STAFF_OPERATION_ROLES), async (
     });
   } catch (err) {
     console.error("[rejection-context]", err);
+    return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
+  }
+});
+
+/* ======================================================
+   CLOSURE CONTEXT (recipients for Verify & Close)
+   GET /tickets/:id/closure-context
+   Reuses listClientNotificationEmails (same aggregation as rejection).
+====================================================== */
+router.get("/:id/closure-context", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
+  const ticketId = req.params.id;
+  try {
+    const { data: ticket, error: ticketError } = await getTicketByIdScoped(
+      req,
+      ticketId,
+      "id, status, organisation_id, ticket_number, client_slug, issue_type, category, location, opened_by_email"
+    );
+    if (ticketError || !ticket) {
+      return jsonRes(res, 404, { error: "Ticket not found" });
+    }
+    if (!isTenantAllowed(req, ticket.organisation_id)) {
+      return denyTenantMismatch(res);
+    }
+
+    const slug = normalizeClientSlug(ticket.client_slug);
+    let client = null;
+    if (slug) {
+      const { data: tc } = await findActiveTenantClientBySlug(slug, ticket.organisation_id ?? null);
+      if (tc) {
+        client = {
+          id: tc.id,
+          name: tc.name ?? null,
+          slug: tc.slug ?? slug,
+        };
+      } else {
+        client = { id: null, name: null, slug };
+      }
+    }
+
+    /** @type {{ id: string; email: string; name: string | null; source: string }[]} */
+    let recipients = [];
+    if (slug) {
+      const result = await listClientNotificationEmails(req, {
+        clientSlug: slug,
+        organisationId: ticket.organisation_id ?? null,
+      });
+      if (result.error) {
+        return jsonRes(res, result.status ?? 500, { error: result.error });
+      }
+      recipients = mapNotificationEmailsForContext(result.items ?? [], client);
+    }
+
+    const closeable =
+      ticket.status === "ON_SITE" || ticket.status === "RESOLVED_PENDING_VERIFICATION";
+
+    return jsonOk(res, {
+      ticket: {
+        id: ticket.id,
+        ticket_number: ticket.ticket_number,
+        status: ticket.status,
+        issue_type: ticket.issue_type ?? null,
+        category: ticket.category ?? null,
+        location: ticket.location ?? null,
+        client_slug: ticket.client_slug ?? null,
+      },
+      client,
+      recipients,
+      canClose: closeable,
+    });
+  } catch (err) {
+    console.error("[closure-context]", err);
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
   }
 });
@@ -1114,8 +1164,15 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
   if (!bodyParsed.success) {
     return jsonRes(res, 400, { error: "Invalid body", details: bodyParsed.error.flatten() });
   }
-  const { verification_remarks, review_notes, resolution_category, resolution_other_details, notification_email } =
-    bodyParsed.data;
+  const {
+    verification_remarks,
+    review_notes,
+    resolution_category,
+    resolution_other_details,
+    notification_email,
+    recipients: requestedRecipientsRaw,
+  } = bodyParsed.data;
+  const requestedRecipients = requestedRecipientsRaw ?? [];
   console.log("[TENANT_GUARD] close_attempt", {
     ticketId,
     tenantId: req.tenantId || null,
@@ -1203,6 +1260,36 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       });
     }
 
+    const additionalParsed = parseAdditionalNotifyEmails(notification_email);
+    if (!additionalParsed.ok) {
+      return jsonRes(res, 400, { error: additionalParsed.error });
+    }
+
+    /** @type {string[]} */
+    let validatedSelected = [];
+    const slug = normalizeClientSlug(existing.client_slug);
+    if (requestedRecipients.length > 0) {
+      if (!slug) {
+        return jsonRes(res, 400, {
+          error: "Cannot send closure email: ticket has no client association",
+        });
+      }
+      const allowedResult = await listClientNotificationEmails(req, {
+        clientSlug: slug,
+        organisationId: existing.organisation_id ?? null,
+      });
+      if (allowedResult.error) {
+        return jsonRes(res, allowedResult.status ?? 500, { error: allowedResult.error });
+      }
+      const check = validateNotifyEmailsAgainstAllowed(requestedRecipients, allowedResult.items);
+      if (!check.ok) {
+        return jsonRes(res, 400, { error: check.error });
+      }
+      validatedSelected = check.validated;
+    }
+
+    const closeRecipients = mergeCloseEmailRecipients(validatedSelected, additionalParsed.emails);
+
     let updatePayload = {
       status: "RESOLVED",
       resolved_at: new Date(),
@@ -1240,6 +1327,16 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       return jsonRes(res, 404, { error: "Ticket not found" });
     }
 
+    const nowIso = new Date().toISOString();
+    let closedByName = "Unknown";
+    if (req.appUser?.id) {
+      const { data: closerRow } = await findUserNameById(req.appUser.id);
+      closedByName =
+        closerRow?.name != null && String(closerRow.name).trim() !== ""
+          ? String(closerRow.name).trim()
+          : "Unknown";
+    }
+
     void insertAuditLog({
       req,
       entity_type: "ticket",
@@ -1250,6 +1347,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
         ticket_number: ticket.ticket_number ?? null,
         verification_remarks: remarksValue,
         resolution_category: resolutionCategoryValue,
+        recipients: closeRecipients,
         ...(resolutionCategoryValue === "OTHER" && resolutionOtherDetailsValue
           ? { resolution_other_details: resolutionOtherDetailsValue }
           : {}),
@@ -1263,8 +1361,6 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       skipped: true,
       reason: "not_attempted",
     };
-
-    const closeRecipients = buildCloseResolutionRecipients(ticket.opened_by_email, notification_email);
 
     if (closeRecipients.length === 0) {
       resolution_email_status = {
@@ -1351,7 +1447,36 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       }
     }
 
-    return jsonOk(res, { success: true, resolution_email_status });
+    if (req.appUser?.id) {
+      const insertCommentRes = await insertComment({
+        ticket_id: ticketId,
+        source: "STAFF",
+        author_id: req.appUser.id,
+        organisation_id: existing.organisation_id ?? ticket.organisation_id ?? null,
+        body:
+          closeRecipients.length > 0
+            ? `Closure email sent to ${closeRecipients.length} recipient(s)`
+            : "Ticket closed (no closure email recipients)",
+        attachments: {
+          closure_email: {
+            closed_by_user_id: req.appUser.id,
+            closed_by_name: closedByName,
+            closed_at: nowIso,
+            recipients: closeRecipients,
+            resolution_email_status,
+          },
+        },
+      });
+      if (insertCommentRes.error) {
+        console.error("[CLOSE] insert closure comment failed:", insertCommentRes.error.message);
+      }
+    }
+
+    return jsonOk(res, {
+      success: true,
+      resolution_email_status,
+      recipients: closeRecipients,
+    });
   } catch (err) {
     console.error("[CLOSE ROUTE ERROR]", err);
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });

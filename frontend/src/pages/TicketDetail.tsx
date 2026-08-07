@@ -431,6 +431,7 @@ export default function TicketDetail() {
     verificationRemarks: string,
     reviewNotes: string,
     resolutionCategory: string,
+    recipients: string[],
     notificationEmail?: string | null,
     resolutionOtherDetails?: string | null
   ) => {
@@ -462,6 +463,7 @@ export default function TicketDetail() {
             resolutionCategory != null && String(resolutionCategory).trim() !== ""
               ? String(resolutionCategory).trim()
               : undefined,
+          recipients: Array.isArray(recipients) ? recipients : [],
           ...(resolutionCategory === "OTHER" &&
           resolutionOtherDetails != null &&
           String(resolutionOtherDetails).trim() !== ""
@@ -477,13 +479,18 @@ export default function TicketDetail() {
       let emailHint = "";
       if (st) {
         if (st.sent) {
-          emailHint = " Resolution email sent to all recipients.";
+          emailHint =
+            st.sent_count != null && st.recipient_count != null
+              ? ` Closure email sent to ${st.sent_count}/${st.recipient_count} recipient(s).`
+              : " Closure email sent.";
         } else if (st.skipped && st.reason === "no_recipients") {
-          emailHint = " Resolution email skipped — no valid recipient addresses.";
+          emailHint = " No closure email was sent (no recipients selected).";
         } else if (st.reason === "partial_failure") {
-          emailHint = ` Resolution email partially sent (${st.sent_count ?? 0}/${st.recipient_count ?? 0}).`;
+          emailHint = ` Closure email partially sent (${st.sent_count ?? 0}/${st.recipient_count ?? 0}).`;
+        } else if (st.attempted && !st.sent) {
+          emailHint = " Closure email could not be delivered to all recipients.";
         } else if (st.reason) {
-          emailHint = ` Resolution email: ${st.reason}.`;
+          emailHint = ` Closure email: ${st.reason}.`;
         }
       }
       toast({
@@ -1083,6 +1090,11 @@ export default function TicketDetail() {
                       rejected_by_name?: string;
                       rejected_by_user_id?: string;
                     };
+                    closure_email?: {
+                      closed_by_name?: string;
+                      closed_at?: string;
+                      recipients?: string[];
+                    };
                   };
 
                   const rejection = a.rejection as
@@ -1099,6 +1111,7 @@ export default function TicketDetail() {
                         } | null;
                       }
                     | undefined;
+                  const closureEmail = a.closure_email;
                   const isFeAdditional = a.fe_remark?.event_type === "FE_ADDITIONAL_REMARK";
                   const images = extractProofImageSources(c.attachments);
                   const proofGpsLine = formatProofGeoLine(extractFirstProofGeo(c.attachments));
@@ -1106,7 +1119,9 @@ export default function TicketDetail() {
                     <div key={c.id} className="border-l-2 pl-4">
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Badge variant="outline">
-                          {isFeAdditional && !rejection ? "Additional Remark" : c.source}
+                          {isFeAdditional && !rejection && !closureEmail
+                            ? "Additional Remark"
+                            : c.source}
                         </Badge>
                         {formatIST(c.created_at, "PPp")}
                       </div>
@@ -1159,6 +1174,42 @@ export default function TicketDetail() {
                               {rejection.evidence.proof_index ?? 0})
                             </p>
                           )}
+                        </div>
+                      ) : closureEmail != null && typeof closureEmail === "object" ? (
+                        <div className="mt-2 space-y-2 rounded-md border border-green-200 bg-green-50/60 p-3 text-sm">
+                          <p className="font-semibold text-green-800">
+                            {Array.isArray(closureEmail.recipients) &&
+                            closureEmail.recipients.length > 0
+                              ? "Closure Email Sent"
+                              : "Ticket Closed"}
+                          </p>
+                          {closureEmail.closed_by_name?.trim() ? (
+                            <p>
+                              <span className="text-muted-foreground">By: </span>
+                              <span className="font-medium">{closureEmail.closed_by_name.trim()}</span>
+                            </p>
+                          ) : null}
+                          {closureEmail.closed_at && (
+                            <p>
+                              <span className="text-muted-foreground">Timestamp: </span>
+                              {formatIST(closureEmail.closed_at, "PPp")}
+                            </p>
+                          )}
+                          <div>
+                            <p className="text-muted-foreground">Recipients:</p>
+                            {Array.isArray(closureEmail.recipients) &&
+                            closureEmail.recipients.length > 0 ? (
+                              <ul className="list-disc pl-5">
+                                {closureEmail.recipients.map((email) => (
+                                  <li key={email} className="break-all">
+                                    {email}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="font-medium">None</p>
+                            )}
+                          </div>
                         </div>
                       ) : (
                         <p className="mt-1 whitespace-pre-wrap break-words">{c.body}</p>

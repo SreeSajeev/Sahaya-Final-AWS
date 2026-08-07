@@ -2,9 +2,8 @@
  * CloseTicketDialog.tsx
  *
  * Confirmation dialog for Service Manager to close/resolve a ticket.
- * Only allows closing tickets that are in appropriate states (ON_SITE, RESOLVED_PENDING_VERIFICATION).
- * Requires Issue Type (stored as resolution_category) and Resolution Remarks
- * (stored as verification_remarks). Location notes use review_notes (legacy column).
+ * Loads Client notification recipients (same aggregation as rejection) with
+ * checkboxes; optional Additional Emails field for new addresses.
  */
 
 import { useState, useEffect } from "react";
@@ -22,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -29,13 +29,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle, AlertTriangle } from "lucide-react";
+import { CheckCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { Ticket, TicketStatus } from "@/lib/types";
 import { TicketNumberDisplay } from "@/components/common/TicketNumberDisplay";
 import {
   RESOLUTION_CATEGORY_OTHER,
 } from "@/constants/complaintCategories";
 import { useOrgTicketConfigForClose } from "@/hooks/useOrgTicketConfigForClose";
+import { fetchJson } from "@/lib/backendDataApi";
+
+type ClosureRecipient = {
+  id: string;
+  email: string;
+  name: string | null;
+  source: string;
+};
+
+type ClosureContext = {
+  ticket: {
+    id: string;
+    ticket_number: string;
+    status: string;
+    client_slug: string | null;
+  };
+  client: { id: string | null; name: string | null; slug: string } | null;
+  recipients: ClosureRecipient[];
+  canClose: boolean;
+};
 
 interface CloseTicketDialogProps {
   ticket: Ticket;
@@ -45,6 +65,7 @@ interface CloseTicketDialogProps {
     verificationRemarks: string,
     reviewNotes: string,
     resolutionCategory: string,
+    recipients: string[],
     notificationEmail?: string | null,
     resolutionOtherDetails?: string | null
   ) => void;
@@ -61,7 +82,10 @@ const SINGLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function isValidNotificationEmailField(value: string): boolean {
   const t = value.trim();
   if (t === "") return true;
-  return t.split(/[,;]/).every((p) => SINGLE_EMAIL_RE.test(p.trim()));
+  return t.split(/[,;]/).every((p) => {
+    const part = p.trim();
+    return part.length === 0 || SINGLE_EMAIL_RE.test(part);
+  });
 }
 
 export function CloseTicketDialog({
@@ -76,6 +100,11 @@ export function CloseTicketDialog({
   const [resolutionCategory, setResolutionCategory] = useState("");
   const [resolutionOtherDetails, setResolutionOtherDetails] = useState("");
   const [notificationEmail, setNotificationEmail] = useState("");
+  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
+  const [context, setContext] = useState<ClosureContext | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
+
   const isOtherCategory = resolutionCategory === RESOLUTION_CATEGORY_OTHER;
   const { resolutionCategoryOptions } = useOrgTicketConfigForClose({
     organisationId: ticket.organisation_id ?? null,
@@ -87,7 +116,9 @@ export function CloseTicketDialog({
     resolutionCategory.trim() !== "" &&
     remarks.trim() !== "" &&
     (!isOtherCategory || resolutionOtherDetails.trim() !== "") &&
-    isValidNotificationEmailField(notificationEmail);
+    isValidNotificationEmailField(notificationEmail) &&
+    !contextLoading &&
+    !contextError;
 
   useEffect(() => {
     if (!open) {
@@ -96,8 +127,43 @@ export function CloseTicketDialog({
       setResolutionCategory("");
       setResolutionOtherDetails("");
       setNotificationEmail("");
+      setSelectedEmails(new Set());
+      setContext(null);
+      setContextError(null);
+      return;
     }
-  }, [open]);
+
+    let cancelled = false;
+    (async () => {
+      setContextLoading(true);
+      setContextError(null);
+      try {
+        const data = await fetchJson<ClosureContext>(`/tickets/${ticket.id}/closure-context`);
+        if (cancelled) return;
+        setContext(data);
+        const emails = (data.recipients ?? []).map((r) => r.email);
+        setSelectedEmails(new Set(emails));
+      } catch (err) {
+        if (cancelled) return;
+        setContextError(err instanceof Error ? err.message : "Failed to load closure recipients");
+      } finally {
+        if (!cancelled) setContextLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, ticket.id]);
+
+  const toggleEmail = (email: string, checked: boolean) => {
+    setSelectedEmails((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(email);
+      else next.delete(email);
+      return next;
+    });
+  };
 
   const handleConfirm = () => {
     if (!canConfirm) return;
@@ -106,18 +172,17 @@ export function CloseTicketDialog({
       remarks,
       reviewNotes,
       resolutionCategory.trim(),
+      Array.from(selectedEmails),
       emailTrim !== "" ? emailTrim : null,
       isOtherCategory ? resolutionOtherDetails.trim() : null
     );
-    setRemarks("");
-    setReviewNotes("");
-    setResolutionCategory("");
-    setResolutionOtherDetails("");
   };
+
+  const recipients = context?.recipients ?? [];
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
             <CheckCircle className="h-5 w-5 text-green-600" />
@@ -142,90 +207,149 @@ export function CloseTicketDialog({
                     finalize the ticket lifecycle. This action indicates that the issue has been
                     verified and resolved.
                   </p>
-                  <div className="space-y-2">
-                    <Label htmlFor="close-resolution-category">Issue Type *</Label>
-                    <Select
-                      value={resolutionCategory}
-                      onValueChange={(value) => {
-                        setResolutionCategory(value);
-                        if (value !== RESOLUTION_CATEGORY_OTHER) {
-                          setResolutionOtherDetails("");
-                        }
-                      }}
-                    >
-                      <SelectTrigger id="close-resolution-category">
-                        <SelectValue placeholder="Select issue type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {resolutionCategoryOptions.map((cat) => (
-                          <SelectItem key={cat} value={cat}>
-                            {cat}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value={RESOLUTION_CATEGORY_OTHER}>Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {isOtherCategory && (
-                    <div className="space-y-2">
-                      <Label htmlFor="close-resolution-other">Specify Issue Type *</Label>
-                      <Textarea
-                        id="close-resolution-other"
-                        placeholder="Enter issue type details..."
-                        value={resolutionOtherDetails}
-                        onChange={(e) => setResolutionOtherDetails(e.target.value)}
-                        className={`min-h-[80px] whitespace-pre-wrap ${!resolutionOtherDetails.trim() ? "border-destructive/80" : ""}`}
-                        required
-                      />
-                      {!resolutionOtherDetails.trim() && (
-                        <p className="text-xs text-destructive">
-                          Details are required when Other is selected.
-                        </p>
-                      )}
+
+                  {contextLoading ? (
+                    <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading Client contacts…
                     </div>
+                  ) : contextError ? (
+                    <p className="text-sm text-destructive">{contextError}</p>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="close-resolution-category">Issue Type *</Label>
+                        <Select
+                          value={resolutionCategory}
+                          onValueChange={(value) => {
+                            setResolutionCategory(value);
+                            if (value !== RESOLUTION_CATEGORY_OTHER) {
+                              setResolutionOtherDetails("");
+                            }
+                          }}
+                        >
+                          <SelectTrigger id="close-resolution-category">
+                            <SelectValue placeholder="Select issue type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {resolutionCategoryOptions.map((cat) => (
+                              <SelectItem key={cat} value={cat}>
+                                {cat}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value={RESOLUTION_CATEGORY_OTHER}>Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {isOtherCategory && (
+                        <div className="space-y-2">
+                          <Label htmlFor="close-resolution-other">Specify Issue Type *</Label>
+                          <Textarea
+                            id="close-resolution-other"
+                            placeholder="Enter issue type details..."
+                            value={resolutionOtherDetails}
+                            onChange={(e) => setResolutionOtherDetails(e.target.value)}
+                            className={`min-h-[80px] whitespace-pre-wrap ${!resolutionOtherDetails.trim() ? "border-destructive/80" : ""}`}
+                            required
+                          />
+                          {!resolutionOtherDetails.trim() && (
+                            <p className="text-xs text-destructive">
+                              Details are required when Other is selected.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <Label htmlFor="close-remarks">Resolution Remarks *</Label>
+                        <Textarea
+                          id="close-remarks"
+                          placeholder="Describe how the issue was resolved…"
+                          value={remarks}
+                          onChange={(e) => setRemarks(e.target.value)}
+                          className={`min-h-[80px] whitespace-pre-wrap ${!remarks.trim() ? "border-destructive/80" : ""}`}
+                          required
+                        />
+                        {!remarks.trim() ? (
+                          <p className="text-xs text-destructive">Resolution remarks are required.</p>
+                        ) : null}
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="close-review-notes">Location</Label>
+                        <Textarea
+                          id="close-review-notes"
+                          placeholder="Site or work location for this resolution (optional)"
+                          value={reviewNotes}
+                          onChange={(e) => setReviewNotes(e.target.value)}
+                          className="min-h-[100px] whitespace-pre-wrap"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Optional location note for this closure. Stored with the ticket; does not
+                          replace the ticket site location.
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Recipients</Label>
+                        {recipients.length === 0 ? (
+                          <p className="text-sm text-muted-foreground rounded-md border border-dashed p-3">
+                            No email contacts are configured for this client. You can still close the
+                            ticket, or add addresses under Additional Emails.
+                          </p>
+                        ) : (
+                          <ul className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-3">
+                            {recipients.map((r) => {
+                              const checked = selectedEmails.has(r.email);
+                              return (
+                                <li key={r.id} className="flex items-start gap-2">
+                                  <Checkbox
+                                    id={`close-rcpt-${r.id}`}
+                                    checked={checked}
+                                    onCheckedChange={(v) => toggleEmail(r.email, v === true)}
+                                    disabled={isPending}
+                                  />
+                                  <label
+                                    htmlFor={`close-rcpt-${r.id}`}
+                                    className="text-sm leading-tight cursor-pointer text-foreground"
+                                  >
+                                    {r.name?.trim() ? (
+                                      <>
+                                        <span className="font-medium">{r.name.trim()}</span>
+                                        {" — "}
+                                      </>
+                                    ) : null}
+                                    <span className="text-muted-foreground">{r.email}</span>
+                                  </label>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="close-notification-email">Additional Emails</Label>
+                        <Input
+                          id="close-notification-email"
+                          type="text"
+                          autoComplete="email"
+                          placeholder="name@company.com or a@x.com, b@y.com"
+                          value={notificationEmail}
+                          onChange={(e) => setNotificationEmail(e.target.value)}
+                          disabled={isPending}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Optional. Manually typed addresses are merged with selected recipients
+                          (duplicates removed). Use comma or semicolon to separate multiple.
+                        </p>
+                        {notificationEmail.trim() !== "" &&
+                          !isValidNotificationEmailField(notificationEmail) && (
+                            <p className="text-xs text-destructive">
+                              One or more additional emails have an invalid format.
+                            </p>
+                          )}
+                      </div>
+                    </>
                   )}
-                  <div className="space-y-2">
-                    <Label htmlFor="close-remarks">Resolution Remarks *</Label>
-                    <Textarea
-                      id="close-remarks"
-                      placeholder="Describe how the issue was resolved…"
-                      value={remarks}
-                      onChange={(e) => setRemarks(e.target.value)}
-                      className={`min-h-[80px] whitespace-pre-wrap ${!remarks.trim() ? "border-destructive/80" : ""}`}
-                      required
-                    />
-                    {!remarks.trim() ? (
-                      <p className="text-xs text-destructive">Resolution remarks are required.</p>
-                    ) : null}
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="close-review-notes">Location</Label>
-                    <Textarea
-                      id="close-review-notes"
-                      placeholder="Site or work location for this resolution (optional)"
-                      value={reviewNotes}
-                      onChange={(e) => setReviewNotes(e.target.value)}
-                      className="min-h-[100px] whitespace-pre-wrap"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Optional location note for this closure. Stored with the ticket; does not replace the ticket site location.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="close-notification-email">Additional notify email (optional)</Label>
-                    <Input
-                      id="close-notification-email"
-                      type="text"
-                      autoComplete="email"
-                      placeholder="name@company.com or a@x.com, b@y.com"
-                      value={notificationEmail}
-                      onChange={(e) => setNotificationEmail(e.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      If provided, sent as resolution email in addition to the ticket reporter address (deduplicated).
-                      You can use comma-separated addresses in one field if needed.
-                    </p>
-                  </div>
                 </>
               ) : (
                 <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
@@ -249,7 +373,10 @@ export function CloseTicketDialog({
           <AlertDialogCancel disabled={isPending}>Cancel</AlertDialogCancel>
           {canClose && (
             <AlertDialogAction
-              onClick={handleConfirm}
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirm();
+              }}
               disabled={isPending || !canConfirm}
               className="bg-green-600 hover:bg-green-700"
             >
