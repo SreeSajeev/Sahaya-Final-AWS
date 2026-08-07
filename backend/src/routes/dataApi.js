@@ -908,6 +908,7 @@ router.get("/tickets/:id/comments", async (req, res) => {
 /**
  * Short-lived presigned GET for a proof object stored on TEST S3.
  * Key is resolved from comment.attachments.proof_storage_paths[index] — never trusted from the client.
+ * Access: tenant staff / super-admin, or the currently assigned field executive.
  */
 router.get("/tickets/:id/comments/:commentId/proofs/:index/url", async (req, res) => {
   const startedAt = Date.now();
@@ -917,9 +918,21 @@ router.get("/tickets/:id/comments/:commentId/proofs/:index/url", async (req, res
   if (!ticketId || !commentId) return jsonError(res, 400, "ticket id and comment id required");
 
   try {
-    const { data: ticket, error: tErr } = await getTicketOrgCheckScoped(req, ticketId);
+    const { data: ticket, error: tErr } = await getTicketByIdScoped(
+      req,
+      ticketId,
+      "id, organisation_id, client_slug, status, current_assignment_id"
+    );
     if (tErr) return jsonError(res, 500, tErr.message);
     if (!ticket) return jsonError(res, 404, "Ticket not found");
+
+    const { assertTicketProofReadableByCaller } = await import(
+      "../services/assignmentContextService.js"
+    );
+    const access = await assertTicketProofReadableByCaller(req, ticket);
+    if (!access.ok) {
+      return jsonError(res, access.status ?? 403, access.error || "Forbidden");
+    }
 
     const { data: comment, error: cErr } = await getCommentById(commentId, "attachments, ticket_id");
     if (cErr) return jsonError(res, 500, cErr.message);

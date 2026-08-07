@@ -29,6 +29,7 @@ import { fetchJson } from "@/lib/backendDataApi";
 import { formatStateDisplay } from "@/lib/indianStates";
 import { getTicketSlaView, slaStatusTone, statusDisplayLabel } from "@/lib/tenantSla";
 import { FeTimelineProofs } from "@/components/fe/FeTimelineProofs";
+import { AssignmentContextSection } from "@/components/tickets/AssignmentContextSection";
 import { ArrowLeft, Lock, MapPin, Truck, FileText, Clock, User, Printer, Plus } from "lucide-react";
 
 const FE_REMARK_MAX = 4000;
@@ -361,6 +362,8 @@ export default function FETicketView() {
         </CardContent>
       </Card>
 
+      <AssignmentContextSection ticketId={ticketId} comments={comments} />
+
       <Card className="border-primary/30 bg-primary/5 print:hidden">
         <CardHeader className="py-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -447,6 +450,9 @@ export default function FETicketView() {
                     {ev.sortAt ? formatIST(ev.sortAt, "dd MMM yyyy · p") : "—"}
                   </p>
                   <p className="text-sm font-semibold mt-0.5">{ev.label}</p>
+                  {ev.actor && (
+                    <p className="text-xs text-muted-foreground mt-0.5">By {ev.actor}</p>
+                  )}
                   {ev.body != null && String(ev.body).trim() !== "" && (
                     <p className="mt-1 whitespace-pre-wrap break-words text-sm">{ev.body}</p>
                   )}

@@ -1,11 +1,12 @@
 /**
  * FEAssignmentModal.tsx
- * 
+ *
  * Modal for assigning Field Executives to tickets with recommendations.
  * Includes confirmation pop-up before assignment (Requirement 3).
+ * Optional Assignment Context: multiple images each with its own remark.
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, type ChangeEvent } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,23 +17,50 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AssignmentConfirmDialog } from './AssignmentConfirmDialog';
 import { StateSelect } from './StateSelect';
-import { 
-  MapPin, 
-  Star, 
-  Truck, 
-  CheckCircle, 
+import {
+  MapPin,
+  Star,
+  Truck,
+  CheckCircle,
   AlertTriangle,
   Loader2,
   Search,
-  Briefcase
+  Briefcase,
+  ImagePlus,
+  X,
 } from 'lucide-react';
 import { Ticket, FieldExecutive } from '@/lib/types';
 import { useTenantTerminology } from '@/hooks/useTenantTerminology';
 import { TicketNumberDisplay } from '@/components/common/TicketNumberDisplay';
 import { useFieldExecutivesWithStats } from '@/hooks/useFieldExecutives';
-import { useAssignTicket, useReassignTicket } from '@/hooks/useTickets';
+import { useAssignTicket, useReassignTicket, type AssignmentContextImagePayload } from '@/hooks/useTickets';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
+import { compressProofImage } from '@/lib/compressProofImage';
+
+type ContextImageDraft = {
+  id: string;
+  previewUrl: string;
+  remark: string;
+  payload: AssignmentContextImagePayload;
+};
+
+const ALLOWED_UPLOAD_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const MAX_CONTEXT_IMAGES = 10;
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
 
 interface FEAssignmentModalProps {
   ticket: Ticket;
@@ -72,6 +100,10 @@ export function FEAssignmentModal({
   /** Optional deadline for assignment (`datetime-local` value → ISO when confirming). */
   const [assignmentDueLocal, setAssignmentDueLocal] = useState('');
   const [ticketState, setTicketState] = useState<string | null>(ticket.state ?? null);
+  const [contextImages, setContextImages] = useState<ContextImageDraft[]>([]);
+  const [contextUploadError, setContextUploadError] = useState<string | null>(null);
+  const [contextBusy, setContextBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -87,6 +119,13 @@ export function FEAssignmentModal({
       setConfirmDialogOpen(false);
       setAssignmentDueLocal('');
       setTicketState(null);
+      setContextImages((prev) => {
+        for (const img of prev) URL.revokeObjectURL(img.previewUrl);
+        return [];
+      });
+      setContextUploadError(null);
+      setContextBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, [open]);
 
@@ -176,6 +215,75 @@ export function FEAssignmentModal({
     return filteredExecutives.find(fe => fe.id === selectedFE) || null;
   }, [selectedFE, filteredExecutives]);
 
+  const onContextFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (files.length === 0) return;
+
+    setContextBusy(true);
+    setContextUploadError(null);
+    try {
+      const remaining = MAX_CONTEXT_IMAGES - contextImages.length;
+      if (remaining <= 0) {
+        setContextUploadError(`At most ${MAX_CONTEXT_IMAGES} images are allowed.`);
+        return;
+      }
+      const toProcess = files.slice(0, remaining);
+      const next: ContextImageDraft[] = [];
+      for (const file of toProcess) {
+        if (!ALLOWED_UPLOAD_TYPES.has(file.type)) {
+          setContextUploadError('Images must be JPEG, PNG, or WebP.');
+          continue;
+        }
+        const { file: compressed } = await compressProofImage(file);
+        if (compressed.size > MAX_UPLOAD_BYTES) {
+          setContextUploadError(
+            `Each image must be under ${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))} MB.`
+          );
+          continue;
+        }
+        const dataBase64 = await fileToBase64(compressed);
+        const previewUrl = URL.createObjectURL(compressed);
+        next.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          previewUrl,
+          remark: '',
+          payload: {
+            contentType: compressed.type || 'image/jpeg',
+            filename: compressed.name || 'assignment-context.jpg',
+            dataBase64,
+            remark: '',
+          },
+        });
+      }
+      if (next.length > 0) {
+        setContextImages((prev) => [...prev, ...next].slice(0, MAX_CONTEXT_IMAGES));
+      }
+    } catch (err) {
+      setContextUploadError(err instanceof Error ? err.message : 'Failed to read image');
+    } finally {
+      setContextBusy(false);
+    }
+  };
+
+  const removeContextImage = (id: string) => {
+    setContextImages((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  };
+
+  const updateContextRemark = (id: string, remark: string) => {
+    setContextImages((prev) =>
+      prev.map((img) =>
+        img.id === id
+          ? { ...img, remark, payload: { ...img.payload, remark } }
+          : img
+      )
+    );
+  };
+
   // Handle clicking the assign button - shows confirmation dialog
   const handleAssignClick = () => {
     if (!selectedFE) return;
@@ -202,6 +310,13 @@ export function FEAssignmentModal({
         feId: selectedFE,
         assignmentDueAt: dueIso,
         state: ticketState,
+        contextImages:
+          contextImages.length > 0
+            ? contextImages.map((img) => ({
+                ...img.payload,
+                remark: img.remark,
+              }))
+            : undefined,
       });
 
       // Success + email/SMS toasts are handled in useAssignTicket / useReassignTicket
@@ -392,6 +507,89 @@ export function FEAssignmentModal({
             </p>
           </div>
 
+          {/* Assignment Context */}
+          <div className="space-y-3 rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <Label className="text-sm font-semibold">Assignment Context</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Optional photos with remarks the field executive can review before visiting the site.
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  contextBusy ||
+                  submitMutation.isPending ||
+                  contextImages.length >= MAX_CONTEXT_IMAGES
+                }
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {contextBusy ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <ImagePlus className="mr-1 h-4 w-4" />
+                )}
+                Add image
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                className="hidden"
+                onChange={onContextFiles}
+              />
+            </div>
+            {contextUploadError && (
+              <p className="text-xs text-destructive">{contextUploadError}</p>
+            )}
+            {contextImages.length > 0 && (
+              <ul className="space-y-3">
+                {contextImages.map((img, idx) => (
+                  <li key={img.id} className="rounded-md border bg-muted/20 p-3 space-y-2">
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={img.previewUrl}
+                        alt={`Assignment context ${idx + 1}`}
+                        className="h-20 w-20 rounded border object-cover shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium">Image {idx + 1}</p>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={() => removeContextImage(img.id)}
+                            disabled={submitMutation.isPending}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <Label htmlFor={`assign-ctx-remark-${img.id}`} className="text-xs">
+                          Remark
+                        </Label>
+                        <Textarea
+                          id={`assign-ctx-remark-${img.id}`}
+                          placeholder="e.g. The damaged meter is behind the transformer."
+                          value={img.remark}
+                          onChange={(e) => updateContextRemark(img.id, e.target.value)}
+                          className="min-h-[72px] whitespace-pre-wrap text-sm"
+                          maxLength={4000}
+                          disabled={submitMutation.isPending}
+                        />
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           {/* Override Reason (only if selecting non-recommended) */}
           {selectedFE && !selectedIsRecommended && (
             <Alert className="border-amber-200 bg-amber-50 text-amber-900">
@@ -407,11 +605,12 @@ export function FEAssignmentModal({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               onClick={handleAssignClick}
               disabled={
-                !selectedFE || 
-                submitMutation.isPending
+                !selectedFE ||
+                submitMutation.isPending ||
+                contextBusy
               }
             >
               {submitMutation.isPending ? (
@@ -445,7 +644,7 @@ export function FEAssignmentModal({
           }}
           isRecommended={isRecommended(selectedFE!)}
           onConfirm={handleConfirmAssign}
-          isPending={assignTicket.isPending}
+          isPending={submitMutation.isPending}
         />
       )}
     </Dialog>

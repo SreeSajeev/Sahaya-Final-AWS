@@ -282,6 +282,13 @@ export function useUpdateTicketStatus() {
   });
 }
 
+export type AssignmentContextImagePayload = {
+  contentType: string;
+  filename?: string | null;
+  dataBase64: string;
+  remark?: string | null;
+};
+
 /* =====================================================
    Assign ticket (via backend: creates assignment, ON_SITE token, emails, SLA)
 ===================================================== */
@@ -295,12 +302,14 @@ export function useAssignTicket() {
       feId,
       assignmentDueAt,
       state,
+      contextImages,
     }: {
       ticketId: string;
       feId: string;
       /** Optional ISO timestamp; included when backend supports `assignment_due_at`. */
       assignmentDueAt?: string | null;
       state?: string | null;
+      contextImages?: AssignmentContextImagePayload[];
     }) => {
       if (userProfile?.role === "CLIENT") {
         throw new Error("Not allowed for client");
@@ -316,6 +325,9 @@ export function useAssignTicket() {
                 ? { assignment_due_at: assignmentDueAt }
                 : {}),
               ...(state !== undefined ? { state } : {}),
+              ...(contextImages && contextImages.length > 0
+                ? { context_images: contextImages }
+                : {}),
             },
           }
         );
@@ -339,6 +351,7 @@ export function useAssignTicket() {
       queryClient.invalidateQueries({ queryKey: ["fe-active-tokens"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-list-supplement"] });
       queryClient.invalidateQueries({ queryKey: ["field-executives-with-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticketId] });
       toast({
         title: "Ticket assigned",
         description: "Assignment saved. Email and SMS status follows.",
@@ -361,11 +374,13 @@ export function useReassignTicket() {
       feId,
       assignmentDueAt,
       state,
+      contextImages,
     }: {
       ticketId: string;
       feId: string;
       assignmentDueAt?: string | null;
       state?: string | null;
+      contextImages?: AssignmentContextImagePayload[];
     }) => {
       if (userProfile?.role === "CLIENT") {
         throw new Error("Not allowed for client");
@@ -381,6 +396,9 @@ export function useReassignTicket() {
                 ? { assignment_due_at: assignmentDueAt }
                 : {}),
               ...(state !== undefined ? { state } : {}),
+              ...(contextImages && contextImages.length > 0
+                ? { context_images: contextImages }
+                : {}),
             },
           }
         );
@@ -404,6 +422,7 @@ export function useReassignTicket() {
       queryClient.invalidateQueries({ queryKey: ["fe-active-tokens"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-list-supplement"] });
       queryClient.invalidateQueries({ queryKey: ["field-executives-with-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticketId] });
       toast({
         title: "Ticket reassigned",
         description: "The new field executive has been notified.",

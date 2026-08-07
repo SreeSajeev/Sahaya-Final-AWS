@@ -41,6 +41,7 @@ import {
 import { ConfidenceScore } from "@/components/tickets/ConfidenceScore";
 import { getDisplayConfidenceScore } from "@/lib/confidence";
 import { FEAssignmentModal } from "@/components/tickets/FEAssignmentModal";
+import { AssignmentContextSection } from "@/components/tickets/AssignmentContextSection";
 import { CloseTicketDialog } from "@/components/tickets/CloseTicketDialog";
 import { RejectTicketDialog } from "@/components/tickets/RejectTicketDialog";
 
@@ -1075,6 +1076,10 @@ export default function TicketDetail() {
               </Card>
             )}
 
+            {comments && comments.length > 0 && (
+              <AssignmentContextSection ticketId={ticket.id} comments={comments} />
+            )}
+
             {/* ACTIVITY */}
             <Card>
               <CardHeader>
@@ -1095,6 +1100,12 @@ export default function TicketDetail() {
                       closed_at?: string;
                       recipients?: string[];
                     };
+                    assignment_context?: {
+                      remark?: string;
+                      uploaded_by_name?: string;
+                      uploaded_at?: string;
+                      deleted_at?: string | null;
+                    };
                   };
 
                   const rejection = a.rejection as
@@ -1112,6 +1123,15 @@ export default function TicketDetail() {
                       }
                     | undefined;
                   const closureEmail = a.closure_email;
+                  const assignmentContext =
+                    a.assignment_context != null &&
+                    typeof a.assignment_context === "object" &&
+                    !(
+                      a.assignment_context.deleted_at != null &&
+                      String(a.assignment_context.deleted_at).trim() !== ""
+                    )
+                      ? a.assignment_context
+                      : undefined;
                   const isFeAdditional = a.fe_remark?.event_type === "FE_ADDITIONAL_REMARK";
                   const images = extractProofImageSources(c.attachments);
                   const proofGpsLine = formatProofGeoLine(extractFirstProofGeo(c.attachments));
@@ -1119,9 +1139,11 @@ export default function TicketDetail() {
                     <div key={c.id} className="border-l-2 pl-4">
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Badge variant="outline">
-                          {isFeAdditional && !rejection && !closureEmail
-                            ? "Additional Remark"
-                            : c.source}
+                          {assignmentContext
+                            ? "Assignment Image"
+                            : isFeAdditional && !rejection && !closureEmail
+                              ? "Additional Remark"
+                              : c.source}
                         </Badge>
                         {formatIST(c.created_at, "PPp")}
                       </div>
@@ -1174,6 +1196,35 @@ export default function TicketDetail() {
                               {rejection.evidence.proof_index ?? 0})
                             </p>
                           )}
+                        </div>
+                      ) : assignmentContext != null ? (
+                        <div className="mt-2 space-y-2 rounded-md border border-sky-200 bg-sky-50/50 p-3 text-sm">
+                          <p className="font-semibold text-sky-900">Assignment Image</p>
+                          {assignmentContext.uploaded_by_name?.trim() ? (
+                            <p>
+                              <span className="text-muted-foreground">Manager: </span>
+                              <span className="font-medium">
+                                {assignmentContext.uploaded_by_name.trim()}
+                              </span>
+                            </p>
+                          ) : null}
+                          {assignmentContext.uploaded_at && (
+                            <p>
+                              <span className="text-muted-foreground">Uploaded: </span>
+                              {formatIST(assignmentContext.uploaded_at, "PPp")}
+                            </p>
+                          )}
+                          <div>
+                            <p className="text-muted-foreground">Remark:</p>
+                            <p className="whitespace-pre-wrap break-words font-medium">
+                              {assignmentContext.remark != null &&
+                              String(assignmentContext.remark).trim() !== ""
+                                ? String(assignmentContext.remark)
+                                : c.body?.trim()
+                                  ? c.body
+                                  : "—"}
+                            </p>
+                          </div>
                         </div>
                       ) : closureEmail != null && typeof closureEmail === "object" ? (
                         <div className="mt-2 space-y-2 rounded-md border border-green-200 bg-green-50/60 p-3 text-sm">

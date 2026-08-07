@@ -28,6 +28,10 @@ import {
   normalizeAssignmentDueAtIso,
   respondTenantMismatchIfNeeded,
 } from "../services/assignmentService.js";
+import {
+  parseAssignmentContextImages,
+  persistAssignmentContextImages,
+} from "../services/assignmentContextService.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { createManualTicketFromBody } from "../services/manualTicketService.js";
 import {
@@ -91,6 +95,27 @@ const assignBodySchema = z.object({
   // Optional: ISO-ish datetime from frontend (datetime-local → toISOString() or variants).
   assignment_due_at: z.string().max(64).optional().nullable(),
   state: z.string().max(100).optional().nullable(),
+  /**
+   * Optional manager assignment context images (each with its own remark).
+   * Stored via existing proof S3 + one timeline comment per image.
+   */
+  context_images: z
+    .array(
+      z
+        .object({
+          contentType: z.string().max(80),
+          filename: z.string().max(120).optional().nullable(),
+          remark: z.string().max(4000).optional().nullable(),
+          dataBase64: z.string().min(1).max(8_000_000).optional(),
+          data_base64: z.string().min(1).max(8_000_000).optional(),
+        })
+        .refine((v) => Boolean(v.dataBase64 || v.data_base64), {
+          message: "context_images entry requires dataBase64",
+        })
+    )
+    .max(10)
+    .optional()
+    .default([]),
 });
 
 const bulkAssignBodySchema = z.object({
@@ -419,7 +444,12 @@ router.post("/:id/assign", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
   if (!parsedAssign.success) {
     return jsonRes(res, 400, { error: "Invalid request body", details: parsedAssign.error.flatten() });
   }
-  const { feId, assignment_due_at: rawAssignmentDue, state: assignState } = parsedAssign.data;
+  const {
+    feId,
+    assignment_due_at: rawAssignmentDue,
+    state: assignState,
+    context_images: contextImagesRaw,
+  } = parsedAssign.data;
   const assignmentDueAt = normalizeAssignmentDueAtIso(rawAssignmentDue);
   console.log("[TENANT_GUARD] assign_attempt", {
     ticketId,
@@ -427,6 +457,11 @@ router.post("/:id/assign", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
     role: req.tenantRole || null,
     isSuperAdmin: Boolean(req.isSuperAdmin),
   });
+
+  const parsedImages = parseAssignmentContextImages(contextImagesRaw);
+  if (!parsedImages.ok) {
+    return jsonRes(res, parsedImages.status ?? 400, { error: parsedImages.error });
+  }
 
   try {
     const result = await assignOneTicket({
@@ -443,7 +478,42 @@ router.post("/:id/assign", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       return jsonRes(res, result.statusCode, { error: result.error });
     }
 
-    return jsonOk(res, result.data);
+    let context_images_status = {
+      attempted: false,
+      uploaded: 0,
+      comment_ids: [],
+    };
+
+    if (parsedImages.items.length > 0) {
+      const persist = await persistAssignmentContextImages({
+        req,
+        ticketId,
+        organisationId: result.data?.organisation_id ?? req.tenantId ?? null,
+        assignmentId: result.data?.assignment_id ?? null,
+        feId,
+        items: parsedImages.items,
+        isReassign: false,
+      });
+      if (!persist.ok) {
+        return jsonRes(res, persist.status ?? 500, {
+          error: persist.error,
+          assignment: result.data,
+          context_images_status: {
+            attempted: true,
+            uploaded: persist.commentIds?.length ?? 0,
+            comment_ids: persist.commentIds ?? [],
+            failed: true,
+          },
+        });
+      }
+      context_images_status = {
+        attempted: true,
+        uploaded: persist.uploaded,
+        comment_ids: persist.commentIds,
+      };
+    }
+
+    return jsonOk(res, { ...result.data, context_images_status });
   } catch (err) {
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
   }
@@ -458,7 +528,12 @@ router.post("/:id/reassign", requireRole(STAFF_OPERATION_ROLES), async (req, res
   if (!parsedReassign.success) {
     return jsonRes(res, 400, { error: "Invalid request body", details: parsedReassign.error.flatten() });
   }
-  const { feId, assignment_due_at: rawAssignmentDue, state: assignState } = parsedReassign.data;
+  const {
+    feId,
+    assignment_due_at: rawAssignmentDue,
+    state: assignState,
+    context_images: contextImagesRaw,
+  } = parsedReassign.data;
   const assignmentDueAt = normalizeAssignmentDueAtIso(rawAssignmentDue);
   console.log("[TENANT_GUARD] reassign_attempt", {
     ticketId,
@@ -466,6 +541,11 @@ router.post("/:id/reassign", requireRole(STAFF_OPERATION_ROLES), async (req, res
     role: req.tenantRole || null,
     isSuperAdmin: Boolean(req.isSuperAdmin),
   });
+
+  const parsedImages = parseAssignmentContextImages(contextImagesRaw);
+  if (!parsedImages.ok) {
+    return jsonRes(res, parsedImages.status ?? 400, { error: parsedImages.error });
+  }
 
   try {
     const result = await reassignOneTicket({
@@ -482,7 +562,42 @@ router.post("/:id/reassign", requireRole(STAFF_OPERATION_ROLES), async (req, res
       return jsonRes(res, result.statusCode, { error: result.error });
     }
 
-    return jsonOk(res, result.data);
+    let context_images_status = {
+      attempted: false,
+      uploaded: 0,
+      comment_ids: [],
+    };
+
+    if (parsedImages.items.length > 0) {
+      const persist = await persistAssignmentContextImages({
+        req,
+        ticketId,
+        organisationId: result.data?.organisation_id ?? req.tenantId ?? null,
+        assignmentId: result.data?.assignment_id ?? null,
+        feId,
+        items: parsedImages.items,
+        isReassign: true,
+      });
+      if (!persist.ok) {
+        return jsonRes(res, persist.status ?? 500, {
+          error: persist.error,
+          assignment: result.data,
+          context_images_status: {
+            attempted: true,
+            uploaded: persist.commentIds?.length ?? 0,
+            comment_ids: persist.commentIds ?? [],
+            failed: true,
+          },
+        });
+      }
+      context_images_status = {
+        attempted: true,
+        uploaded: persist.uploaded,
+        comment_ids: persist.commentIds,
+      };
+    }
+
+    return jsonOk(res, { ...result.data, context_images_status });
   } catch (err) {
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
   }

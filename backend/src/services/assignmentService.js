@@ -587,6 +587,7 @@ export async function assignOneTicket({ req, ticketId, feId, assignmentDueAt, st
       notifications,
       assignment_id: assignment.id,
       ticket_number: ticket.ticket_number ?? null,
+      organisation_id: ticket.organisation_id ?? null,
     },
   };
 }
@@ -870,6 +871,7 @@ export async function reassignOneTicket({ req, ticketId, feId, assignmentDueAt, 
       assignment_id: assignment.id,
       prior_assignment_id: priorAssignment.id,
       ticket_number: ticket.ticket_number ?? null,
+      organisation_id: ticket.organisation_id ?? null,
     },
   };
 }

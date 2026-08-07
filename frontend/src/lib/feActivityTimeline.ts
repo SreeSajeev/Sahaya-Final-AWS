@@ -8,6 +8,7 @@ import { extractProofImageSources } from "@/lib/extractProofAttachments";
 
 export type FeTimelineEventType =
   | "ASSIGNED"
+  | "ASSIGNMENT_CONTEXT"
   | "INITIAL_REMARKS"
   | "FE_REMARK"
   | "FE_ADDITIONAL_REMARK"
@@ -66,6 +67,26 @@ function classifyFeComment(c: TicketComment): {
     };
   }
 
+  const assignmentContext = a.assignment_context;
+  if (assignmentContext != null && typeof assignmentContext === "object") {
+    const meta = assignmentContext as {
+      deleted_at?: string | null;
+      remark?: string | null;
+      uploaded_by_name?: string | null;
+    };
+    if (meta.deleted_at != null && String(meta.deleted_at).trim() !== "") {
+      return { eventType: "STATUS_NOTE", label: "Staff note", body: null, hide: true };
+    }
+    const remark =
+      meta.remark != null ? String(meta.remark) : c.body != null ? String(c.body) : "";
+    return {
+      eventType: "ASSIGNMENT_CONTEXT",
+      label: "Assignment Image",
+      body: remark,
+      hide: false,
+    };
+  }
+
   const feRemark = a.fe_remark;
   if (feRemark && typeof feRemark === "object") {
     const et = String((feRemark as { event_type?: string }).event_type || "");
@@ -90,6 +111,7 @@ function classifyFeComment(c: TicketComment): {
 
   if (source === "STAFF") {
     // Generic staff comments: show body without exposing privileged attachment metadata.
+    // Assignment context is handled above; remaining staff notes stay generic.
     if (!body.trim()) return { eventType: "STATUS_NOTE", label: "Staff note", body: null, hide: true };
     return {
       eventType: "STATUS_NOTE",
@@ -198,6 +220,13 @@ export function buildFeActivityTimeline(opts: {
     const classified = classifyFeComment(c);
     if (classified.hide) continue;
     const created = c.created_at ? String(c.created_at) : "";
+    const a = attObj(c.attachments);
+    const ctx = a.assignment_context;
+    let actor: string | null = null;
+    if (ctx && typeof ctx === "object") {
+      const name = (ctx as { uploaded_by_name?: string | null }).uploaded_by_name;
+      if (name != null && String(name).trim() !== "") actor = String(name).trim();
+    }
     events.push({
       id: c.id,
       sortAt: created,
@@ -205,7 +234,7 @@ export function buildFeActivityTimeline(opts: {
       eventType: classified.eventType,
       label: classified.label,
       body: classified.body,
-      actor: null,
+      actor,
       commentId: c.id,
       proofSources: extractProofImageSources(c.attachments),
       proofStoragePathCount: proofPathCount(c.attachments),
