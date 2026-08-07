@@ -1000,6 +1000,7 @@ export default function TicketDetail() {
                 {comments?.map((c) => {
                   const a = (c.attachments ?? {}) as {
                     remarks?: unknown;
+                    fe_remark?: { event_type?: string };
                     rejection?: {
                       reason?: string;
                       rejected_by_name?: string;
@@ -1021,12 +1022,15 @@ export default function TicketDetail() {
                         } | null;
                       }
                     | undefined;
+                  const isFeAdditional = a.fe_remark?.event_type === "FE_ADDITIONAL_REMARK";
                   const images = extractProofImageSources(c.attachments);
                   const proofGpsLine = formatProofGeoLine(extractFirstProofGeo(c.attachments));
                   return (
                     <div key={c.id} className="border-l-2 pl-4">
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Badge variant="outline">{c.source}</Badge>
+                        <Badge variant="outline">
+                          {isFeAdditional && !rejection ? "Additional Remark" : c.source}
+                        </Badge>
                         {formatIST(c.created_at, "PPp")}
                       </div>
                       {rejection != null && typeof rejection === "object" ? (

@@ -48,10 +48,20 @@ export function combineTicketRemarks(
   for (const r of extraRemarks) {
     const body = fmt(r.body);
     if (!body) continue;
-    const meta = [r.at ? fmtDate(r.at) : null, r.source, r.author]
-      .filter(Boolean)
-      .join(' · ');
-    parts.push(meta ? `${meta}\n${body}` : body);
+    const who = [r.author, r.at ? fmtDate(r.at) : null].filter(Boolean).join(' — ');
+    const src = r.source != null ? String(r.source).toUpperCase() : '';
+    if (src === 'FE') {
+      parts.push(
+        who
+          ? `Additional Remark — ${who}:\n${body}`
+          : `Additional Remark:\n${body}`,
+      );
+    } else {
+      const meta = [r.at ? fmtDate(r.at) : null, r.source, r.author]
+        .filter(Boolean)
+        .join(' · ');
+      parts.push(meta ? `${meta}\n${body}` : body);
+    }
   }
   return parts.join('\n\n') || '—';
 }

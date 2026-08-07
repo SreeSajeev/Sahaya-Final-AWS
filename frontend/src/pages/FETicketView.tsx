@@ -5,6 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useTicketComments } from "@/hooks/useTickets";
 import { useFeMeTicketDetail } from "@/hooks/useFeMeTicketDetail";
 import { useAuth } from "@/hooks/useAuth";
@@ -14,10 +23,14 @@ import { StatusBadge } from "@/components/tickets/StatusBadge";
 import { TicketPriorityBadge } from "@/components/tickets/TicketPriorityBadge";
 import type { TicketComment, TicketStatus } from "@/lib/types";
 import { formatComplaintIdDisplay, type FETicketRow } from "@/lib/feTicketList";
+import { buildFeActivityTimeline } from "@/lib/feActivityTimeline";
 import { openFETicketPrintWindow } from "@/lib/feTicketPrint";
 import { fetchJson } from "@/lib/backendDataApi";
 import { formatStateDisplay } from "@/lib/indianStates";
-import { ArrowLeft, Lock, MapPin, Truck, FileText, Clock, User, Printer } from "lucide-react";
+import { FeTimelineProofs } from "@/components/fe/FeTimelineProofs";
+import { ArrowLeft, Lock, MapPin, Truck, FileText, Clock, User, Printer, Plus } from "lucide-react";
+
+const FE_REMARK_MAX = 4000;
 
 function fmtMaybe(v: unknown) {
   if (v == null) return "Not provided";
@@ -32,14 +45,6 @@ function fmtDeadline(iso: unknown) {
   return d.toLocaleString();
 }
 
-function commentLabel(c: TicketComment): string {
-  const parts = [
-    c.created_at ? formatIST(String(c.created_at), "p") : null,
-    c.source || null,
-  ].filter(Boolean);
-  return parts.join(" — ") || "Remark";
-}
-
 export default function FETicketView() {
   const params = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
@@ -51,6 +56,7 @@ export default function FETicketView() {
   const detailQuery = useFeMeTicketDetail(ticketId);
   const commentsQuery = useTicketComments(ticketId);
 
+  const [remarkOpen, setRemarkOpen] = useState(false);
   const [remarkText, setRemarkText] = useState("");
   const [remarkBusy, setRemarkBusy] = useState(false);
 
@@ -58,6 +64,15 @@ export default function FETicketView() {
     () => (commentsQuery.data ?? []) as TicketComment[],
     [commentsQuery.data],
   );
+
+  const timeline = useMemo(() => {
+    if (!detailQuery.data) return [];
+    return buildFeActivityTimeline({
+      ticket: detailQuery.data,
+      comments,
+      assignedToName: userProfile?.name || user?.email || null,
+    });
+  }, [detailQuery.data, comments, userProfile?.name, user?.email]);
 
   if (!ticketId) {
     return <div className="p-6 text-red-600">Invalid ticket.</div>;
@@ -105,16 +120,24 @@ export default function FETicketView() {
   const submitAdditionalRemark = async () => {
     const body = remarkText.trim();
     if (!body) {
-      toast({ title: "Enter a remark", variant: "destructive" });
+      toast({ title: "Additional remark is required.", variant: "destructive" });
+      return;
+    }
+    if (body.length > FE_REMARK_MAX) {
+      toast({
+        title: `Remark must be ${FE_REMARK_MAX} characters or fewer.`,
+        variant: "destructive",
+      });
       return;
     }
     setRemarkBusy(true);
     try {
       await fetchJson(`/fe/me/tickets/${encodeURIComponent(ticketId)}/remarks`, {
         method: "POST",
-        body: { body },
+        body: { remark: body, body },
       });
       setRemarkText("");
+      setRemarkOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["ticket-comments", ticketId] });
       toast({ title: "Remark added", description: "Previous remarks are preserved." });
     } catch (err) {
@@ -164,14 +187,27 @@ export default function FETicketView() {
           <Printer className="h-4 w-4" />
           Print / Download Ticket
         </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="gap-1"
+          onClick={() => {
+            setRemarkText("");
+            setRemarkOpen(true);
+          }}
+        >
+          <Plus className="h-4 w-4" />
+          Add Remark
+        </Button>
       </div>
 
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-start justify-between gap-2">
             <div>
+              <p className="text-xs text-muted-foreground">Ticket Number</p>
               <CardTitle className="font-mono text-xl">{fmtMaybe(t.ticket_number)}</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="text-sm text-muted-foreground mt-2">
                 Complaint ID:{" "}
                 <span className="font-mono text-foreground">
                   {formatComplaintIdDisplay(t.complaint_id)}
@@ -245,12 +281,6 @@ export default function FETicketView() {
               <p className="whitespace-pre-wrap break-words mt-1">
                 {fmtMaybe(t.short_description)}
               </p>
-            </div>
-            <div className="rounded-md bg-muted/50 p-3">
-              <p className="text-muted-foreground text-xs flex items-center gap-1">
-                <FileText className="h-3 w-3" /> Initial Remarks
-              </p>
-              <p className="whitespace-pre-wrap break-words mt-1">{fmtMaybe(t.remarks)}</p>
             </div>
           </div>
 
@@ -335,44 +365,103 @@ export default function FETicketView() {
         </CardContent>
       </Card>
 
-      <Card className="print:hidden">
-        <CardHeader className="py-3">
-          <CardTitle className="text-base">Add Additional Remark</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Adds a new remark. Previous remarks are preserved.
-          </p>
-          <Textarea
-            value={remarkText}
-            onChange={(e) => setRemarkText(e.target.value)}
-            placeholder="Correction or additional site note…"
-            rows={4}
-            className="whitespace-pre-wrap"
-          />
+      <Card>
+        <CardHeader className="py-3 flex flex-row items-center justify-between gap-2 space-y-0">
+          <CardTitle className="text-base">Activity Timeline</CardTitle>
           <Button
             type="button"
-            disabled={remarkBusy || !remarkText.trim()}
-            onClick={() => void submitAdditionalRemark()}
+            size="sm"
+            variant="outline"
+            className="gap-1 print:hidden"
+            onClick={() => {
+              setRemarkText("");
+              setRemarkOpen(true);
+            }}
           >
-            {remarkBusy ? "Saving…" : "Add Remark"}
+            <Plus className="h-4 w-4" />
+            Add Remark
           </Button>
+        </CardHeader>
+        <CardContent className="space-y-0">
+          {timeline.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+          ) : (
+            <ol className="space-y-4">
+              {timeline.map((ev) => (
+                <li key={ev.id} className="border-l-2 border-border pl-4">
+                  <p className="text-xs text-muted-foreground">
+                    {ev.sortAt ? formatIST(ev.sortAt, "dd MMM yyyy · p") : "—"}
+                  </p>
+                  <p className="text-sm font-semibold mt-0.5">{ev.label}</p>
+                  {ev.body != null && String(ev.body).trim() !== "" && (
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">{ev.body}</p>
+                  )}
+                  {(ev.proofSources.length > 0 || ev.proofStoragePathCount > 0) && (
+                    <FeTimelineProofs
+                      ticketId={ticketId}
+                      commentId={ev.commentId}
+                      inlineSources={ev.proofSources}
+                      storagePathCount={ev.proofStoragePathCount}
+                    />
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
         </CardContent>
       </Card>
 
-      <div className="space-y-2">
-        <h3 className="font-semibold">Remarks & Activity</h3>
-        {comments.length ? (
-          comments.map((c) => (
-            <div key={c.id} className="border-b py-2 text-sm">
-              <p className="text-xs text-muted-foreground font-medium">{commentLabel(c)}</p>
-              <p className="whitespace-pre-wrap break-words mt-1">{c.body || "—"}</p>
-            </div>
-          ))
-        ) : (
-          <p className="text-sm text-muted-foreground">No additional remarks yet.</p>
-        )}
-      </div>
+      <Dialog
+        open={remarkOpen}
+        onOpenChange={(open) => {
+          if (!remarkBusy) {
+            setRemarkOpen(open);
+            if (!open) setRemarkText("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Additional Remark</DialogTitle>
+            <DialogDescription>
+              Adds a new remark to the ticket history. Previous remarks will remain unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="fe-additional-remark">Remark</Label>
+            <Textarea
+              id="fe-additional-remark"
+              value={remarkText}
+              onChange={(e) => setRemarkText(e.target.value)}
+              placeholder="Correction or additional site note…"
+              rows={5}
+              maxLength={FE_REMARK_MAX}
+              className="whitespace-pre-wrap"
+              disabled={remarkBusy}
+            />
+            <p className="text-xs text-muted-foreground">
+              {remarkText.trim().length}/{FE_REMARK_MAX}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={remarkBusy}
+              onClick={() => setRemarkOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={remarkBusy || !remarkText.trim()}
+              onClick={() => void submitAdditionalRemark()}
+            >
+              {remarkBusy ? "Saving…" : "Add Remark"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
