@@ -21,12 +21,24 @@ beforeAll(async () => {
     console.warn("[repo-setup] DATABASE_URL not set — repository tests will be skipped");
     return;
   }
-  const { prisma } = await import("../../src/db/prisma.js");
-  await prisma.$connect();
+  try {
+    const { prisma } = await import("../../src/db/prisma.js");
+    if (prisma && typeof prisma.$connect === "function") {
+      await prisma.$connect();
+    }
+  } catch {
+    /* ignore mock / connect errors */
+  }
 });
 
 afterAll(async () => {
   if (!process.env.DATABASE_URL) return;
-  const { prisma } = await import("../../src/db/prisma.js");
-  await prisma.$disconnect();
+  try {
+    const { prisma } = await import("../../src/db/prisma.js");
+    if (prisma && typeof prisma.$disconnect === "function") {
+      await prisma.$disconnect();
+    }
+  } catch {
+    /* ignore mock / disconnect errors */
+  }
 });
