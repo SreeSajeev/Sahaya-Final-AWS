@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MetadataFormRenderer } from "../renderer/MetadataFormRenderer";
+import MetadataFormRenderer from "../renderer/MetadataFormRenderer";
 import { usePlatformSettings } from "../hooks/usePlatformSettings";
 import {
   createPlatformRuntimeTicket,
