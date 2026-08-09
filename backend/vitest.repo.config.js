@@ -1,12 +1,25 @@
-import { mergeConfig } from "vitest/config";
-import base from "./vitest.config.js";
+import { defineConfig } from "vitest/config";
 
-export default mergeConfig(base, {
+/**
+ * Repository suite only — do not merge unit includes from vitest.config.js.
+ * Unit tests that mock prisma.js must not share repoSetup teardown.
+ */
+export default defineConfig({
   test: {
     name: "repository",
+    environment: "node",
+    globals: true,
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
+    pool: "forks",
+    reporters: ["verbose"],
     include: ["tests/repositories/**/*.test.js"],
+    exclude: ["**/node_modules/**", "tests/unit/**", "tests/integration/**"],
     setupFiles: ["tests/setup/repoSetup.js"],
     coverage: {
+      provider: "v8",
+      reportsDirectory: "./coverage-repo",
+      reporter: ["text", "json-summary"],
       include: ["src/repositories/**/*.js"],
       thresholds: {
         lines: 80,

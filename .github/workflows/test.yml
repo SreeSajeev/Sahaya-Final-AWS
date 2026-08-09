@@ -28,6 +28,7 @@ jobs:
       DATABASE_URL: postgresql://sahaya:sahaya_test@localhost:5432/sahaya_test
       DB_MODE: prisma
       NODE_ENV: test
+      JWT_ACCESS_SECRET: ci-test-jwt-access-secret-at-least-32-chars-long
       SUPABASE_URL: http://localhost:54321
       SUPABASE_SERVICE_ROLE_KEY: ci-test-service-role-key
       PUBLIC_COMPLAINTS_ENABLED: "true"
@@ -37,6 +38,8 @@ jobs:
       SMS_TEST_MODE: "true"
       SMS_ENABLED: "false"
       PROCESS_ROLE: api
+      SAHAYA_TEST_MODE: "1"
+      PROVISION_SERVER_SIDE_ENABLED: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -63,20 +66,17 @@ jobs:
         working-directory: backend
         run: npm run seed:test
 
-      - name: Unit tests (Supabase-zero + local auth)
+      - name: Unit + repository tests (default vitest config)
         working-directory: backend
-        run: npm test -- tests/unit/phaseESupabaseZero.test.js tests/unit/localAuthCore.test.js
+        run: npm test
 
-      - name: Repository tests
+      - name: Repository tests (isolated setup / teardown)
         working-directory: backend
         run: npm run test:repo
 
-      # Main-era integration suites still mock Supabase-header auth and do not match
-      # develop local JWT middleware. Full-platform acceptance on TEST EC2 covers
-      # auth/tickets/proofs/tenant isolation. Rewrite of CI integration is follow-up.
-      - name: Integration tests (skipped — local-auth rewrite pending)
+      - name: Integration tests
         working-directory: backend
-        run: echo "Skipping obsolete integration header-mock suite; see TEST full-platform acceptance."
+        run: npm run test:integration
 
       - name: Upload coverage
         if: always()
