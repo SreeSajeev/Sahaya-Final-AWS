@@ -162,14 +162,18 @@ export async function listAssignmentsWithTicketsScoped(req, { limit, offset
     }
 }
 
-export async function listAllAssignmentsScoped(req) {
-  
-    try {
-      const rows = await prisma.ticketAssignment.findMany({ where: buildPrismaOrgWhere(req) });
-      return { data: mapPrismaRowsToSnake(rows), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+export async function listAllAssignmentsScoped(req, { limit = 10000 } = {}) {
+  try {
+    const take = Math.min(Math.max(Number(limit) || 10000, 100), 50000);
+    const rows = await prisma.ticketAssignment.findMany({
+      where: buildPrismaOrgWhere(req),
+      take,
+      orderBy: { assignedAt: "desc" },
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }
 
 export async function getAssignmentByTicketId(ticketId, selectCols = "*") {

@@ -18,6 +18,8 @@ export type FETicketRow = Ticket & {
   assignment_due?: string | null;
   /** When this FE was assigned (ticket_assignments.created_at). */
   assigned_at?: string | null;
+  /** Manager assignment instructions from ticket_assignments.assignment_remarks. */
+  assignment_remarks?: string | null;
   /** Who opened / reported the ticket (staff name + email when available). */
   reporter_display?: string | null;
   sla?: {

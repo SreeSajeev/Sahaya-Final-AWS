@@ -39,7 +39,7 @@ describe("proofStorageService", () => {
     const mod = await import("../../src/services/proofStorageService.js");
     expect(mod.sanitizeProofFilename("../../etc/passwd")).toBe("passwd");
     expect(() => mod.assertOwnedKey("../secret")).toThrow();
-    expect(() => mod.assertOwnedKey("proofs/legacy.jpg")).toThrow(/test\//);
+    expect(() => mod.assertOwnedKey("proofs/legacy.jpg")).toThrow(/test\/|prod\//);
   });
 
   it("rejects oversized and empty buffers on upload", async () => {

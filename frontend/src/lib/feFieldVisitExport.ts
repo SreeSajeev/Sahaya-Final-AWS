@@ -138,7 +138,7 @@ export function buildFieldVisitWorksheetRows(
         fmt(ticket.contact_number),
         fmt(ticket.location),
         fmt(ticket.resolution_location_name),
-        fmt(ticket.remarks),
+        fmt(ticket.assignment_remarks),
         latestRemark(remarks, (remark) => fmt(remark.source).toUpperCase() === 'FE'),
         fmt(ticket.verification_remarks) ||
           latestRemark(remarks, (remark) => /resolution/i.test(fmt(remark.body))),
@@ -361,7 +361,7 @@ export async function openFieldVisitPrintWindow(
         ${block('Status', fmtDash(t.status))}
         ${block('Created Date', fmtDate(t.created_at || t.opened_at))}
         ${block('Assigned Date', fmtDate(t.assigned_at))}
-        ${block('Assignment Remarks', fmtDash(t.remarks))}
+        ${block('Assignment Remarks', fmtDash(t.assignment_remarks))}
         ${block('Remarks / Timeline', remarks)}
         ${block('Resolution Remarks', fmtDash(t.verification_remarks))}
         ${block('Timeline Summary', timeline)}

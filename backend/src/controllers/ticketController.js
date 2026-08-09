@@ -11,14 +11,21 @@ import { sendFESms, buildFEActionURL } from "../services/smsService.js";
 import { redactFeActionUrls, redactPhone } from "../utils/redact.js";
 import { consumeOnSiteTokenForTicket } from "../repositories/feActionTokenRepository.js";
 import { insertAssignment, getAssignmentByTicketId } from "../repositories/assignmentRepository.js";
-import { findFeCommentByTicketBodyPattern } from "../repositories/commentRepository.js";
+import { listCommentsForTicketUnscoped } from "../repositories/commentRepository.js";
 import { getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.js";
+import { commentHasUsableProof } from "../services/proofPresenceService.js";
 import {
   getTicketByIdUnscopedSingle,
   getTicketStatusById,
   updateTicketStatus,
   updateTicketFields,
+  updateTicketById,
 } from "../repositories/ticketQueryRepository.js";
+
+async function ticketHasRealProof(ticketId) {
+  const { data: comments } = await listCommentsForTicketUnscoped(ticketId, { limit: 100, offset: 0 });
+  return (comments || []).some((c) => commentHasUsableProof(c));
+}
 
 /* =====================================================
    ASSIGN FE TO TICKET
@@ -122,13 +129,8 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
 
     assertValidTransition(ticket.status, "ON_SITE");
 
-    /* 🔒 Ensure ON_SITE proof exists */
-    const { data: onsiteProof } = await findFeCommentByTicketBodyPattern(
-      ticketId,
-      "%ON_SITE proof uploaded%"
-    );
-
-    if (!onsiteProof) {
+    /* 🔒 Ensure ON_SITE proof exists (real attachment metadata — never body text) */
+    if (!(await ticketHasRealProof(ticketId))) {
       return res.status(400).json({
         error: "ON_SITE proof not uploaded",
       });
@@ -215,23 +217,24 @@ export async function verifyAndCloseTicket(req, res) {
 
     assertValidTransition(ticket.status, "RESOLVED");
 
-    /* 🔒 Ensure RESOLUTION proof exists */
-    const { data: resolutionProof } = await findFeCommentByTicketBodyPattern(
-      ticketId,
-      "%RESOLUTION proof uploaded%"
-    );
-
-    if (!resolutionProof) {
+    /* 🔒 Ensure RESOLUTION proof exists (real attachment metadata — never body text) */
+    if (!(await ticketHasRealProof(ticketId))) {
       return res.status(400).json({
         error: "Resolution proof not uploaded",
       });
     }
 
-    const { error: updateError } = await updateTicketFields(ticketId, {
-      status: "RESOLVED",
-      resolved_at: new Date().toISOString(),
-    });
-
+    const { error: updateError, conflict } = await updateTicketById(
+      ticketId,
+      {
+        status: "RESOLVED",
+        resolved_at: new Date().toISOString(),
+      },
+      { expectedStatus: ticket.status }
+    );
+    if (conflict) {
+      return res.status(409).json({ error: "Ticket status changed; refresh and retry", code: "STATUS_CONFLICT" });
+    }
     if (updateError) throw updateError;
 
     await handleClientResolutionNotification(ticketId);

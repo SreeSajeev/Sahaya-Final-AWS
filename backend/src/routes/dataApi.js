@@ -64,6 +64,7 @@ import {
   updateTicketById,
   listTicketsForDashboardStats,
   countResolvedTicketsWithDateFilter,
+  aggregateDashboardTicketStats,
   listClientSlugsScoped,
   listTenantInsightsTickets,
   listTicketOrgStatsRows,
@@ -142,12 +143,23 @@ router.get("/dashboard/stats", async (req, res) => {
 
   try {
     const filters = { clientSlug, stateFilter, organisationIdOverride, startDate, endDate };
+
+    // Prefer SQL aggregates for status/count KPIs; row scan only for tenant SLA view metrics.
+    const { data: agg, error: aggErr } = await aggregateDashboardTicketStats(req, filters);
+    if (aggErr) {
+      if (aggErr.code === "ROLE_SCOPE") return jsonError(res, aggErr.status || 403, aggErr.message);
+      return jsonError(res, 500, aggErr.message);
+    }
+
     const { data: ticketsRaw, error: ticketsError } = await listTicketsForDashboardStats(
       req,
       filters,
       maxScan
     );
-    if (ticketsError) return jsonError(res, 500, ticketsError.message);
+    if (ticketsError) {
+      if (ticketsError.code === "ROLE_SCOPE") return jsonError(res, ticketsError.status || 403, ticketsError.message);
+      return jsonError(res, 500, ticketsError.message);
+    }
 
     const raw = ticketsRaw ?? [];
     const statsTruncated = raw.length > maxScan;
@@ -160,13 +172,14 @@ router.get("/dashboard/stats", async (req, res) => {
         .map((t) => t.id)
     );
 
-    let resolvedTickets = 0;
+    let resolvedTickets = agg?.resolvedTickets ?? 0;
     if (startDate || endDate) {
       const { count, error: resolvedErr } = await countResolvedTicketsWithDateFilter(req, filters);
-      if (resolvedErr) return jsonError(res, 500, resolvedErr.message);
+      if (resolvedErr) {
+        if (resolvedErr.code === "ROLE_SCOPE") return jsonError(res, resolvedErr.status || 403, resolvedErr.message);
+        return jsonError(res, 500, resolvedErr.message);
+      }
       resolvedTickets = count ?? 0;
-    } else {
-      resolvedTickets = ticketList.filter((t) => t.status === "RESOLVED").length;
     }
 
     let slaData = [];
@@ -185,32 +198,25 @@ router.get("/dashboard/stats", async (req, res) => {
       }
     }
 
-    const now = new Date();
-    const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const totalTickets = agg?.totalTickets ?? ticketList.length;
+    const openTickets = agg?.openTickets ?? ticketList.filter((t) => t.status === "OPEN").length;
+    const needsReviewCount =
+      agg?.needsReviewCount ?? ticketList.filter((t) => t.status === "NEEDS_REVIEW").length;
+    const assignedTickets =
+      agg?.assignedTickets ?? ticketList.filter((t) => t.current_assignment_id != null).length;
+    const inProgressTickets =
+      agg?.inProgressTickets ??
+      ticketList.filter((t) => IN_PROGRESS_STATUSES.includes(t.status)).length;
 
-    const totalTickets = ticketList.length;
-    const openTickets = ticketList.filter((t) => t.status === "OPEN").length;
-    const needsReviewCount = ticketList.filter((t) => t.status === "NEEDS_REVIEW").length;
-    const assignedTickets = ticketList.filter((t) => t.current_assignment_id != null).length;
-    const inProgressTickets = ticketList.filter((t) => IN_PROGRESS_STATUSES.includes(t.status)).length;
-
-    const resolvedToday = ticketList.filter((t) => {
-      if (t.status !== "RESOLVED") return false;
-      const resolvedAt = t.resolved_at ? new Date(t.resolved_at) : t.created_at ? new Date(t.created_at) : null;
-      return resolvedAt && resolvedAt >= startOfToday;
-    }).length;
-
-    const scored = ticketList.filter((t) => t.confidence_score != null);
-    const avgConfidenceScore =
-      scored.length > 0
-        ? Math.round((scored.reduce((sum, t) => sum + (t.confidence_score || 0), 0) / scored.length) * 10) / 10
-        : 0;
+    const resolvedToday = agg?.resolvedToday ?? 0;
+    const avgConfidenceScore = agg?.avgConfidenceScore ?? 0;
 
     const slaBreaches =
-      (slaData ?? []).filter((s) => {
+      agg?.slaBreaches ??
+      ((slaData ?? []).filter((s) => {
         if (rejectedIds.has(s.ticket_id)) return false;
         return Boolean(s.assignment_breached || s.onsite_breached || s.resolution_breached);
-      }).length || 0;
+      }).length || 0);
 
     // Tenant-configurable response/resolution SLA KPIs (snapshot-based, computed).
     let responseSlaBreached = 0;
@@ -711,7 +717,10 @@ router.get("/tickets", async (req, res) => {
         reviewQueue: reviewQueue || undefined,
       },
     });
-    if (error) return jsonError(res, 500, error.message);
+    if (error) {
+      if (error.code === "ROLE_SCOPE") return jsonError(res, error.status || 403, error.message);
+      return jsonError(res, 500, error.message);
+    }
 
     const items = await enrichTicketsWithSla(data || [], { persistEscalation: true });
 
@@ -860,7 +869,14 @@ router.post("/tickets/:id/status", requireRole(STAFF_OPERATION_ROLES), async (re
       updated_at: new Date().toISOString(),
       ...(status === "OPEN" && existing.status === "NEEDS_REVIEW" ? { needs_review: false } : {}),
     };
-    const { data, error } = await updateTicketById(id, statusUpdate);
+    const { data, error, conflict } = await updateTicketById(id, statusUpdate, {
+      expectedStatus: existing.status,
+    });
+    if (conflict) {
+      return jsonError(res, 409, "Ticket status changed; refresh and retry", {
+        code: "STATUS_CONFLICT",
+      });
+    }
     if (error) return jsonError(res, 500, error.message);
 
     void insertAuditLog({
@@ -880,7 +896,7 @@ router.post("/tickets/:id/status", requireRole(STAFF_OPERATION_ROLES), async (re
   }
 });
 
-router.post("/tickets/:id/comments", async (req, res) => {
+router.post("/tickets/:id/comments", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   const startedAt = Date.now();
   const id = req.params.id;
   if (!id) return jsonError(res, 400, "Ticket id required");
@@ -921,6 +937,14 @@ router.get("/tickets/:id/comments", async (req, res) => {
   const limit = toInt(req.query.limit, { defaultValue: 200, min: 1, max: 500 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
   try {
+    const { data: ticket, error: tErr } = await getTicketByIdScoped(
+      req,
+      id,
+      "id, organisation_id, client_slug, current_assignment_id"
+    );
+    if (tErr) return jsonError(res, 500, tErr.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+
     const { data, error } = await listCommentsForTicket(req, id, { limit, offset });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.tickets.comments", {
@@ -1011,6 +1035,14 @@ router.get("/tickets/:id/assignments", async (req, res) => {
   const limit = toInt(req.query.limit, { defaultValue: 100, min: 1, max: 300 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
   try {
+    const { data: ticket, error: tErr } = await getTicketByIdScoped(
+      req,
+      id,
+      "id, organisation_id, client_slug, current_assignment_id"
+    );
+    if (tErr) return jsonError(res, 500, tErr.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+
     const { data, error } = await listAssignmentsForTicket(req, id, { limit, offset, includeFe: true });
     if (error) return jsonError(res, 500, error.message);
     logEvent("dataApi.tickets.assignments", {
@@ -1553,7 +1585,7 @@ router.patch("/organisations/:id", async (req, res) => {
    Users (read)
 ====================================================== */
 
-router.get("/users", async (req, res) => {
+router.get("/users", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   const startedAt = Date.now();
   const limit = toInt(req.query.limit, { defaultValue: 200, min: 1, max: 500 });
   const offset = toInt(req.query.offset, { defaultValue: 0, min: 0, max: 50000 });
@@ -1829,7 +1861,7 @@ router.post("/sla/by-ticket-ids", async (req, res) => {
    Active FE action token for a ticket (staff UI)
 ====================================================== */
 
-router.get("/tickets/:ticketId/fe-action-tokens/active", async (req, res) => {
+router.get("/tickets/:ticketId/fe-action-tokens/active", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   const startedAt = Date.now();
   const ticketId = safeTrim(req.params.ticketId);
   if (!ticketId) return jsonError(res, 400, "ticketId required");
@@ -1843,8 +1875,20 @@ router.get("/tickets/:ticketId/fe-action-tokens/active", async (req, res) => {
       new Date().toISOString()
     );
     if (error) return jsonError(res, 500, error.message);
+    // Never return the raw token UUID — it is the capability secret for /fe/action/:tokenId.
+    const safe = data
+      ? {
+          ticket_id: data.ticket_id ?? ticketId,
+          fe_id: data.fe_id ?? null,
+          action_type: data.action_type ?? null,
+          expires_at: data.expires_at ?? null,
+          used: Boolean(data.used),
+          token_state: data.token_state ?? null,
+          has_active: true,
+        }
+      : null;
     logEvent("dataApi.feToken.active", { ticketId, ms: Date.now() - startedAt, found: !!data });
-    return jsonOk(res, { token: data || null });
+    return jsonOk(res, { token: safe });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to load FE token");
   }
@@ -1892,7 +1936,7 @@ router.get("/configurations", async (req, res) => {
    Analytics summary (read)
 ====================================================== */
 
-router.get("/analytics/summary", async (req, res) => {
+router.get("/analytics/summary", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   const startedAt = Date.now();
   const clientSlug = safeTrim(req.query.clientSlug);
   const stateFilter = safeTrim(req.query.state);
@@ -1902,7 +1946,10 @@ router.get("/analytics/summary", async (req, res) => {
   try {
     const filters = { clientSlug, stateFilter, startDate, endDate };
     const { data: tickets, error: ticketsErr } = await listTicketsForAnalyticsSummary(req, filters);
-    if (ticketsErr) return jsonError(res, 500, ticketsErr.message);
+    if (ticketsErr) {
+      if (ticketsErr.code === "ROLE_SCOPE") return jsonError(res, ticketsErr.status || 403, ticketsErr.message);
+      return jsonError(res, 500, ticketsErr.message);
+    }
 
     const { data: sla, error: slaErr } = await listAllSlaRowsScoped(req);
     if (slaErr) return jsonError(res, 500, slaErr.message);

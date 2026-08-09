@@ -29,6 +29,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-test-user-id"]) {
       const role = req.headers["x-test-role"] || "ADMIN";
       const organisationId = req.headers["x-test-org-id"] || null;
+      const clientSlug = req.headers["x-test-client-slug"] || null;
       req.appUser = {
         id: req.headers["x-test-user-id"],
         role,
@@ -37,6 +38,8 @@ vi.mock("../../src/middleware/auth.js", () => ({
         is_active: true,
         active: true,
         email,
+        client_slug: clientSlug,
+        clientSlug,
       };
     }
     next();
@@ -47,6 +50,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     }
     const role = req.headers["x-test-role"] || "ADMIN";
     const organisationId = req.headers["x-test-org-id"] || null;
+    const clientSlug = req.headers["x-test-client-slug"] || null;
     req.appUser = {
       id: req.headers["x-test-user-id"],
       role,
@@ -55,6 +59,8 @@ vi.mock("../../src/middleware/auth.js", () => ({
       is_active: true,
       active: true,
       email: req.headers["x-test-email"] || "admin@test.sahaya.local",
+      client_slug: clientSlug,
+      clientSlug,
     };
     next();
   },
@@ -71,6 +77,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!process.env.DATABASE_URL) return;
-  const { prisma } = await import("../../src/db/prisma.js");
-  await prisma.$disconnect();
+  try {
+    const { prisma } = await import("../../src/db/prisma.js");
+    if (prisma && typeof prisma.$disconnect === "function") {
+      await prisma.$disconnect();
+    }
+  } catch {
+    /* ignore mock / disconnect errors */
+  }
 });

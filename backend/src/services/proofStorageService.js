@@ -12,7 +12,9 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { redactStoragePath } from "../utils/redact.js";
 
 const FORBIDDEN_BUCKETS = new Set(["crm-pariskq"]);
-const ALLOWED_BUCKET_RE = /^sahaya-test(-[a-z0-9-]+)?-fe-proofs$/i;
+/** TEST and production FE proof buckets (never crm-pariskq). */
+const ALLOWED_BUCKET_RE =
+  /^(sahaya-test(-[a-z0-9-]+)?-fe-proofs|sahaya(-[a-z0-9-]+)?-fe-proofs|sahaya-prod(-[a-z0-9-]+)?-fe-proofs)$/i;
 const DEFAULT_TEST_BUCKET = "sahaya-test-fe-proofs";
 
 const ALLOWED_MIME = new Set([
@@ -80,7 +82,9 @@ export function buildProofObjectKey({
     throw new Error("ticketId and commentId required for proof object key");
   }
   const safeName = sanitizeProofFilename(filename || `${index}.bin`);
-  return `test/${tenant}/tickets/${ticket}/proofs/${comment}/${safeName}`;
+  const envPrefix =
+    String(process.env.NODE_ENV || "").toLowerCase() === "production" ? "prod" : "test";
+  return `${envPrefix}/${tenant}/tickets/${ticket}/proofs/${comment}/${safeName}`;
 }
 
 function extFromContentType(contentType, fallback = "bin") {
@@ -119,10 +123,41 @@ function assertSafeUpload({ buffer, contentType }) {
     throw new Error(`Proof exceeds max size (${MAX_PROOF_BYTES} bytes)`);
   }
   const ct = String(contentType || "application/octet-stream").toLowerCase();
-  if (!ALLOWED_MIME.has(ct) && !ct.startsWith("image/") && !ct.startsWith("video/")) {
+  if (!ALLOWED_MIME.has(ct)) {
     throw new Error(`Unsupported proof MIME type: ${ct}`);
   }
-  return ct;
+
+  // Magic-byte validation — do not trust Content-Type alone.
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const isPng =
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  const isGif =
+    buffer.length >= 6 &&
+    (buffer.toString("ascii", 0, 6) === "GIF87a" || buffer.toString("ascii", 0, 6) === "GIF89a");
+  const isWebp =
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP";
+  const isMp4 =
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 4, 8) === "ftyp";
+  const isWebm = buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3;
+
+  if (ct.includes("jpeg") || ct.includes("jpg")) {
+    if (!isJpeg) throw new Error("Proof content is not a valid JPEG");
+  } else if (ct.includes("png")) {
+    if (!isPng) throw new Error("Proof content is not a valid PNG");
+  } else if (ct.includes("webp")) {
+    if (!isWebp) throw new Error("Proof content is not a valid WebP");
+  } else if (ct.includes("gif")) {
+    if (!isGif) throw new Error("Proof content is not a valid GIF");
+  } else if (ct === "video/mp4" || ct === "video/quicktime") {
+    if (!isMp4) throw new Error("Proof content is not a valid MP4/QuickTime container");
+  } else if (ct === "video/webm") {
+    if (!isWebm) throw new Error("Proof content is not a valid WebM");
+  }
+
+  return ct === "image/jpg" ? "image/jpeg" : ct;
 }
 
 /**
@@ -210,14 +245,14 @@ export async function deleteProof({ key }) {
   return { ok: true, bucket, key };
 }
 
-/** Keys must live under test/ and never escape. */
+/** Keys must live under test/ or prod/ and never escape. */
 export function assertOwnedKey(key) {
   const k = String(key || "").trim();
   if (!k || k.includes("..") || k.startsWith("/") || k.includes("\\")) {
     throw new Error("Invalid proof object key");
   }
-  if (!k.startsWith("test/")) {
-    throw new Error("Proof object key must be under test/");
+  if (!k.startsWith("test/") && !k.startsWith("prod/")) {
+    throw new Error("Proof object key must be under test/ or prod/");
   }
   return k;
 }

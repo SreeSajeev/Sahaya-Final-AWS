@@ -47,11 +47,15 @@ import resolutionLocationsRouter from "./routes/resolutionLocations.js";
 import publicOtpRouter from "./routes/publicOtp.js";
 import publicComplaintRouter from "./routes/publicComplaint.js";
 import debugAirtelRouter from "./routes/debugAirtel.js";
+// Boundary adapter only: Metadata Platform Layer (isolated). Does not alter legacy routes.
+import platformRouter from "./platform/api/index.js";
+import { exclusiveLegacyTicketGate } from "./platform/runtime/exclusiveRuntimeGate.js";
 import { uploadFeProof } from "./controllers/proofController.js";
 import { createActionToken } from "./services/tokenService.js";
 import { sendFESms, renderAssignmentSms } from "./services/smsService.js";
 import { APP_BASE_URL, DISABLE_AUTO_RESOLUTION_WORKER } from "./config/appConfig.js";
 import { assertPublicOtpProductionSecurity } from "./config/publicOtpSecurity.js";
+import { assertProductionConfig } from "./config/productionConfig.js";
 import { requireAuth, requireAppUser } from "./middleware/auth.js";
 import { requireRole } from "./middleware/requireRole.js";
 import {
@@ -243,11 +247,14 @@ app.use(debugAirtelRouter);
    ROUTES
 ====================================================== */
 
-// Tickets
-app.use("/tickets", ticketsRouter);
+// Tickets — exclusive runtime gate: METADATA tenants cannot use legacy ticket APIs (unless compat mode)
+app.use("/tickets", exclusiveLegacyTicketGate("all"), ticketsRouter);
 
 // Additive data APIs for frontend migration (direct DB → backend)
-app.use("/data", dataApiRouter);
+app.use("/data", exclusiveLegacyTicketGate("ticketPaths"), dataApiRouter);
+
+// Metadata Platform Layer (opt-in METADATA tenants only; LEGACY = untouched)
+app.use("/platform", platformRouter);
 
 // Public magic-link proof upload — MUST be registered BEFORE any app.use("/fe", ...) so POST /fe/proof
 // never enters a router that runs requireAuth (feMeRouter). Order is security-critical.
@@ -257,10 +264,10 @@ app.post("/fe/proof", feProofLimiter, uploadFeProof);
 app.use("/fe", fePublicRouter);
 
 // FE authenticated APIs (remove frontend direct DB writes)
-app.use("/fe", feMeRouter);
+app.use("/fe", exclusiveLegacyTicketGate("feMe"), feMeRouter);
 
 // Service Manager assigned-tickets portal (no FE tokens)
-app.use("/sm", smMeRouter);
+app.use("/sm", exclusiveLegacyTicketGate("sm"), smMeRouter);
 
 // Public auth helpers (no JWT) — org list, forgot/reset password, legacy access-token lookup
 app.use("/auth/public", publicAuthRouter);
@@ -778,6 +785,7 @@ function startDailyTenantReportWorker() {
 const PROCESS_ROLE = String(process.env.PROCESS_ROLE || "all").trim().toLowerCase();
 
 assertPublicOtpProductionSecurity();
+assertProductionConfig();
 
 function startAllBackgroundJobs() {
   startWorkerLoop();

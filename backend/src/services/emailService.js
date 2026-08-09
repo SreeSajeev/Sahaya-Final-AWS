@@ -864,11 +864,7 @@ export async function sendClientResolutionEmail({
     const closureLocation =
       resolutionLocationName != null && String(resolutionLocationName).trim() !== ""
         ? String(resolutionLocationName).trim()
-        : reviewNotes != null && String(reviewNotes).trim() !== ""
-        ? String(reviewNotes).trim()
-        : mergedTicket.review_notes != null && String(mergedTicket.review_notes).trim() !== ""
-          ? String(mergedTicket.review_notes).trim()
-          : null;
+        : null;
 
     const detailsArgs = {
       ticket: { ...mergedTicket, status: mergedTicket.status || "RESOLVED" },

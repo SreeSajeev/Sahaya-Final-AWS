@@ -1,4 +1,5 @@
 import { listFeCommentsForTicketProofCheck } from "../repositories/commentRepository.js";
+import { commentHasUsableProof } from "./proofPresenceService.js";
 
 /** Matches CloseTicketDialog CLOSEABLE_STATUSES in field-ops-assist. */
 export const CLOSEABLE_PRE_CLOSE_STATUSES = ["ON_SITE", "RESOLVED_PENDING_VERIFICATION"];
@@ -27,19 +28,9 @@ function hasClosureRemarks({ verification_remarks, review_notes, resolution_cate
   return parts.some((p) => hasNonEmptyTrimmed(p));
 }
 
-function countProofImages(attachments) {
-  if (!attachments || typeof attachments !== "object") return 0;
-  if (Array.isArray(attachments.images)) return attachments.images.length;
-  if (Array.isArray(attachments)) return attachments.length;
-  let n = 0;
-  for (const v of Object.values(attachments)) {
-    if (v && typeof v === "object" && (v.url || v.public_url || v.path || v.data)) n += 1;
-  }
-  return n;
-}
-
 /**
- * Returns true when at least one FE or Service Manager comment carries resolution proof.
+ * Returns true when at least one FE or Service Manager comment carries real resolution proof.
+ * Never trusts comment body text (e.g. "proof uploaded").
  */
 async function ticketHasResolutionProof(ticketId) {
   const { data: comments, error } = await listFeCommentsForTicketProofCheck(ticketId, { limit: 50 });
@@ -50,25 +41,17 @@ async function ticketHasResolutionProof(ticketId) {
   }
 
   for (const row of comments || []) {
-    const imgs = countProofImages(row.attachments);
-    if (imgs > 0) return true;
-    const body = row.body != null ? String(row.body).toLowerCase() : "";
-    if (body.includes("proof uploaded")) return true;
+    if (commentHasUsableProof(row)) return true;
   }
 
-  // SM proofs are STAFF-sourced — also scan unscoped comments for sm_resolution_proof.
+  // Fallback: STAFF/SM resolution proofs (same attachment rules — never body text).
   try {
     const { listCommentsForTicketUnscoped } = await import("../repositories/commentRepository.js");
     const { data: all } = await listCommentsForTicketUnscoped(ticketId, { limit: 100, offset: 0 });
     for (const row of all || []) {
-      const att = row.attachments;
-      if (att && typeof att === "object" && !Array.isArray(att) && att.sm_resolution_proof) {
-        return true;
-      }
-      const body = row.body != null ? String(row.body).toLowerCase() : "";
-      if (body.includes("proof uploaded") && String(row.source || "").toUpperCase() === "STAFF") {
-        return true;
-      }
+      const src = String(row?.source || "").toUpperCase();
+      if (src !== "STAFF" && src !== "SERVICE_MANAGER" && src !== "SM" && src !== "FE") continue;
+      if (commentHasUsableProof(row)) return true;
     }
   } catch (err) {
     console.error("[CLOSE_VALIDATION] SM proof scan failed", ticketId, err?.message);

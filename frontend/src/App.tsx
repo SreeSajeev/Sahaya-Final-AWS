@@ -100,54 +100,86 @@ import {
 } from "@/components/auth/AuthGuards";
 import { PasswordResetDeepLinkRedirect } from "@/components/auth/PasswordResetDeepLinkRedirect";
 import { ClientLayout } from "@/components/layout/ClientLayout";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 
-// Pages
+// Eager shell / auth / landing
 import SahayaLanding from "@/pages/SahayaLanding";
 import EnquiryPage from "@/pages/EnquiryPage";
 import Index from "@/pages/Index";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import ChangePassword from "@/pages/ChangePassword";
-import Dashboard from "@/pages/Dashboard";
-import ClientDashboard from "@/pages/ClientDashboard";
-import ClientReports from "@/pages/ClientReports";
-import ClientSupport from "@/pages/ClientSupport";
-import ClientTicketDetail from "@/pages/ClientTicketDetail";
-import SuperAdminDashboard from "@/pages/SuperAdminDashboard";
-import SuperAdminOrgView from "@/pages/SuperAdminOrgView";
-import PlatformOverview from "@/pages/PlatformOverview";
-import Organisations from "@/pages/Organisations";
-import TenantView from "@/pages/TenantView";
-import ServiceManagers from "@/pages/ServiceManagers";
-import TicketsList from "@/pages/TicketsList";
-import ReviewQueue from "@/pages/ReviewQueue";
-import RawEmails from "@/pages/RawEmails";
-import FieldExecutives from "@/pages/FieldExecutives";
-import SLAMonitor from "@/pages/SLAMonitor";
-import Settings from "@/pages/Settings";
-import TicketSettings from "@/pages/TicketSettings";
-import TenantAdminDashboard from "@/pages/TenantAdminDashboard";
-import Users from "@/pages/Users";
-import Clients from "@/pages/Clients";
-import ClientDetail from "@/pages/ClientDetail";
-import ComplaintPoints from "@/pages/ComplaintPoints";
-import ResolutionLocations from "@/pages/ResolutionLocations";
-import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
-import { isPublicComplaintsEnabled } from "@/lib/publicComplaintsFeature";
 import NotFound from "@/pages/NotFound";
-import TicketDetail from "@/pages/TicketDetail";
-
-// Lazy-loaded heavy pages (improves initial load)
-const AuditLogs = lazy(() => import("@/pages/AuditLogs"));
-const Analytics = lazy(() => import("@/pages/Analytics"));
-
-// FE pages
-import FEMyTickets from "@/pages/FEMyTickets";
-import FETicketView from "@/pages/FETicketView";
-import SMMyTickets from "@/pages/SMMyTickets";
-import SMTicketView from "@/pages/SMTicketView";
 import FEActionPage from "@/pages/FEActionPage";
 import PublicReportPage from "@/pages/public/PublicReportPage";
+import { isTenantClientsEnabled } from "@/lib/tenantClientsFeature";
+import { isPublicComplaintsEnabled } from "@/lib/publicComplaintsFeature";
+
+// Lazy-loaded heavy pages
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const ClientDashboard = lazy(() => import("@/pages/ClientDashboard"));
+const ClientReports = lazy(() => import("@/pages/ClientReports"));
+const ClientSupport = lazy(() => import("@/pages/ClientSupport"));
+const ClientTicketDetail = lazy(() => import("@/pages/ClientTicketDetail"));
+const SuperAdminDashboard = lazy(() => import("@/pages/SuperAdminDashboard"));
+const SuperAdminOrgView = lazy(() => import("@/pages/SuperAdminOrgView"));
+const PlatformOverview = lazy(() => import("@/pages/PlatformOverview"));
+const Organisations = lazy(() => import("@/pages/Organisations"));
+const TenantView = lazy(() => import("@/pages/TenantView"));
+const ServiceManagers = lazy(() => import("@/pages/ServiceManagers"));
+const TicketsList = lazy(() => import("@/pages/TicketsList"));
+const ReviewQueue = lazy(() => import("@/pages/ReviewQueue"));
+const RawEmails = lazy(() => import("@/pages/RawEmails"));
+const FieldExecutives = lazy(() => import("@/pages/FieldExecutives"));
+const SLAMonitor = lazy(() => import("@/pages/SLAMonitor"));
+const Settings = lazy(() => import("@/pages/Settings"));
+const TicketSettings = lazy(() => import("@/pages/TicketSettings"));
+const TenantAdminDashboard = lazy(() => import("@/pages/TenantAdminDashboard"));
+const Users = lazy(() => import("@/pages/Users"));
+const Clients = lazy(() => import("@/pages/Clients"));
+const ClientDetail = lazy(() => import("@/pages/ClientDetail"));
+const ComplaintPoints = lazy(() => import("@/pages/ComplaintPoints"));
+const ResolutionLocations = lazy(() => import("@/pages/ResolutionLocations"));
+const TicketDetail = lazy(() => import("@/pages/TicketDetail"));
+const AuditLogs = lazy(() => import("@/pages/AuditLogs"));
+const Analytics = lazy(() => import("@/pages/Analytics"));
+const FEMyTickets = lazy(() => import("@/pages/FEMyTickets"));
+const FETicketView = lazy(() => import("@/pages/FETicketView"));
+const SMMyTickets = lazy(() => import("@/pages/SMMyTickets"));
+const SMTicketView = lazy(() => import("@/pages/SMTicketView"));
+
+// Metadata Platform Layer (isolated — does not replace legacy pages)
+const MetadataPlatformLayout = lazy(() => import("@/platform/components/MetadataPlatformLayout"));
+const MetadataOverviewPage = lazy(() => import("@/platform/pages/MetadataOverviewPage"));
+const MetadataFormsPage = lazy(() => import("@/platform/pages/MetadataFormsPage"));
+const MetadataRuntimePage = lazy(() => import("@/platform/pages/MetadataRuntimePage"));
+const MetadataSettingsPage = lazy(() =>
+  import("@/platform/pages/MetadataRuntimePage").then((m) => ({ default: m.MetadataSettingsPage }))
+);
+const EmailParserBuilderPage = lazy(() => import("@/platform/builders/EmailParserBuilderPage"));
+const WorkflowBuilderPage = lazy(() => import("@/platform/builders/WorkflowBuilderPage"));
+const MetadataTicketCreatePage = lazy(() => import("@/platform/runtime/MetadataTicketCreatePage"));
+const AssignmentBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.AssignmentBuilderPage }))
+);
+const NotificationBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.NotificationBuilderPage }))
+);
+const AutomationBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.AutomationBuilderPage }))
+);
+const DashboardBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.DashboardBuilderPage }))
+);
+const ReportBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.ReportBuilderPage }))
+);
+const AiBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.AiBuilderPage }))
+);
+const PluginBuilderPage = lazy(() =>
+  import("@/platform/builders/EnterpriseBuilders").then((m) => ({ default: m.PluginBuilderPage }))
+);
 
 function PageLoader() {
   return (
@@ -171,15 +203,17 @@ const queryClient = new QueryClient({
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <PasswordResetDeepLinkRedirect />
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
+    <AppErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <PasswordResetDeepLinkRedirect />
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
 
-          <AuthProvider>
-            <Routes>
+            <AuthProvider>
+              <Suspense fallback={<PageLoader />}>
+              <Routes>
               {/* ========================= */}
               {/* 🌐 PUBLIC — LANDING */}
               {/* ========================= */}
@@ -228,6 +262,28 @@ export default function App() {
                 <Route path="/app/platform" element={<PlatformOverview />} />
                 <Route path="/app/organisations" element={<Organisations />} />
                 <Route path="/app/tenant/:orgId" element={<TenantView />} />
+              </Route>
+
+              {/* ========================= */}
+              {/* 🧩 METADATA PLATFORM (opt-in; isolated from LEGACY Sahaya) */}
+              {/* ========================= */}
+              <Route element={<RequireAdmin />}>
+                <Route path="/app/metadata" element={<MetadataPlatformLayout />}>
+                  <Route index element={<MetadataOverviewPage />} />
+                  <Route path="forms" element={<MetadataFormsPage />} />
+                  <Route path="email-parser" element={<EmailParserBuilderPage />} />
+                  <Route path="workflows" element={<WorkflowBuilderPage />} />
+                  <Route path="assignments" element={<AssignmentBuilderPage />} />
+                  <Route path="notifications" element={<NotificationBuilderPage />} />
+                  <Route path="automations" element={<AutomationBuilderPage />} />
+                  <Route path="dashboards" element={<DashboardBuilderPage />} />
+                  <Route path="reports" element={<ReportBuilderPage />} />
+                  <Route path="ai" element={<AiBuilderPage />} />
+                  <Route path="plugins" element={<PluginBuilderPage />} />
+                  <Route path="runtime" element={<MetadataRuntimePage />} />
+                  <Route path="runtime/create" element={<MetadataTicketCreatePage />} />
+                  <Route path="settings" element={<MetadataSettingsPage />} />
+                </Route>
               </Route>
 
               {/* ========================= */}
@@ -315,9 +371,11 @@ export default function App() {
               {/* ========================= */}
               <Route path="*" element={<NotFound />} />
             </Routes>
-          </AuthProvider>
-        </TooltipProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
+              </Suspense>
+            </AuthProvider>
+          </TooltipProvider>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </AppErrorBoundary>
   );
 }

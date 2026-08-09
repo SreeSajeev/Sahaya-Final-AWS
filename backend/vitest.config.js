@@ -8,6 +8,8 @@ export default defineConfig({
     hookTimeout: 60_000,
     pool: "forks",
     reporters: ["verbose"],
+    include: ["tests/unit/**/*.test.js", "tests/repositories/**/*.test.js"],
+    exclude: ["tests/integration/**", "**/node_modules/**"],
     coverage: {
       provider: "v8",
       reportsDirectory: "./coverage",

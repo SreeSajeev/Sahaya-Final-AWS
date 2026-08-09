@@ -66,7 +66,8 @@ export function scopeQueryByTenant(query, req, orgColumn = "organisation_id") {
 export function isTenantAllowed(req, resourceOrgId) {
   if (req?.isSuperAdmin) return true;
   if (!req?.tenantId) return false;
-  if (!resourceOrgId) return true;
+  // Deny unscoped / orphan rows — null organisation_id must not pass tenant checks.
+  if (resourceOrgId == null || String(resourceOrgId).trim() === "") return false;
   return req.tenantId === resourceOrgId;
 }
 

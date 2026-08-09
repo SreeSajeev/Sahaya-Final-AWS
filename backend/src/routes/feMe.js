@@ -20,7 +20,7 @@ import {
   listAssignmentsByFeId,
   getAssignmentWithTicketByFeAndTicket,
 } from "../repositories/assignmentRepository.js";
-import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
+import { updateTicketById } from "../repositories/ticketQueryRepository.js";
 import { insertComment, listCommentsForTicketIds } from "../repositories/commentRepository.js";
 import { z } from "zod";
 
@@ -46,7 +46,7 @@ async function resolveFeIdFromAppUser(req) {
 
 /**
  * Shared enrichment for FE ticket payloads (list + single).
- * @param {{ ticket: object, assignmentDueAt: string | null, assignedAt?: string | null }[]} pairs
+ * @param {{ ticket: object, assignmentDueAt: string | null, assignedAt?: string | null, assignmentRemarks?: string | null }[]} pairs
  */
 async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   const tickets = pairs.map((p) => p.ticket).filter(Boolean);
@@ -56,6 +56,9 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
   );
   const assignedAtByTicketId = new Map(
     pairs.filter((p) => p.ticket?.id).map((p) => [p.ticket.id, p.assignedAt ?? null])
+  );
+  const assignmentRemarksByTicketId = new Map(
+    pairs.filter((p) => p.ticket?.id).map((p) => [p.ticket.id, p.assignmentRemarks ?? null])
   );
 
   const slaByTicketId = new Map();
@@ -257,6 +260,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
 
     const assignment_due = assignmentDueByTicketId.get(t.id) ?? null;
     const assigned_at = assignedAtByTicketId.get(t.id) ?? null;
+    const assignment_remarks = normalizeText(assignmentRemarksByTicketId.get(t.id));
     const ticketRemarks = normalizeText(t?.remarks);
     const shortDescription =
       normalizeText(t?.short_description) ?? normalizeText(t?.description);
@@ -306,6 +310,7 @@ async function enrichFeTicketPairs({ pairs, feId, req, startedAt }) {
       resolution_locked,
       assignment_due,
       assigned_at,
+      assignment_remarks,
     };
   });
 
@@ -349,7 +354,8 @@ router.get("/me/tickets", async (req, res) => {
         assignmentId: a.id,
         ticket: a.tickets,
         assignmentDueAt: hasAssignDue ? (a.assignment_due_at ?? null) : null,
-        assignedAt: a.created_at ?? null,
+        assignedAt: a.created_at ?? a.assigned_at ?? null,
+        assignmentRemarks: a.assignment_remarks ?? null,
       }))
       .filter((p) => {
         if (!p.ticket) return false;
@@ -357,10 +363,12 @@ router.get("/me/tickets", async (req, res) => {
         if (currentId == null || String(currentId).trim() === "") return false;
         return String(currentId) === String(p.assignmentId);
       })
+      .filter((p) => isTenantAllowed(req, p.ticket.organisation_id))
       .map((p) => ({
         ticket: p.ticket,
         assignmentDueAt: p.assignmentDueAt,
         assignedAt: p.assignedAt,
+        assignmentRemarks: p.assignmentRemarks,
       }));
 
     const enriched = await enrichFeTicketPairs({ pairs, feId, req, startedAt });
@@ -397,11 +405,16 @@ router.get("/me/tickets/:ticketId", async (req, res) => {
       return jsonOk(res, { item: null });
     }
 
+    if (!isTenantAllowed(req, row.tickets.organisation_id)) {
+      return jsonOk(res, { item: null });
+    }
+
     const pairs = [
       {
         ticket: row.tickets,
         assignmentDueAt: hasAssignDue ? (row.assignment_due_at ?? null) : null,
-        assignedAt: row.created_at ?? null,
+        assignedAt: row.created_at ?? row.assigned_at ?? null,
+        assignmentRemarks: row.assignment_remarks ?? null,
       },
     ];
     const enriched = await enrichFeTicketPairs({ pairs, feId, req, startedAt });
@@ -492,8 +505,7 @@ router.post("/me/tickets/:ticketId/remarks", async (req, res) => {
  * POST /fe/tickets/:id/status-action
  * Body: { action: "MARK_ON_SITE" | "MARK_WORK_COMPLETE" }
  *
- * This is an interim lifecycle endpoint to remove direct frontend writes.
- * It enforces tenant guard and only allows specific status transitions.
+ * Only the currently assigned Field Executive for this ticket may advance status.
  */
 router.post("/tickets/:id/status-action", async (req, res) => {
   const startedAt = Date.now();
@@ -504,14 +516,31 @@ router.post("/tickets/:id/status-action", async (req, res) => {
     return jsonError(res, 400, "Invalid action");
   }
 
+  const role = String(req.tenantRole || req.appUser?.role || "").toUpperCase();
+  if (role !== "FIELD_EXECUTIVE" && role !== "SUPER_ADMIN") {
+    return jsonError(res, 403, "Only field executives may use this endpoint");
+  }
+
   try {
-    const { data: ticket, error: ticketErr } = await getTicketByIdUnscoped(
-      ticketId,
-      "id, status, organisation_id, client_slug"
-    );
-    if (ticketErr) return jsonError(res, 500, ticketErr.message);
-    if (!ticket) return jsonError(res, 404, "Ticket not found");
+    const feId = await resolveFeIdFromAppUser(req);
+    if (!feId) return jsonError(res, 403, "Field executive profile not linked");
+
+    const { data: row, error: assignErr } = await getAssignmentWithTicketByFeAndTicket(feId, ticketId);
+    if (assignErr) return jsonError(res, 500, assignErr.message);
+    if (!row?.tickets) return jsonError(res, 404, "Ticket not found or not assigned to you");
+
+    const ticket = row.tickets;
     if (!isTenantAllowed(req, ticket.organisation_id)) return jsonError(res, 403, "Forbidden");
+
+    const currentId = ticket.current_assignment_id;
+    if (
+      currentId == null ||
+      String(currentId).trim() === "" ||
+      String(currentId) !== String(row.id)
+    ) {
+      return jsonError(res, 403, "Not the current assignment for this ticket");
+    }
+
     if (ticket.status === "REJECTED") return jsonError(res, 400, "Ticket rejected");
 
     const nowIso = new Date().toISOString();
@@ -525,13 +554,17 @@ router.post("/tickets/:id/status-action", async (req, res) => {
       nextStatus = "RESOLVED_PENDING_VERIFICATION";
     }
 
-    const { data: updated, error: updErr } = await updateTicketById(ticketId, {
-      status: nextStatus,
-      updated_at: nowIso,
-    });
+    const { data: updated, error: updErr, conflict } = await updateTicketById(
+      ticketId,
+      {
+        status: nextStatus,
+        updated_at: nowIso,
+      },
+      { expectedStatus: ticket.status }
+    );
+    if (conflict) return jsonError(res, 409, "Ticket was updated by another user. Refresh and retry.");
     if (updErr) return jsonError(res, 500, updErr.message);
 
-    const feId = await resolveFeIdFromAppUser(req);
     void insertAuditLog({
       req,
       entity_type: "ticket",

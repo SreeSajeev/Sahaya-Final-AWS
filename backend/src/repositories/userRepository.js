@@ -146,11 +146,27 @@ export async function listUsersScoped(req, { limit, offset, organisationId, appr
     if (req?.isSuperAdmin && organisationId) where.organisationId = organisationId;
     if (approvalStatus) where.approvalStatus = approvalStatus;
     if (role) where.role = role;
+    // Never return password hashes (or other auth secrets) via list APIs.
     const rows = await prisma.user.findMany({
       where,
       orderBy: { createdAt: "desc" },
       skip: offset,
       take: limit,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        active: true,
+        isActive: true,
+        approvalStatus: true,
+        organisationId: true,
+        clientSlug: true,
+        authId: true,
+        createdAt: true,
+        lastLoginAt: true,
+        passwordChangedAt: true,
+      },
     });
     return { data: mapPrismaRowsToSnake(rows), error: null };
   } catch (err) {

@@ -210,14 +210,17 @@ export async function listAllSlaTicketIds() {
     }
 }
 
-export async function listAllSlaRowsScoped(req) {
-  
-    try {
-      const rows = await prisma.slaTracking.findMany({ where: buildPrismaOrgWhere(req) });
-      return { data: mapPrismaRowsToSnake(rows), error: null };
-    } catch (err) {
-      return { data: null, error: toSupabaseStyleError(err) };
-    }
+export async function listAllSlaRowsScoped(req, { limit = 10000 } = {}) {
+  try {
+    const take = Math.min(Math.max(Number(limit) || 10000, 100), 50000);
+    const rows = await prisma.slaTracking.findMany({
+      where: buildPrismaOrgWhere(req),
+      take,
+    });
+    return { data: mapPrismaRowsToSnake(rows), error: null };
+  } catch (err) {
+    return { data: null, error: toSupabaseStyleError(err) };
+  }
 }
 
 export async function listSlaBreachRowsGlobal(limit) {

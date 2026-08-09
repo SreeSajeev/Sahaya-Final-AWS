@@ -208,17 +208,8 @@ export async function submitSmForVerification({ req, ticketId, remarks }) {
   }
 
   const { data: comments } = await listCommentsForTicketUnscoped(ticketId, { limit: 200, offset: 0 });
-  const hasProof = (comments || []).some((c) => {
-    const body = c.body != null ? String(c.body).toLowerCase() : "";
-    if (body.includes("proof uploaded")) return true;
-    const att = c.attachments;
-    if (att && typeof att === "object" && !Array.isArray(att)) {
-      if (att.sm_resolution_proof) return true;
-      if (Array.isArray(att.images) && att.images.length > 0) return true;
-      if (Array.isArray(att.proof_storage_paths) && att.proof_storage_paths.length > 0) return true;
-    }
-    return false;
-  });
+  const { commentHasUsableProof } = await import("./proofPresenceService.js");
+  const hasProof = (comments || []).some((c) => commentHasUsableProof(c));
   if (!hasProof) {
     return {
       ok: false,
@@ -229,11 +220,18 @@ export async function submitSmForVerification({ req, ticketId, remarks }) {
 
   const remarksTrim = remarks != null ? String(remarks).trim() : "";
   const now = new Date().toISOString();
-  const { error: updErr } = await updateTicketById(ticketId, {
-    status: "RESOLVED_PENDING_VERIFICATION",
-    updated_at: now,
-    ...(remarksTrim ? { verification_remarks: remarksTrim } : {}),
-  });
+  const { error: updErr, conflict } = await updateTicketById(
+    ticketId,
+    {
+      status: "RESOLVED_PENDING_VERIFICATION",
+      updated_at: now,
+      ...(remarksTrim ? { verification_remarks: remarksTrim } : {}),
+    },
+    { expectedStatus: [status, "ON_SITE", "ASSIGNED"] }
+  );
+  if (conflict) {
+    return { ok: false, status: 409, error: "Ticket was updated by another user. Refresh and retry." };
+  }
   if (updErr) return { ok: false, status: 500, error: updErr.message };
 
   await insertComment({

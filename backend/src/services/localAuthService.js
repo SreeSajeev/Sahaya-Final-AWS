@@ -218,7 +218,10 @@ export async function forgotPassword({ email, redirectTo, req }) {
   url.searchParams.set("token", tokenData.raw);
 
   const dryRun =
-    String(process.env.PASSWORD_RESET_DRY_RUN || "true").toLowerCase() === "true" ||
+    String(
+      process.env.PASSWORD_RESET_DRY_RUN ||
+        (process.env.NODE_ENV === "production" ? "false" : "true")
+    ).toLowerCase() === "true" ||
     String(process.env.MAIL_DRY_RUN || "").toLowerCase() === "true";
 
   const purpose = user.password_hash ? "password_reset" : "first_login_password_setup";

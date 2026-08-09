@@ -77,6 +77,11 @@ model Ticket {
   @@index([responseDueAt], map: "tickets_response_due_at_idx")
   @@index([resolutionDueAt], map: "tickets_resolution_due_at_idx")
   @@index([resolutionLocationId], map: "tickets_resolution_location_id_idx")
+  @@index([organisationId, createdAt(sort: Desc)], map: "tickets_org_created_at_idx")
+  @@index([organisationId, status], map: "tickets_org_status_idx")
+  @@index([organisationId, clientSlug], map: "tickets_org_client_slug_idx")
+  @@index([complaintId], map: "tickets_complaint_id_idx")
+  @@index([currentAssignmentId], map: "tickets_current_assignment_id_idx")
   @@map("tickets")
 }
 

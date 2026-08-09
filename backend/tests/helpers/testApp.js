@@ -17,6 +17,8 @@ import fieldExecutivesRouter from "../../src/routes/fieldExecutives.js";
 import complaintPointsRouter from "../../src/routes/complaintPoints.js";
 import publicOtpRouter from "../../src/routes/publicOtp.js";
 import publicComplaintRouter from "../../src/routes/publicComplaint.js";
+import platformRouter from "../../src/platform/api/index.js";
+import { exclusiveLegacyTicketGate } from "../../src/platform/runtime/exclusiveRuntimeGate.js";
 import { uploadFeProof } from "../../src/controllers/proofController.js";
 import { notFoundHandler, errorHandler } from "../../src/middleware/errorHandler.js";
 import { requestIdMiddleware } from "../../src/middleware/requestId.js";
@@ -49,12 +51,13 @@ export function buildTestApp() {
     res.json({ ok: true, env: "test" });
   });
 
-  app.use("/tickets", ticketsRouter);
-  app.use("/data", dataApiRouter);
+  app.use("/tickets", exclusiveLegacyTicketGate("all"), ticketsRouter);
+  app.use("/data", exclusiveLegacyTicketGate("ticketPaths"), dataApiRouter);
+  app.use("/platform", platformRouter);
   app.post("/fe/proof", uploadFeProof);
   app.use("/fe", fePublicRouter);
-  app.use("/fe", feMeRouter);
-  app.use("/sm", smMeRouter);
+  app.use("/fe", exclusiveLegacyTicketGate("feMe"), feMeRouter);
+  app.use("/sm", exclusiveLegacyTicketGate("sm"), smMeRouter);
   app.use("/auth/public", publicAuthRouter);
   app.use("/auth", authProvisionRouter);
   app.use("/field-executives", fieldExecutivesRouter);

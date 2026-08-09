@@ -440,6 +440,16 @@ export async function assignOneTicket({
   if (ticket.status === "REJECTED") {
     return { ok: false, statusCode: 400, error: "Ticket has been rejected" };
   }
+  if (ticket.status === "RESOLVED") {
+    return { ok: false, statusCode: 400, error: "Cannot assign a resolved ticket" };
+  }
+  if (ticket.status === "RESOLVED_PENDING_VERIFICATION") {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: "Cannot assign a ticket pending verification. Reject verification or close first.",
+    };
+  }
 
   if (!isTenantAllowed(req, ticket.organisation_id)) {
     return { ok: false, statusCode: 403, error: "Tenant mismatch", tenantMismatch: true };
@@ -567,7 +577,24 @@ export async function assignOneTicket({
     };
   }
 
-  await setTicketAssigned(ticketId, assignment.id);
+  const assignSet = await setTicketAssigned(ticketId, assignment.id, {
+    expectedStatus: ticket.status,
+  });
+  if (assignSet.conflict) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "Ticket was updated by another user. Refresh and retry assignment.",
+    };
+  }
+  if (assignSet.error) {
+    return {
+      ok: false,
+      statusCode: 500,
+      error: safeDbErrorForClient(assignSet.error, "Failed to update ticket assignment status"),
+    };
+  }
+
 
   setAssignmentDeadline(ticketId, assignment_due_at ?? null).catch((err) =>
     console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)

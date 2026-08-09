@@ -975,7 +975,14 @@ router.post("/:id/reject", requireRole(STAFF_OPERATION_ROLES), async (req, res) 
       ticketPatch.rejected_by = req.appUser.id;
     }
 
-    const updateTicketRes = await updateTicketById(ticketId, ticketPatch);
+    const updateTicketRes = await updateTicketById(
+      ticketId,
+      ticketPatch,
+      alreadyRejected ? {} : { expectedStatus: ["OPEN", "NEEDS_REVIEW"] }
+    );
+    if (updateTicketRes.conflict) {
+      return jsonRes(res, 409, { error: "Ticket was updated by another user. Refresh and retry." });
+    }
     if (updateTicketRes.error) {
       console.error("[REJECT] update tickets failed:", updateTicketRes.error.message);
       return jsonRes(res, 500, {
@@ -1323,7 +1330,17 @@ router.post("/:id/on-site-token", async (req, res) => {
       });
     }
 
-    await updateTicketById(ticketId, { status: "ON_SITE" });
+    await updateTicketById(ticketId, { status: "ON_SITE" }, { expectedStatus: ticket.status }).then(
+      (result) => {
+        if (result.conflict) {
+          const err = new Error("Ticket status changed; refresh and retry");
+          err.statusCode = 409;
+          err.code = "STATUS_CONFLICT";
+          throw err;
+        }
+        if (result.error) throw result.error;
+      }
+    );
 
     setOnsiteDeadline(ticketId).catch((err) =>
       console.error("[SLA] setOnsiteDeadline after on-site-token", ticketId, err.message)
@@ -1335,13 +1352,15 @@ router.post("/:id/on-site-token", async (req, res) => {
     });
 
   } catch (err) {
+    if (err?.statusCode === 409 || err?.code === "STATUS_CONFLICT") {
+      return jsonRes(res, 409, { error: err.message || "Ticket status changed", code: "STATUS_CONFLICT" });
+    }
     return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Server error") });
   }
 });
 
 /* ======================================================
    STAFF FINAL CLOSE
-   (Always allow close for demo)
 ====================================================== */
 router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
   const ticketId = req.params.id;
@@ -1498,14 +1517,22 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       resolution_location_name: resolutionLocation.data?.name ?? null,
     };
 
-    let result = await updateTicketCloseWithFallback(ticketId, updatePayload, {
-      status: "RESOLVED",
-      resolved_at: new Date(),
-      ...(remarksValue ? { verification_remarks: remarksValue } : {}),
-      ...(closeFormFields.length > 0 ? { close_form_snapshot: closeFormResult.snapshot } : {}),
-      resolution_location_id: resolutionLocation.data?.id ?? null,
-      resolution_location_name: resolutionLocation.data?.name ?? null,
-    });
+    let result = await updateTicketCloseWithFallback(
+      ticketId,
+      updatePayload,
+      {
+        status: "RESOLVED",
+        resolved_at: new Date(),
+        ...(remarksValue ? { verification_remarks: remarksValue } : {}),
+        ...(closeFormFields.length > 0 ? { close_form_snapshot: closeFormResult.snapshot } : {}),
+        resolution_location_id: resolutionLocation.data?.id ?? null,
+        resolution_location_name: resolutionLocation.data?.name ?? null,
+      },
+      { expectedStatus: ["ON_SITE", "RESOLVED_PENDING_VERIFICATION"] }
+    );
+    if (result.conflict) {
+      return jsonRes(res, 409, { error: "Ticket was updated by another user. Refresh and retry." });
+    }
 
     if (result.error) {
       console.error("[CLOSE] update", {
@@ -1583,10 +1610,16 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
       try {
         let assignedFeName = null;
         if (existing.current_assignment_id) {
-          const { data: assignment } = await getAssignmentById(existing.current_assignment_id, "fe_id");
+          const { data: assignment } = await getAssignmentById(
+            existing.current_assignment_id,
+            "fe_id, assigned_user_id, assignment_type"
+          );
           if (assignment?.fe_id) {
             const { data: fe } = await getFieldExecutiveById(assignment.fe_id);
             assignedFeName = fe?.name?.trim() || null;
+          } else if (assignment?.assigned_user_id) {
+            const { data: smRow } = await findUserNameById(assignment.assigned_user_id);
+            assignedFeName = smRow?.name?.trim() || null;
           }
         }
         const { data: timelineComments } = await listCommentsForTicket(req, ticketId, {
