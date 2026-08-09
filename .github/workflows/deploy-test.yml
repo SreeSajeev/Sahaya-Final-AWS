@@ -1,42 +1,115 @@
+# Deploys the exact commit that passed the "Test" workflow on main.
+# Trigger: workflow_run (CI success on main push) or manual workflow_dispatch.
+# Architecture: existing EC2 + PM2 + nginx (unchanged host paths / secrets).
+
 name: Deploy Test Sahaya
 
 on:
-  push:
-    branches:
-      - develop
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "Optional git SHA to deploy (leave empty for origin/main)"
+        required: false
+        default: ""
 
 jobs:
   deploy:
+    name: Deploy to EC2
     runs-on: ubuntu-latest
+    # Only auto-deploy when CI passed for a push to main.
+    # Manual workflow_dispatch always allowed (operator override).
+    if: >
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Deploy to EC2 Test Environment
+      - name: Resolve deploy SHA
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            echo "Deploying CI-verified commit from workflow_run"
+          elif [ -n "${{ github.event.inputs.sha }}" ]; then
+            SHA="${{ github.event.inputs.sha }}"
+            echo "Deploying manually requested SHA"
+          else
+            SHA=""
+            echo "Deploying origin/main (manual, no SHA override)"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved DEPLOY_SHA=${SHA:-origin/main}"
+
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_SHA: ${{ steps.meta.outputs.sha }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA
+          command_timeout: 45m
+          script_stop: true
           script: |
-            set -e
+            set -euo pipefail
 
-            echo "===== TEST SAHAYA DEPLOY ====="
+            MONOREPO="/var/www/apps/sahaya-final-aws-monorepo"
+            PM2_NAME="sahaya-final-aws-monorepo-api"
+            HEALTH_URL="http://127.0.0.1:4100/health"
 
-            cd /var/www/apps/sahaya-final-aws-monorepo
+            print_diagnostics() {
+              echo "========================"
+              echo "DEPLOYMENT FAILED — diagnostics"
+              echo "========================"
+              echo "--- git rev-parse HEAD ---"
+              git -C "$MONOREPO" rev-parse HEAD 2>/dev/null || true
+              echo "--- git status ---"
+              git -C "$MONOREPO" status 2>/dev/null || true
+              echo "--- pm2 status ---"
+              pm2 status 2>/dev/null || true
+              echo "--- pm2 logs (last 100) ---"
+              pm2 logs "$PM2_NAME" --lines 100 --nostream 2>/dev/null || true
+            }
+
+            trap 'print_diagnostics' ERR
+
+            echo "========================"
+            echo "Sahaya deploy starting"
+            echo "DEPLOY_SHA=${DEPLOY_SHA:-origin/main}"
+            echo "========================"
+
+            cd "$MONOREPO"
 
             if [ ! -d .git ]; then
-              echo "Monorepo missing"
+              echo "Monorepo missing at $MONOREPO" >&2
               exit 1
             fi
 
+            echo "========================"
+            echo "Pulling latest code (main)"
+            echo "========================"
+
             git fetch origin
 
-            git checkout develop
+            git checkout main
 
-            git reset --hard origin/develop
+            if [ -n "${DEPLOY_SHA:-}" ]; then
+              git reset --hard "$DEPLOY_SHA"
+            else
+              git reset --hard origin/main
+            fi
 
-            # TEST-only shared-Supabase mutation freeze (app flags; does not touch Supabase dashboard).
-            # Exact string "true" required. Safe to re-run: upserts if present, appends if missing.
+            echo "Deployed revision: $(git rev-parse HEAD)"
+            git status
+
+            # Env upserts (existing TEST host paths / flags — unchanged architecture).
             ensure_env_flag() {
               local file="$1"
               local key="$2"
@@ -54,16 +127,11 @@ jobs:
               echo "Set ${key}=${value} in ${file}"
             }
 
-            # Phase A: Prisma → EC2 Postgres is authoritative.
             ensure_env_flag backend/.env DB_MODE prisma
-            # Phase C: dedicated TEST proof bucket (never crm-pariskq).
             ensure_env_flag backend/.env S3_FE_PROOFS_BUCKET sahaya-test-fe-proofs
             ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED true
             ensure_env_flag backend/.env AWS_REGION ap-south-1
-            # Temporary Phase A write-path probe (disable after gate PASS).
             ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
-
-            # Phase D: Sahaya local auth (no Supabase Auth at runtime).
             ensure_env_flag backend/.env APP_BASE_URL https://test-sahaya.pariskq.in
             ensure_env_flag frontend/.env VITE_APP_BASE_URL https://test-sahaya.pariskq.in
             ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN .test-sahaya.pariskq.in
@@ -76,10 +144,8 @@ jobs:
             ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
-            # TEST acceptance suites share role sample logins; keep limiter above suite volume.
             ensure_env_flag backend/.env RATE_LIMIT_LOGIN_MAX 200
 
-            # Phase E: remove obsolete Supabase / freeze keys from TEST env only (never print values).
             remove_env_key() {
               local file="$1"
               local key="$2"
@@ -101,7 +167,6 @@ jobs:
             remove_env_key frontend/.env VITE_SUPABASE_PUBLISHABLE_KEY
             remove_env_key frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED
 
-            # Generate JWT secrets once if missing (never echo values).
             ensure_secret_once() {
               local file="$1"
               local key="$2"
@@ -126,37 +191,65 @@ jobs:
             ensure_secret_once backend/.env JWT_ACCESS_SECRET
             ensure_secret_once backend/.env JWT_REFRESH_SECRET
 
-            echo "===== FRONTEND ====="
+            echo "========================"
+            echo "Building frontend"
+            echo "========================"
 
             cd frontend
-
             npm install
-
             npm run build
-
             rm -rf /var/www/test-sahaya/*
-
             cp -R dist/* /var/www/test-sahaya/
 
-            echo "===== BACKEND ====="
+            echo "========================"
+            echo "Installing backend"
+            echo "========================"
 
             cd ../backend
-
             npm install
+
+            echo "========================"
+            echo "Generating Prisma Client"
+            echo "========================"
 
             npx prisma generate
 
-            # Existing TEST DB was created outside Prisma Migrate (P3005 if we deploy cold).
-            # Apply Phase D DDL idempotently, then baseline that migration so future deploys use migrate deploy.
+            echo "========================"
+            echo "Running Prisma migrations"
+            echo "========================"
+
+            # Existing DB may need Phase D baseline once (same as prior deploy script).
             if ! npx prisma migrate deploy; then
-              echo "migrate deploy failed — baselining existing DB for Phase D auth migration"
+              echo "migrate deploy failed — baselining Phase D auth migration if needed"
               npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
               npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth
               npx prisma migrate deploy
             fi
 
-            pm2 restart sahaya-final-aws-monorepo-api --update-env
+            echo "========================"
+            echo "Restarting PM2"
+            echo "========================"
+
+            pm2 restart "$PM2_NAME" --update-env
+
+            echo "========================"
+            echo "Reloading nginx"
+            echo "========================"
 
             systemctl reload nginx
 
-            echo "===== DEPLOY COMPLETE ====="
+            echo "========================"
+            echo "Running health checks"
+            echo "========================"
+
+            sleep 5
+            curl --fail --silent --show-error "$HEALTH_URL"
+            echo
+            echo "Health check OK"
+
+            trap - ERR
+
+            echo "========================"
+            echo "DEPLOYMENT SUCCESS"
+            echo "revision=$(git -C "$MONOREPO" rev-parse HEAD)"
+            echo "========================"
