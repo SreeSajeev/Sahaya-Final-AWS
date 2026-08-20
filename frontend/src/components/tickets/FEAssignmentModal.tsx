@@ -93,9 +93,10 @@ export function FEAssignmentModal({
 }: FEAssignmentModalProps) {
   const isReassign = mode === 'reassign';
   const terminology = useTenantTerminology(ticket.organisation_id);
-  const { data: fieldExecutives, isLoading } = useFieldExecutivesWithStats(undefined, {
-    enabled: open,
-  });
+  const { data: fieldExecutives, isLoading } = useFieldExecutivesWithStats(
+    ticket.organisation_id ?? undefined,
+    { enabled: open }
+  );
   const assignTicket = useAssignTicket();
   const reassignTicket = useReassignTicket();
   const submitMutation = isReassign ? reassignTicket : assignTicket;
@@ -118,15 +119,18 @@ export function FEAssignmentModal({
     enabled: open && assigneeKind === 'SERVICE_MANAGER',
     queryFn: async () => {
       const params = new URLSearchParams({ limit: '200', offset: '0', role: 'STAFF' });
-      if (ticket.organisation_id) params.set('organisation_id', ticket.organisation_id);
+      if (ticket.organisation_id) params.set('organisationId', ticket.organisation_id);
       const res = await fetchJson<{ items?: User[] } | User[]>(`/data/users?${params}`);
       const items = Array.isArray(res) ? res : res.items ?? [];
-      return items.filter(
-        (u) =>
-          (u.role === 'STAFF' || u.role === 'ADMIN') &&
-          u.active !== false &&
-          (u as { is_active?: boolean }).is_active !== false
-      );
+      const ticketOrg = ticket.organisation_id ? String(ticket.organisation_id) : null;
+      return items.filter((u) => {
+        if (!(u.role === 'STAFF' || u.role === 'ADMIN')) return false;
+        if (u.active === false || (u as { is_active?: boolean }).is_active === false) return false;
+        if (ticketOrg && u.organisation_id != null && String(u.organisation_id) !== ticketOrg) {
+          return false;
+        }
+        return true;
+      });
     },
   });
 
@@ -161,12 +165,20 @@ export function FEAssignmentModal({
   const scoredExecutives = useMemo(() => {
     if (!fieldExecutives) return [];
 
+    const ticketOrg = ticket.organisation_id ? String(ticket.organisation_id) : null;
     const ticketLocation = ticket.location?.toLowerCase() || '';
     const ticketIssueType = ticket.issue_type?.toLowerCase() || '';
     const ticketCategory = ticket.category?.toLowerCase() || '';
 
     return fieldExecutives
-      .filter(fe => fe.active)
+      .filter((fe) => {
+        if (!fe.active) return false;
+        // Never recommend / assign an FE from another organisation.
+        if (ticketOrg && fe.organisation_id != null && String(fe.organisation_id) !== ticketOrg) {
+          return false;
+        }
+        return true;
+      })
       .map(fe => {
         let score = 0;
         let locationMatch = false;

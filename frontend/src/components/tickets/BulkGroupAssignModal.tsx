@@ -96,7 +96,8 @@ export function BulkGroupAssignModal({
 }: BulkGroupAssignModalProps) {
   const bulkAssign = useBulkAssignTickets();
   const terminology = useTenantTerminology(tickets[0]?.organisation_id);
-  const { data: fieldExecutives, isLoading: feLoading } = useFieldExecutivesWithStats(undefined, {
+  const assignOrgId = tickets[0]?.organisation_id ?? undefined;
+  const { data: fieldExecutives, isLoading: feLoading } = useFieldExecutivesWithStats(assignOrgId, {
     enabled: open,
   });
 

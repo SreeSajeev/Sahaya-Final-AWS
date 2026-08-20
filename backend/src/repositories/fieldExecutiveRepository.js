@@ -77,8 +77,14 @@ export async function listFieldExecutivesScoped(req, { limit, offset, organisati
   
     try {
       const where = { ...buildPrismaOrgWhere(req) };
-      if (req?.isSuperAdmin && organisationIdOverride) {
-        where.organisationId = organisationIdOverride;
+      // Super-admin: optional org filter (required for assign UIs so cross-tenant FEs are not listed).
+      // Tenant users: ignore override that points outside their tenant (scope already applied).
+      if (organisationIdOverride) {
+        if (req?.isSuperAdmin) {
+          where.organisationId = organisationIdOverride;
+        } else if (req?.tenantId && String(organisationIdOverride) === String(req.tenantId)) {
+          where.organisationId = organisationIdOverride;
+        }
       }
       if (activeOnly) where.active = true;
       const rows = await prisma.fieldExecutive.findMany({

@@ -64,11 +64,19 @@ export function useFieldExecutivesWithStats(
       params.set("activeOnly", "false");
       params.set("limit", "500");
       params.set("offset", "0");
-      if (isSuperAdmin && organisationIdOverride != null && organisationIdOverride !== "") {
+      // Super-admin otherwise sees every tenant's FEs — always scope when a ticket/org context is known.
+      if (organisationIdOverride != null && organisationIdOverride !== "") {
         params.set("organisationId", organisationIdOverride);
       }
       const feRes = await fetchJson<{ items: FieldExecutive[] }>(`/data/field-executives?${params.toString()}`);
-      const executives = (feRes.items ?? []) as FieldExecutive[];
+      let executives = (feRes.items ?? []) as FieldExecutive[];
+      // Defense in depth: never offer FEs outside the target organisation for assignment UIs.
+      if (organisationIdOverride != null && organisationIdOverride !== "") {
+        const org = String(organisationIdOverride);
+        executives = executives.filter(
+          (fe) => fe.organisation_id != null && String(fe.organisation_id) === org
+        );
+      }
 
       const feIds = (executives ?? []).map((fe) => fe.id).filter(Boolean);
       let assignments: {

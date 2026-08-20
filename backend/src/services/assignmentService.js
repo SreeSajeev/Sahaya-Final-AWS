@@ -23,12 +23,11 @@ import { setAssignmentDeadline } from "./slaService.js";
 import { sendFESmsWithResult, sanitizePhoneForSms, renderAssignmentSms } from "./smsService.js";
 import { hasPublicColumn } from "./schemaCompatService.js";
 import {
-  denyTenantMismatch,
   isTenantAllowed,
   scopeQueryByTenant,
 } from "../middleware/tenantContext.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
-import { safeDbErrorForClient } from "../utils/http.js";
+import { jsonRes, safeDbErrorForClient } from "../utils/http.js";
 import { normalizeTicketState } from "../utils/normalizeTicketState.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { findUserById } from "../repositories/userRepository.js";
@@ -879,7 +878,10 @@ export async function reassignOneTicket({
  */
 export function respondTenantMismatchIfNeeded(res, result) {
   if (result.ok === false && result.tenantMismatch) {
-    return denyTenantMismatch(res);
+    // Prefer the specific service error (e.g. FE/SM cross-org) over a blank Forbidden.
+    return jsonRes(res, result.statusCode || 403, {
+      error: result.error || "Forbidden",
+    });
   }
   return null;
 }
