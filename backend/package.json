@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:repo": "vitest run --config vitest.repo.config.js",
     "test:integration": "vitest run --config vitest.integration.config.js",
+    "test:platform-validation": "vitest run --config vitest.platform-validation.config.js",
     "test:coverage": "vitest run --coverage",
     "test:coverage:repo": "vitest run --config vitest.repo.config.js --coverage",
     "test:coverage:integration": "vitest run --config vitest.integration.config.js --coverage"

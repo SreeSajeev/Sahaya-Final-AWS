@@ -17,6 +17,7 @@ import fieldExecutivesRouter from "../../src/routes/fieldExecutives.js";
 import complaintPointsRouter from "../../src/routes/complaintPoints.js";
 import publicOtpRouter from "../../src/routes/publicOtp.js";
 import publicComplaintRouter from "../../src/routes/publicComplaint.js";
+import resolutionLocationsRouter from "../../src/routes/resolutionLocations.js";
 import platformRouter from "../../src/platform/api/index.js";
 import { exclusiveLegacyTicketGate } from "../../src/platform/runtime/exclusiveRuntimeGate.js";
 import { uploadFeProof } from "../../src/controllers/proofController.js";
@@ -53,6 +54,7 @@ export function buildTestApp() {
 
   app.use("/tickets", exclusiveLegacyTicketGate("all"), ticketsRouter);
   app.use("/data", exclusiveLegacyTicketGate("ticketPaths"), dataApiRouter);
+  app.use("/data/resolution-locations", resolutionLocationsRouter);
   app.use("/platform", platformRouter);
   app.post("/fe/proof", uploadFeProof);
   app.use("/fe", fePublicRouter);
