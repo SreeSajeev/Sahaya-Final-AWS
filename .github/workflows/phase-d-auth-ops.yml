@@ -48,8 +48,9 @@ on:
           - phase_f_classify_test_orgs
           - phase_f_classify_marker_rows
           - phase_f_cleanup_test_fixtures_2a2b
+          - clear_postmark_webhook_secret
       confirm:
-        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr / phase_f_cleanup_test_fixtures_2a2b"
+        description: "Type CONFIRM for bootstrap_role_samples / restart_api / restart_pg / backup_restore / phase_f_dr / phase_f_cleanup_test_fixtures_2a2b / clear_postmark_webhook_secret"
         required: false
         default: ""
 
@@ -108,6 +109,41 @@ jobs:
                 echo "AFTER wait attempt=$i not ready"
               done
               pm2 describe sahaya-final-aws-monorepo-api | head -40 || true
+              exit 0
+            fi
+
+            # TEST-only: empty POSTMARK_WEBHOOK_SECRET so Postmark inbound Check
+            # (no custom X-Postmark-Webhook-Secret header) is accepted. Does not
+            # change webhook handler/parser/worker. Does not touch REAL Sahaya.
+            if [ "$MODE" = "clear_postmark_webhook_secret" ]; then
+              if [ "${CONFIRM}" != "CONFIRM" ]; then
+                echo "Refusing clear_postmark_webhook_secret without CONFIRM" >&2
+                exit 1
+              fi
+              ENVF="$MONOREPO/backend/.env"
+              if [ ! -f "$ENVF" ]; then
+                echo "Missing env file: $ENVF" >&2
+                exit 1
+              fi
+              if grep -q '^POSTMARK_WEBHOOK_SECRET=' "$ENVF"; then
+                sed -i.bak 's|^POSTMARK_WEBHOOK_SECRET=.*|POSTMARK_WEBHOOK_SECRET=|' "$ENVF"
+                rm -f "$ENVF.bak"
+                echo "Set POSTMARK_WEBHOOK_SECRET=<empty> in backend/.env"
+              else
+                printf '\nPOSTMARK_WEBHOOK_SECRET=\n' >> "$ENVF"
+                echo "Added POSTMARK_WEBHOOK_SECRET=<empty> to backend/.env"
+              fi
+              grep '^POSTMARK_WEBHOOK_SECRET=' "$ENVF" | sed 's/=.*/=<empty>/'
+              echo "BEFORE"; curl -sS http://127.0.0.1:4100/health || true; echo
+              pm2 restart sahaya-final-aws-monorepo-api --update-env
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                sleep 2
+                if curl -sS -o /tmp/clear_pm_health.json -w '%{http_code}' http://127.0.0.1:4100/health | grep -q 200; then
+                  echo "AFTER attempt=$i"; cat /tmp/clear_pm_health.json; echo
+                  break
+                fi
+                echo "AFTER wait attempt=$i not ready"
+              done
               exit 0
             fi
 
