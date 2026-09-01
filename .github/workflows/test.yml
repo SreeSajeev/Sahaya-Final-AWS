@@ -76,6 +76,15 @@ jobs:
         working-directory: backend
         run: npx prisma db push --skip-generate
 
+      # Platform metadata tables live in SQL migrations only (not schema.prisma).
+      # db push does not create them; deploy uses migrate deploy on EC2.
+      - name: Apply platform metadata migrations (CI test DB)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260808020000_platform_metadata_layer/migration.sql
+          npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260808030000_platform_v2_engines/migration.sql
+
       - name: Seed test data
         working-directory: backend
         run: npm run seed:test

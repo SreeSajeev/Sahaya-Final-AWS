@@ -52,12 +52,11 @@ describeIfDb("tickets integration", () => {
         location: "Integration Test Site",
         category: "Breakdown",
         issue_type: "Engine",
+        incident_title: "Engine overheating on highway",
         client_slug: org.slug,
       });
-    expect([200, 201, 400, 403]).toContain(res.status);
-    if (res.status === 200 || res.status === 201) {
-      expect(res.body.ticket_number || res.body.ticket?.ticket_number).toBeTruthy();
-    }
+    expect([200, 201]).toContain(res.status);
+    expect(res.body.ticket_number || res.body.ticket?.ticket_number).toBeTruthy();
   });
 
   it("POST /tickets/:id/assign assigns field executive", async () => {

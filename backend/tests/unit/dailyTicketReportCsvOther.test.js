@@ -29,4 +29,29 @@ describe("dailyTicketReportCsvService — OTHER resolution columns", () => {
     expect(csv).toContain("Replaced fuse");
     expect(csv).toContain("Other: Replaced fuse");
   });
+
+  it("includes incident_title when present on ticket row", () => {
+    const csv = buildDailyTicketReportCsv({
+      orgName: "Acme",
+      tickets: [
+        {
+          id: "t1",
+          ticket_number: "PKQS-20260714-0002",
+          incident_title: "Brake failure on NH48",
+          status: "OPEN",
+        },
+      ],
+      feById: new Map(),
+      currentAssignmentByTicketId: new Map(),
+      publicSubmissionByTicketId: new Map(),
+      tenantClientBySlug: new Map(),
+      slaByTicketId: new Map(),
+      activityTypesByTicketId: new Map(),
+      assignmentStatsByTicketId: new Map(),
+      proofStatsByTicketId: new Map(),
+    });
+
+    expect(csv).toContain("Incident Title");
+    expect(csv).toContain("Brake failure on NH48");
+  });
 });

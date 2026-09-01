@@ -43,7 +43,14 @@ function safeHasValue(v) {
   return true;
 }
 
-const STRUCTURED_FIELDS = ['complaint_id', 'vehicle_number', 'category', 'issue_type', 'location'];
+const STRUCTURED_FIELDS = [
+  'complaint_id',
+  'vehicle_number',
+  'category',
+  'issue_type',
+  'location',
+  'incident_title',
+];
 
 export function countStructuredComplaintFields(parsed) {
   if (!parsed || typeof parsed !== 'object') return 0;
