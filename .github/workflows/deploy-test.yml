@@ -141,7 +141,7 @@ jobs:
             ensure_env_flag backend/.env JWT_ACCESS_TTL_SEC 900
             ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
             ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
-            ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
+            ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN false
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
             ensure_env_flag backend/.env TENANT_CLIENTS_ENABLED true
