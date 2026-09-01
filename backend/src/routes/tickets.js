@@ -114,60 +114,60 @@ router.post("/:id/comments/:commentId/hide-images", requireRole(STAFF_OPERATION_
   }
 });
 
-const assignBodySchema = z
-  .object({
-    assignment_type: z
-      .enum(["FIELD_EXECUTIVE", "SERVICE_MANAGER"])
-      .optional()
-      .default("FIELD_EXECUTIVE"),
-    feId: z.string().uuid().optional().nullable(),
-    assigned_user_id: z.string().uuid().optional().nullable(),
-    assignment_remarks: z.string().max(4000).optional().nullable(),
-    // Optional: ISO-ish datetime from frontend (datetime-local → toISOString() or variants).
-    assignment_due_at: z.string().max(64).optional().nullable(),
-    state: z.string().max(100).optional().nullable(),
-    /**
-     * Optional manager assignment context images (each with its own remark).
-     * Stored via existing proof S3 + one timeline comment per image.
-     */
-    context_images: z
-      .array(
-        z
-          .object({
-            contentType: z.string().max(80),
-            filename: z.string().max(120).optional().nullable(),
-            remark: z.string().max(4000).optional().nullable(),
-            dataBase64: z.string().min(1).max(8_000_000).optional(),
-            data_base64: z.string().min(1).max(8_000_000).optional(),
-          })
-          .refine((v) => Boolean(v.dataBase64 || v.data_base64), {
-            message: "context_images entry requires dataBase64",
-          })
-      )
-      .max(10)
-      .optional()
-      .default([]),
-  })
-  .superRefine((data, ctx) => {
-    if (data.assignment_type === "SERVICE_MANAGER") {
-      if (!data.assigned_user_id) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "assigned_user_id is required for Service Manager assignment",
-          path: ["assigned_user_id"],
-        });
-      }
-    } else if (!data.feId) {
+const assignBodyBaseSchema = z.object({
+  assignment_type: z
+    .enum(["FIELD_EXECUTIVE", "SERVICE_MANAGER"])
+    .optional()
+    .default("FIELD_EXECUTIVE"),
+  feId: z.string().uuid().optional().nullable(),
+  assigned_user_id: z.string().uuid().optional().nullable(),
+  assignment_remarks: z.string().max(4000).optional().nullable(),
+  // Optional: ISO-ish datetime from frontend (datetime-local → toISOString() or variants).
+  assignment_due_at: z.string().max(64).optional().nullable(),
+  state: z.string().max(100).optional().nullable(),
+  /**
+   * Optional manager assignment context images (each with its own remark).
+   * Stored via existing proof S3 + one timeline comment per image.
+   */
+  context_images: z
+    .array(
+      z
+        .object({
+          contentType: z.string().max(80),
+          filename: z.string().max(120).optional().nullable(),
+          remark: z.string().max(4000).optional().nullable(),
+          dataBase64: z.string().min(1).max(8_000_000).optional(),
+          data_base64: z.string().min(1).max(8_000_000).optional(),
+        })
+        .refine((v) => Boolean(v.dataBase64 || v.data_base64), {
+          message: "context_images entry requires dataBase64",
+        })
+    )
+    .max(10)
+    .optional()
+    .default([]),
+});
+
+const assignBodySchema = assignBodyBaseSchema.superRefine((data, ctx) => {
+  if (data.assignment_type === "SERVICE_MANAGER") {
+    if (!data.assigned_user_id) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "feId is required for Field Executive assignment",
-        path: ["feId"],
+        message: "assigned_user_id is required for Service Manager assignment",
+        path: ["assigned_user_id"],
       });
     }
-  });
+  } else if (!data.feId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "feId is required for Field Executive assignment",
+      path: ["feId"],
+    });
+  }
+});
 
 const postAssignmentContextSchema = z.object({
-  context_images: assignBodySchema.shape.context_images,
+  context_images: assignBodyBaseSchema.shape.context_images,
 });
 
 router.post("/:id/assignment-context", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
