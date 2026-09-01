@@ -201,6 +201,7 @@ export function buildFieldVisitCsvRows(
     'State',
     'Location',
     'Issue Type',
+    'Incident Title',
     'Priority',
     'Status',
     'Created Date',
@@ -220,6 +221,7 @@ export function buildFieldVisitCsvRows(
       formatStateDisplay(t.state),
       fmt(t.location),
       fmt(t.issue_type ?? t.category),
+      fmt(t.incident_title),
       priority,
       fmt(t.status),
       fmtDate(t.created_at || t.opened_at),
@@ -357,6 +359,7 @@ export async function openFieldVisitPrintWindow(
         ${block('Contact Number', fmtDash(t.contact_number))}
         ${block('Resolution Location', fmtDash(t.resolution_location_name))}
         ${block('Issue Type', fmtDash(t.issue_type ?? t.category))}
+        ${block('Incident Title', fmtDash(t.incident_title))}
         ${block('Priority', priority)}
         ${block('Status', fmtDash(t.status))}
         ${block('Created Date', fmtDate(t.created_at || t.opened_at))}

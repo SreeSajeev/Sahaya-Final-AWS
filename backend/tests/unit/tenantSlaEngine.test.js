@@ -11,6 +11,9 @@ import {
   formatDurationMinutes,
   minutesToDueAt,
   normalizeEscalationLevels,
+  addBusinessMinutes,
+  alignToBusinessWindow,
+  normalizeBusinessHoursConfig,
   SLA_STATUS,
 } from "../../src/services/tenantSlaEngine.js";
 
@@ -108,5 +111,80 @@ describe("tenantSlaEngine", () => {
     expect(snapA.response_sla_minutes).toBe(240);
     expect(snapB.response_sla_minutes).toBe(60);
     expect(snapA.response_sla_minutes).not.toBe(snapB.response_sla_minutes);
+  });
+
+  describe("business hours", () => {
+    const bhCfg = {
+      responseMinutes: 120,
+      resolutionMinutes: 240,
+      businessHoursEnabled: true,
+      startTime: "09:00",
+      endTime: "18:00",
+      workingDays: [1, 2, 3, 4, 5],
+    };
+
+    it("addBusinessMinutes skips weekends for SLA due dates (Asia/Kolkata)", () => {
+      const bhCfg = {
+        responseMinutes: 120,
+        resolutionMinutes: 240,
+        businessHoursEnabled: true,
+        startTime: "09:00",
+        endTime: "18:00",
+        workingDays: [1, 2, 3, 4, 5],
+        timezone: "Asia/Kolkata",
+      };
+      // Friday 17:00 IST = 2026-08-07T11:30:00.000Z
+      const fri = new Date("2026-08-07T11:30:00.000Z");
+      const due = addBusinessMinutes(fri, 120, bhCfg);
+      expect(due).not.toBeNull();
+      // Should land Monday 10:30 IST = 2026-08-10T05:00:00.000Z
+      expect(due.toISOString()).toBe("2026-08-10T04:30:00.000Z");
+    });
+
+    it("alignToBusinessWindow moves before-hours to same-day start (Asia/Kolkata)", () => {
+      const bhCfg = {
+        businessHoursEnabled: true,
+        startTime: "09:00",
+        endTime: "18:00",
+        workingDays: [1, 2, 3, 4, 5],
+        timezone: "Asia/Kolkata",
+      };
+      // Thursday 07:30 IST = 2026-08-06T02:00:00.000Z
+      const early = new Date("2026-08-06T02:00:00.000Z");
+      const aligned = alignToBusinessWindow(early, normalizeBusinessHoursConfig(bhCfg));
+      expect(aligned.toISOString()).toBe("2026-08-06T03:30:00.000Z");
+    });
+
+    it("Monday 10:00 IST + 60m = 11:00 IST regardless of server TZ", () => {
+      const bhCfg = {
+        businessHoursEnabled: true,
+        startTime: "09:00",
+        endTime: "18:00",
+        workingDays: [1, 2, 3, 4, 5],
+        timezone: "Asia/Kolkata",
+      };
+      const start = new Date("2026-08-03T04:30:00.000Z");
+      const due = addBusinessMinutes(start, 60, bhCfg);
+      expect(due.toISOString()).toBe("2026-08-03T05:30:00.000Z");
+    });
+
+    it("buildTicketSlaSnapshot uses business hours when enabled", () => {
+      const fri = new Date(2026, 7, 7, 17, 0, 0);
+      const snap = buildTicketSlaSnapshot(bhCfg, fri);
+      const wall = buildTicketSlaSnapshot(
+        { ...bhCfg, businessHoursEnabled: false },
+        fri
+      );
+      expect(snap.response_due_at).not.toBe(wall.response_due_at);
+    });
+
+    it("disabled business hours preserves wall-clock due dates", () => {
+      const opened = new Date("2026-08-07T10:00:00.000Z");
+      const snap = buildTicketSlaSnapshot(
+        { responseMinutes: 60, resolutionMinutes: 120, businessHoursEnabled: false },
+        opened
+      );
+      expect(snap.response_due_at).toBe(minutesToDueAt(opened, 60).toISOString());
+    });
   });
 });

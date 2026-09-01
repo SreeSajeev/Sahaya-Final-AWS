@@ -121,7 +121,15 @@ export async function createTicket(parsed, rawEmail, options = {}) {
   const emailPriority = normalizeTicketPriorityInput({ defaultLevel: 'MEDIUM' });
 
   const { loadSlaSnapshotForOrg } = await import('./tenantSlaService.js')
+  const { resolveIncidentTitle } = await import('../utils/resolveIncidentTitle.js')
   const slaSnapshot = await loadSlaSnapshotForOrg(resolvedOrganisationId)
+
+  const incidentTitle = resolveIncidentTitle({
+    incident_title: parsed.incident_title,
+    description: remarksTrimmed || shortDescription,
+    issue_type: parsed.issue_type,
+    category: parsed.category,
+  })
 
   const inserted = await insertTicket({
     ticket_number: ticketNumber,
@@ -131,6 +139,7 @@ export async function createTicket(parsed, rawEmail, options = {}) {
     vehicle_number: parsed.vehicle_number,
     category: parsed.category,
     issue_type: parsed.issue_type,
+    incident_title: incidentTitle,
     location: parsed.location,
     opened_by_email: senderEmail,
     opened_at: new Date().toISOString(),

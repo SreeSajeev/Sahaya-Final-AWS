@@ -83,10 +83,8 @@ export function validateResolutionLocationForClose(location, organisationId) {
 }
 
 /**
- * Resolve location for close.
- * When the tenant has zero active master rows, allow close without a location
- * (back-compat / empty catalog) so ops are not blocked.
- * When active rows exist, a valid UUID is mandatory.
+ * Resolve location for close / proof when body supplies an explicit id.
+ * When body id is omitted, use {@link resolveResolutionLocationForTicketClose}.
  */
 export async function resolveResolutionLocationForClose(id, organisationId) {
   const trimmed = id != null ? String(id).trim() : "";
@@ -101,4 +99,72 @@ export async function resolveResolutionLocationForClose(id, organisationId) {
   const result = await getResolutionLocationById(trimmed);
   if (result.error) return { error: { status: 500, message: result.error.message } };
   return validateResolutionLocationForClose(result.data, organisationId);
+}
+
+/**
+ * Resolve attended/resolution location for manager close.
+ *
+ * Rules:
+ * 1. Explicit body id → validate active + tenant, use it.
+ * 2. Body omitted → preserve existing ticket location when valid for tenant.
+ * 3. No body, no valid existing, active catalog non-empty → require selection (400).
+ * 4. No body, no existing, empty catalog → allow close without location (skipped).
+ * 5. Never erase an existing FE-selected location merely because body was omitted.
+ *
+ * @param {{
+ *   bodyLocationId?: string | null,
+ *   existingLocationId?: string | null,
+ *   existingLocationName?: string | null,
+ *   organisationId: string,
+ * }} opts
+ */
+export async function resolveResolutionLocationForTicketClose(opts) {
+  const organisationId = opts.organisationId;
+  const bodyTrimmed = opts.bodyLocationId != null ? String(opts.bodyLocationId).trim() : "";
+
+  if (bodyTrimmed) {
+    const result = await getResolutionLocationById(bodyTrimmed);
+    if (result.error) return { error: { status: 500, message: result.error.message } };
+    return validateResolutionLocationForClose(result.data, organisationId);
+  }
+
+  const existingId =
+    opts.existingLocationId != null ? String(opts.existingLocationId).trim() : "";
+  const existingName =
+    opts.existingLocationName != null ? String(opts.existingLocationName).trim() : "";
+
+  if (existingId) {
+    const result = await getResolutionLocationById(existingId);
+    if (result.error) return { error: { status: 500, message: result.error.message } };
+    if (result.data && result.data.organisation_id === organisationId) {
+      return {
+        data: {
+          id: result.data.id,
+          name: result.data.name ?? (existingName || null),
+        },
+        preserved: true,
+      };
+    }
+    if (existingName) {
+      return {
+        data: { id: existingId, name: existingName },
+        preserved: true,
+        legacy: true,
+      };
+    }
+  } else if (existingName) {
+    return {
+      data: { id: null, name: existingName },
+      preserved: true,
+      legacy: true,
+    };
+  }
+
+  const active = await listResolutionLocationsRepo({ organisationId, activeOnly: true });
+  if (active.error) return { error: { status: 500, message: active.error.message } };
+  if (active.data?.length) {
+    return { error: { status: 400, message: "Resolution location is required." } };
+  }
+
+  return { data: { id: null, name: null }, skipped: true };
 }

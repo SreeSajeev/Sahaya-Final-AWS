@@ -23,8 +23,23 @@ import { maskTokenForLog } from "../utils/tokenRedact.js";
 import { getAssignmentById, updateAssignmentById } from "../repositories/assignmentRepository.js";
 import { insertCommentReturning, updateCommentById, getCommentById } from "../repositories/commentRepository.js";
 import { getTicketByIdUnscoped, updateTicketById } from "../repositories/ticketQueryRepository.js";
+import { resolveResolutionLocationForClose } from "../services/resolutionLocationService.js";
 
 const MAX_PROOF_IMAGES = 10;
+
+async function buildAttendedLocationPatch(organisationId, resolutionLocationId) {
+  if (!organisationId) return { patch: {}, error: null };
+  const resolved = await resolveResolutionLocationForClose(resolutionLocationId, organisationId);
+  if (resolved.error) return { patch: {}, error: resolved.error };
+  if (!resolved.data?.id) return { patch: {}, error: null };
+  return {
+    patch: {
+      resolution_location_id: resolved.data.id,
+      resolution_location_name: resolved.data.name,
+    },
+    error: null,
+  };
+}
 
 function countProofImages(attachments) {
   if (!attachments || typeof attachments !== "object" || Array.isArray(attachments)) return 0;
@@ -201,6 +216,18 @@ export async function uploadFeProof(req, res) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
+    const resolutionLocationId = req.body?.resolution_location_id ?? null;
+    const organisationIdForLocation =
+      ticketLifecycleRow?.organisation_id ?? actionToken.organisation_id ?? null;
+    const attendedLocation = organisationIdForLocation
+      ? await buildAttendedLocationPatch(organisationIdForLocation, resolutionLocationId)
+      : { patch: {}, error: null };
+    if (attendedLocation.error) {
+      return res.status(attendedLocation.error.status ?? 400).json({
+        error: attendedLocation.error.message,
+      });
+    }
+
     /* =====================================================
        RESOLUTION: multi-attempt outcome (SUCCESS | FAILED)
     ===================================================== */
@@ -319,6 +346,7 @@ export async function uploadFeProof(req, res) {
         await updateTicketById(ticketId, {
           status: "FE_ATTEMPT_FAILED",
           updated_at: nowIso,
+          ...attendedLocation.patch,
         });
 
         clearOnsiteAndResolutionDeadlines(ticketId).catch((err) =>
@@ -399,6 +427,7 @@ export async function uploadFeProof(req, res) {
       await updateTicketById(ticketId, {
         status: "RESOLVED_PENDING_VERIFICATION",
         updated_at: nowIso,
+        ...attendedLocation.patch,
       });
 
       void insertAuditLog({
@@ -511,6 +540,7 @@ export async function uploadFeProof(req, res) {
     const { error: updateError } = await updateTicketById(ticketId, {
       status: nextStatus,
       updated_at: nowIso,
+      ...attendedLocation.patch,
     });
 
     if (updateError) {

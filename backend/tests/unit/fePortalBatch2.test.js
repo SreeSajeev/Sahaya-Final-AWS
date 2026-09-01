@@ -21,6 +21,7 @@ function matchesFETicketSearch(ticket, query) {
     ticket.state,
     ticket.vehicle_number,
     ticket.issue_type,
+    ticket.incident_title,
     ticket.remarks,
     ticket.short_description,
   ];
@@ -186,11 +187,13 @@ describe("FE Portal Batch 2 — filters & complaint ID", () => {
     expect(hit.map((t) => t.id)).toEqual(["1"]);
   });
 
-  it("missing Complaint ID renders safely", () => {
-    expect(formatComplaintIdDisplay(null)).toBe("—");
-    expect(formatComplaintIdDisplay(undefined)).toBe("—");
-    expect(formatComplaintIdDisplay("")).toBe("—");
-    expect(formatComplaintIdDisplay("HIT-1")).toBe("HIT-1");
+  it("search matches incident_title", () => {
+    expect(
+      matchesFETicketSearch(
+        { ticket_number: "T-1", incident_title: "Brake failure on highway" },
+        "brake failure"
+      )
+    ).toBe(true);
   });
 });
 

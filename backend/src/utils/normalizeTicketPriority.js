@@ -42,6 +42,8 @@ export function priorityDisplayLabel(level, legacyPriority) {
 export function normalizePriorityLevelString(value) {
   if (value == null) return null;
   const s = String(value).trim().toUpperCase();
+  // Legacy DB rows may still carry CRITICAL — map to HIGH for display/API sync without DB mutation.
+  if (s === "CRITICAL") return "HIGH";
   if (PRIORITY_LEVELS.includes(s)) return s;
   return null;
 }

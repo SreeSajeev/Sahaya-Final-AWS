@@ -844,6 +844,14 @@ export async function reassignOneTicket({
 
   if (!assignResult.ok) return assignResult;
 
+  if (assignmentType === ASSIGNMENT_TYPE_FIELD_EXECUTIVE) {
+    await updateTicketById(ticketId, {
+      resolution_location_id: null,
+      resolution_location_name: null,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
   void insertAuditLog({
     req,
     entity_type: "ticket",

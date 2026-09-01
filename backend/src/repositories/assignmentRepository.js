@@ -47,7 +47,56 @@ function mapAssignmentWithFe(row) {
     mapped.field_executives = mapPrismaRowToSnake(/** @type {Record<string, unknown>} */ (row.fe));
   }
   delete mapped.fe;
+  if (row.assignedUser && typeof row.assignedUser === "object") {
+    mapped.assigned_user = mapPrismaRowToSnake(/** @type {Record<string, unknown>} */ (row.assignedUser));
+  }
+  delete mapped.assignedUser;
   return mapped;
+}
+
+async function enrichAssignmentsWithUsers(rows, organisationId, includeFe = true) {
+  if (!rows?.length) return [];
+  const userIds = [
+    ...new Set(
+      rows
+        .map((r) => r.assignedUserId)
+        .filter((id) => id != null && String(id).trim() !== "")
+    ),
+  ];
+  /** @type {Map<string, Record<string, unknown>>} */
+  const usersById = new Map();
+  if (userIds.length > 0) {
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: userIds },
+        ...(organisationId ? { organisationId } : {}),
+      },
+      select: { id: true, name: true, email: true, role: true },
+    });
+    for (const u of users) {
+      usersById.set(u.id, mapPrismaRowToSnake(/** @type {Record<string, unknown>} */ (u)));
+    }
+  }
+  return rows
+    .map((r) => {
+      const mapped = includeFe
+        ? mapAssignmentWithFe(/** @type {Record<string, unknown>} */ (r))
+        : mapPrismaRowToSnake(r);
+      if (!mapped) return null;
+      if (r.assignedUserId && usersById.has(r.assignedUserId)) {
+        mapped.assigned_user = usersById.get(r.assignedUserId);
+      } else if (r.assignedUserId) {
+        mapped.assigned_user = {
+          id: r.assignedUserId,
+          name: null,
+          email: null,
+          role: null,
+          unresolved: true,
+        };
+      }
+      return mapped;
+    })
+    .filter(Boolean);
 }
 
 export async function updateAssignmentById(assignmentId, patch) {
@@ -137,8 +186,9 @@ export async function listAssignmentsForTicket(req, ticketId, { limit, offset, i
         skip: offset,
         take: limit,
       });
+      const organisationId = rows[0]?.organisationId ?? null;
       const data = includeFe
-        ? rows.map((r) => mapAssignmentWithFe(/** @type {Record<string, unknown>} */ (r))).filter(Boolean)
+        ? await enrichAssignmentsWithUsers(rows, organisationId, true)
         : mapPrismaRowsToSnake(rows);
       return { data, error: null };
     } catch (err) {

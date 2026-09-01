@@ -1,6 +1,6 @@
 // src/services/slaService.js
-// SLA lifecycle: row creation, deadline calculation, breach detection.
-// Do not modify ticket state machine. Call from lifecycle transitions only.
+// SLA lifecycle: row creation, phase deadline calculation, breach detection.
+// Phase deadlines use the same tenant business-hours + timezone engine as ticket SLA snapshots.
 
 import {
   fetchTicketOrganisationId,
@@ -12,6 +12,12 @@ import {
   updateSlaByTicketId,
 } from "../repositories/slaRepository.js";
 import { listSlaConfigurationKeys } from "../repositories/configurationRepository.js";
+import { getTenantSlaByOrgId } from "../repositories/tenantSlaRepository.js";
+import {
+  addBusinessMinutes,
+  normalizeBusinessHoursConfig,
+  tenantSlaRowToEngineConfig,
+} from "./tenantSlaEngine.js";
 
 const CONFIG_KEYS = [
   "assignment_sla_hours",
@@ -41,6 +47,27 @@ export async function getSlaConfig() {
     }
   }
   return out;
+}
+
+/** Load tenant business-hours config for phase deadline math. */
+async function loadEngineConfigForTicket(ticketId) {
+  const organisationId = await fetchTicketOrganisationId(ticketId);
+  if (!organisationId) return normalizeBusinessHoursConfig({});
+  const { data } = await getTenantSlaByOrgId(organisationId);
+  return normalizeBusinessHoursConfig(tenantSlaRowToEngineConfig(data));
+}
+
+/**
+ * Compute phase deadline ISO string from now + hours, respecting tenant BH/timezone.
+ * @param {string} ticketId
+ * @param {number} hours
+ */
+export async function computePhaseDeadlineIso(ticketId, hours) {
+  const minutes = Math.max(0, Number(hours) || 0) * 60;
+  const engineCfg = await loadEngineConfigForTicket(ticketId);
+  const due = addBusinessMinutes(new Date(), minutes, engineCfg);
+  if (due && !Number.isNaN(due.getTime())) return due.toISOString();
+  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
 }
 
 /**
@@ -76,20 +103,21 @@ export async function createSlaRow(ticketId) {
 }
 
 /**
- * Set assignment_deadline = now() + assignment_sla_hours. Call when ticket transitions to ASSIGNED.
+ * Set assignment_deadline. Call when ticket transitions to ASSIGNED.
  */
 export async function setAssignmentDeadline(ticketId, overrideDeadlineIso = null) {
   if (!ticketId) return;
   await createSlaRow(ticketId).catch(() => {});
 
-  const config = await getSlaConfig();
-  const hours = config.assignment_sla_hours ?? DEFAULTS.assignment_sla_hours;
   let deadline =
     overrideDeadlineIso != null && String(overrideDeadlineIso).trim() !== ""
       ? new Date(String(overrideDeadlineIso)).toISOString()
-      : new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-  if (deadline === "Invalid Date") {
-    deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      : null;
+
+  if (!deadline || deadline === "Invalid Date") {
+    const config = await getSlaConfig();
+    const hours = config.assignment_sla_hours ?? DEFAULTS.assignment_sla_hours;
+    deadline = await computePhaseDeadlineIso(ticketId, hours);
   }
 
   const { error } = await updateSlaByTicketId(ticketId, {
@@ -105,14 +133,14 @@ export async function setAssignmentDeadline(ticketId, overrideDeadlineIso = null
 }
 
 /**
- * Set onsite_deadline = now() + onsite_sla_hours. Call when ticket transitions to ON_SITE.
+ * Set onsite_deadline. Call when ticket transitions to ON_SITE.
  */
 export async function setOnsiteDeadline(ticketId) {
   if (!ticketId) return;
   await createSlaRow(ticketId).catch(() => {});
   const config = await getSlaConfig();
   const hours = config.onsite_sla_hours ?? DEFAULTS.onsite_sla_hours;
-  const deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const deadline = await computePhaseDeadlineIso(ticketId, hours);
 
   const { error } = await updateSlaByTicketId(ticketId, {
     onsite_deadline: deadline,
@@ -127,14 +155,14 @@ export async function setOnsiteDeadline(ticketId) {
 }
 
 /**
- * Set resolution_deadline = now() + resolution_sla_hours. Call when ticket transitions to RESOLVED_PENDING_VERIFICATION.
+ * Set resolution_deadline. Call when ticket transitions to RESOLVED_PENDING_VERIFICATION.
  */
 export async function setResolutionDeadline(ticketId) {
   if (!ticketId) return;
   await createSlaRow(ticketId).catch(() => {});
   const config = await getSlaConfig();
   const hours = config.resolution_sla_hours ?? DEFAULTS.resolution_sla_hours;
-  const deadline = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const deadline = await computePhaseDeadlineIso(ticketId, hours);
 
   const { error } = await updateSlaByTicketId(ticketId, {
     resolution_deadline: deadline,

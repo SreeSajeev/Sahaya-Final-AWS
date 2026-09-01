@@ -19,6 +19,7 @@ export const BULK_TICKET_TEMPLATE_HEADERS = [
   "vehicle_number",
   "category",
   "issue_type",
+  "incident_title",
   "location",
   "state",
   "priority",

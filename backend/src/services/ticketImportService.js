@@ -9,6 +9,7 @@ import {
   normalizeTicketPriorityInput,
   normalizePriorityLevelString,
 } from "../utils/normalizeTicketPriority.js";
+import { resolveIncidentTitle } from "../utils/resolveIncidentTitle.js";
 
 function normalizeSlug(slug) {
   return String(slug ?? "")
@@ -81,17 +82,28 @@ async function resolveAllowedClientSlugs(req) {
 }
 
 function normalizeImportRow(raw, rowNumber) {
+  const category = safeTrim(raw?.category);
+  const issue_type = safeTrim(raw?.issue_type);
+  const description = safeTrim(raw?.description);
+  const incident_title = resolveIncidentTitle({
+    incident_title: safeTrim(raw?.incident_title),
+    description,
+    issue_type,
+    category,
+  });
+
   return {
     row: rowNumber,
     client_slug: safeTrim(raw?.client_slug),
     vehicle_number: safeTrim(raw?.vehicle_number),
-    category: safeTrim(raw?.category),
-    issue_type: safeTrim(raw?.issue_type),
+    category,
+    issue_type,
+    incident_title,
     location: normalizeLocation(safeTrim(raw?.location)),
     state: normalizeTicketState(safeTrim(raw?.state)),
     priority: raw?.priority,
     complaint_id: resolveComplaintId(raw),
-    description: safeTrim(raw?.description),
+    description,
     organisation_id: safeTrim(raw?.organisation_id),
   };
 }
@@ -131,6 +143,12 @@ export function validateImportRows(req, rows, allowedSlugs) {
 
     if (!hasText(normalized.category) && !hasText(normalized.issue_type)) {
       errors.push("At least one of category or issue_type is required");
+    }
+
+    if (!hasText(normalized.incident_title)) {
+      errors.push(
+        "incident_title is required (provide incident_title column or derivable description/issue_type/category)"
+      );
     }
 
     const priorityParsed = parsePriority(normalized.priority);
@@ -227,6 +245,7 @@ export async function confirmTicketImport(req, validRows) {
       vehicle_number: row.vehicle_number,
       category: row.category,
       issue_type: row.issue_type,
+      incident_title: row.incident_title,
       location: row.location,
       state: row.state,
       complaint_id: row.complaint_id,

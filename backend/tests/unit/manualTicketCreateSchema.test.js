@@ -22,12 +22,14 @@ function hasSubstantive(data) {
 describe("createTicketBodySchema — short_description + validation", () => {
   it("keeps short_description through parse", () => {
     const parsed = createTicketBodySchema.safeParse({
+      incident_title: "Brake failure on highway",
       short_description: "  Brake failure reported  ",
       category: "MECHANICAL",
       location: "Mumbai",
     });
     expect(parsed.success).toBe(true);
     expect(parsed.data.short_description).toBe("Brake failure reported");
+    expect(parsed.data.incident_title).toBe("Brake failure on highway");
   });
 
   it("rejects sparse status-only payloads without location", () => {
@@ -35,8 +37,17 @@ describe("createTicketBodySchema — short_description + validation", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("accepts description + location as substantive", () => {
+  it("rejects manual create without incident_title", () => {
     const parsed = createTicketBodySchema.safeParse({
+      description: "Detail only",
+      location: "Pune",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts description + location + incident_title as substantive", () => {
+    const parsed = createTicketBodySchema.safeParse({
+      incident_title: "Engine overheating",
       description: "Detail only",
       location: "Pune",
     });
@@ -46,6 +57,7 @@ describe("createTicketBodySchema — short_description + validation", () => {
 
   it("rejects empty location", () => {
     const parsed = createTicketBodySchema.safeParse({
+      incident_title: "Brake issue",
       short_description: "Brake issue",
       location: "   ",
     });
@@ -54,6 +66,7 @@ describe("createTicketBodySchema — short_description + validation", () => {
 
   it("requires location for manual create", () => {
     const parsed = createTicketBodySchema.safeParse({
+      incident_title: "Brake failure",
       short_description: "Brake failure reported",
       category: "MECHANICAL",
     });

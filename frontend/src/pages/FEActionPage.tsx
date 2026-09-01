@@ -4,6 +4,13 @@ import { Camera, ImageIcon, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { fetchPublicJson, postFeProofPublic } from "@/lib/backendDataApi";
@@ -66,6 +73,10 @@ export default function FEActionPage() {
   const [pickingPhotos, setPickingPhotos] = useState(false);
   const [previewViewerOpen, setPreviewViewerOpen] = useState(false);
   const [previewViewerIndex, setPreviewViewerIndex] = useState(0);
+  const [resolutionLocations, setResolutionLocations] = useState<
+    Array<{ id: string; name: string; code?: string | null }>
+  >([]);
+  const [selectedResolutionLocationId, setSelectedResolutionLocationId] = useState("");
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -97,6 +108,14 @@ export default function FEActionPage() {
         );
         setToken(ctx.token);
         setTicket(ctx.ticket);
+        try {
+          const locRes = await fetchPublicJson<{ items: Array<{ id: string; name: string; code?: string | null }> }>(
+            `/fe/action/${encodeURIComponent(tokenId)}/resolution-locations`
+          );
+          setResolutionLocations(locRes.items ?? []);
+        } catch {
+          setResolutionLocations([]);
+        }
       } catch (err) {
         console.error("LOAD FAILED:", err);
         setLoadError("Unable to load ticket details.\nPlease contact the support team.");
@@ -334,6 +353,15 @@ export default function FEActionPage() {
       return;
     }
 
+    if (resolutionLocations.length > 0 && !selectedResolutionLocationId) {
+      toast({
+        title: "Select attended location",
+        description: "Choose the actual location where work was performed.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSubmitPending(true);
     setSubmitPhase("preparing");
     try {
@@ -375,6 +403,9 @@ export default function FEActionPage() {
       const body: Record<string, unknown> = {
         token: token.id,
       };
+      if (selectedResolutionLocationId) {
+        body.resolution_location_id = selectedResolutionLocationId;
+      }
       if (isResolution) {
         body.outcome = resolutionOutcome;
         if (resolutionOutcome === "FAILED") body.failure_reason = failureReason.trim();
@@ -560,6 +591,30 @@ export default function FEActionPage() {
             </div>
 
             <div className="border-t pt-4 space-y-3">
+              {resolutionLocations.length > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="fe-attended-location">
+                    Attended / resolution location <span className="text-destructive">*</span>
+                  </Label>
+                  <Select value={selectedResolutionLocationId} onValueChange={setSelectedResolutionLocationId}>
+                    <SelectTrigger id="fe-attended-location">
+                      <SelectValue placeholder="Select where work was performed" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {resolutionLocations.map((loc) => (
+                        <SelectItem key={loc.id} value={loc.id}>
+                          {loc.name}
+                          {loc.code ? ` (${loc.code})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    GPS coordinates are captured separately and do not replace this selection.
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-0.5">
                 <div className="text-xs text-muted-foreground">Issue Description</div>
                 <div className="text-sm font-medium whitespace-pre-wrap">

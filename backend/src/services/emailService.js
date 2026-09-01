@@ -796,8 +796,8 @@ export async function sendClientResolutionEmail({
   resolutionLocationName = null,
   closeFormSnapshot = null,
   timelineSummary = null,
+  tenantResolutionInstructions = null,
 }) {
-  /** @type {{ attempted: boolean; sent: boolean; skipped: boolean; reason: string | null }} */
   const out = {
     attempted: false,
     sent: false,
@@ -883,6 +883,7 @@ export async function sendClientResolutionEmail({
       priority: priority ?? mergedTicket.priority,
       closeFormSnapshot,
       timelineSummary,
+      tenantResolutionInstructions,
     };
 
     const detailsBlock = buildResolutionEmailPlainText(detailsArgs);

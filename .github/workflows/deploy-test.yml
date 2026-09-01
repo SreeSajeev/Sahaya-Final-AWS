@@ -144,6 +144,8 @@ jobs:
             ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN true
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
+            ensure_env_flag backend/.env TENANT_CLIENTS_ENABLED true
+            ensure_env_flag frontend/.env VITE_TENANT_CLIENTS_ENABLED true
             ensure_env_flag backend/.env RATE_LIMIT_LOGIN_MAX 200
 
             remove_env_key() {
@@ -191,21 +193,26 @@ jobs:
             ensure_secret_once backend/.env JWT_ACCESS_SECRET
             ensure_secret_once backend/.env JWT_REFRESH_SECRET
 
+            warn_if_missing() {
+              local file="$1"
+              local key="$2"
+              local label="$3"
+              if [ ! -f "$file" ]; then
+                return 0
+              fi
+              if ! grep -q "^${key}=.\+" "$file"; then
+                echo "WARNING: ${label} (${key}) is not set in ${file} — outbound email will fail at runtime" >&2
+              fi
+            }
+            warn_if_missing backend/.env POSTMARK_SERVER_TOKEN "Postmark server token"
+            warn_if_missing backend/.env FROM_EMAIL "From email (FROM_EMAIL)"
+            warn_if_missing backend/.env MAIL_FROM_EMAIL "From email (MAIL_FROM_EMAIL)"
+
             echo "========================"
-            echo "Building frontend"
+            echo "Installing backend + migrations"
             echo "========================"
 
-            cd frontend
-            npm install
-            npm run build
-            rm -rf /var/www/test-sahaya/*
-            cp -R dist/* /var/www/test-sahaya/
-
-            echo "========================"
-            echo "Installing backend"
-            echo "========================"
-
-            cd ../backend
+            cd backend
             npm install
 
             echo "========================"
@@ -218,13 +225,32 @@ jobs:
             echo "Running Prisma migrations"
             echo "========================"
 
-            # Existing DB may need Phase D baseline once (same as prior deploy script).
+            # Run migrations BEFORE frontend publish so a failed migration leaves the live site unchanged.
             if ! npx prisma migrate deploy; then
               echo "migrate deploy failed — baselining Phase D auth migration if needed"
               npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
               npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth
-              npx prisma migrate deploy
+              if ! npx prisma migrate deploy; then
+                echo "FATAL: prisma migrate deploy failed after baseline retry — aborting deploy" >&2
+                exit 1
+              fi
             fi
+
+            echo "========================"
+            echo "Building frontend"
+            echo "========================"
+
+            cd ../frontend
+            npm install
+            npm run build
+            rm -rf /var/www/test-sahaya/*
+            cp -R dist/* /var/www/test-sahaya/
+
+            echo "========================"
+            echo "Backend ready (deps + migrations applied)"
+            echo "========================"
+
+            cd ../backend
 
             echo "========================"
             echo "Restarting PM2"

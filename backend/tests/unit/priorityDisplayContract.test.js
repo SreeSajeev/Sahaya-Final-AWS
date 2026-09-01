@@ -11,6 +11,7 @@ const DEFAULT_PRIORITY_LEVEL = "MEDIUM";
 function normalizePriorityLevel(value, fallback) {
   if (typeof value === "string") {
     const s = value.trim().toUpperCase();
+    if (s === "CRITICAL") return "HIGH";
     if (PRIORITY_LEVELS.includes(s)) return s;
   }
   if (value === true) return "HIGH";
@@ -39,6 +40,7 @@ describe("priority display contract (UX batch 1)", () => {
 
   it("resolves priority_level over legacy boolean", () => {
     expect(resolveTicketPriorityLevel({ priority_level: "medium", priority: true })).toBe("MEDIUM");
+    expect(resolveTicketPriorityLevel({ priority_level: "critical", priority: true })).toBe("HIGH");
     expect(resolveTicketPriorityLevel({ priority: true })).toBe("HIGH");
     expect(resolveTicketPriorityLevel({ priority: false })).toBe("LOW");
     expect(resolveTicketPriorityLevel({})).toBe("MEDIUM");

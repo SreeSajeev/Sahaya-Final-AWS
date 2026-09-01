@@ -116,6 +116,8 @@ export interface Ticket {
   escalation_level?: number | null;
   category: string | null;
   issue_type: string | null;
+  /** Distinct incident title (separate from issue type). */
+  incident_title?: string | null;
   location: string | null;
   state: string | null;
   /** Brief summary from remarks or email body; may be absent for older tickets. */
@@ -142,6 +144,7 @@ export interface Ticket {
   verification_remarks?: string | null;
   /** Snapshot of the attended resolution location (may be absent on historical tickets). */
   resolution_location_name?: string | null;
+  resolution_location_id?: string | null;
   /** Immutable Verify & Close form snapshot captured at resolve time. */
   close_form_snapshot?: {
     fields?: Array<{

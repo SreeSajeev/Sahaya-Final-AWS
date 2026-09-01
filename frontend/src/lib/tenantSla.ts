@@ -31,6 +31,7 @@ export type TenantSlaConfig = {
   start_time: string | null;
   end_time: string | null;
   working_days: number[];
+  timezone?: string;
   presets?: { response_minutes: number[]; resolution_minutes: number[] };
 };
 
@@ -108,7 +109,7 @@ export type TicketSlaView = {
   resolution_sla_minutes?: number | null;
 };
 
-/** Prefer API-attached `ticket.sla`; else build a minimal view from snapshot fields. */
+/** Prefer API-attached tenant SLA; else derive display-only view from backend snapshot due_at fields. */
 export function getTicketSlaView(ticket: Record<string, unknown> | null | undefined): TicketSlaView | null {
   if (!ticket) return null;
   const attachedTenant = ticket.tenant_sla as TicketSlaView | undefined;
@@ -128,21 +129,32 @@ export function getTicketSlaView(ticket: Record<string, unknown> | null | undefi
 
   if (!ticket.response_due_at && !ticket.resolution_due_at) return null;
 
-  // Lightweight client fallback (same rules as backend) without full escalation config.
+  /**
+   * Fallback uses authoritative backend-computed due_at instants only.
+   * Do NOT recompute deadlines from opened_at + SLA minutes (business hours live on the server).
+   */
   const now = Date.now();
   const phase = (
     dueAt: unknown,
     totalMinutes: unknown
   ): TicketSlaView["response"] => {
-    if (!dueAt || totalMinutes == null) {
+    if (!dueAt) {
       return { status: SLA_STATUS.NA, remainingMinutes: null, dueAt: null, breached: false };
     }
     const due = new Date(String(dueAt)).getTime();
-    const total = Number(totalMinutes);
+    if (Number.isNaN(due)) {
+      return { status: SLA_STATUS.NA, remainingMinutes: null, dueAt: null, breached: false };
+    }
     const remainingMinutes = Math.round((due - now) / 60000);
     let status: string = SLA_STATUS.ON_TRACK;
-    if (now > due) status = SLA_STATUS.BREACHED;
-    else if (remainingMinutes <= total * 0.2) status = SLA_STATUS.APPROACHING;
+    if (now > due) {
+      status = SLA_STATUS.BREACHED;
+    } else {
+      const total = Number(totalMinutes);
+      if (Number.isFinite(total) && total > 0 && remainingMinutes <= total * 0.2) {
+        status = SLA_STATUS.APPROACHING;
+      }
+    }
     return {
       status,
       remainingMinutes,

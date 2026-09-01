@@ -9,6 +9,7 @@ import { extractProofImageSources } from "@/lib/extractProofAttachments";
 export type FeTimelineEventType =
   | "ASSIGNED"
   | "ASSIGNMENT_CONTEXT"
+  | "POST_ASSIGNMENT_CONTEXT"
   | "IMAGE_HIDDEN"
   | "INITIAL_REMARKS"
   | "FE_REMARK"
@@ -101,9 +102,11 @@ function classifyFeComment(c: TicketComment): {
     }
     const remark =
       meta.remark != null ? String(meta.remark) : c.body != null ? String(c.body) : "";
+    const eventTypeRaw = String((meta as { event_type?: string }).event_type || "");
+    const isPostAssign = eventTypeRaw === "POST_ASSIGNMENT_CONTEXT";
     return {
-      eventType: "ASSIGNMENT_CONTEXT",
-      label: "Assignment Image",
+      eventType: isPostAssign ? "POST_ASSIGNMENT_CONTEXT" : "ASSIGNMENT_CONTEXT",
+      label: isPostAssign ? "Manager context (after assign)" : "Assignment Image",
       body: remark,
       hide: false,
     };

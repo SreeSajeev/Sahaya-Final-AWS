@@ -56,6 +56,10 @@ type ClosureContext = {
   client: { id: string | null; name: string | null; slug: string } | null;
   recipients: ClosureRecipient[];
   canClose: boolean;
+  organisation?: {
+    review_field_label?: string | null;
+    review_field_helper_text?: string | null;
+  } | null;
 };
 
 interface CloseTicketDialogProps {
@@ -118,6 +122,10 @@ export function CloseTicketDialog({
   });
   const canClose = CLOSEABLE_STATUSES.includes(ticket.status);
   const requiresResolutionLocation = resolutionLocations.length > 0;
+  const reviewFieldLabel =
+    context?.organisation?.review_field_label?.trim() || "Location";
+  const reviewFieldHelperText =
+    context?.organisation?.review_field_helper_text?.trim() || "";
   const canConfirm =
     canClose &&
     resolutionCategory.trim() !== "" &&
@@ -155,6 +163,10 @@ export function CloseTicketDialog({
         const emails = (data.recipients ?? []).map((r) => r.email);
         setSelectedEmails(new Set(emails));
         setResolutionLocations(await listResolutionLocations(true));
+        const existingLocId = (ticket as { resolution_location_id?: string | null }).resolution_location_id;
+        if (existingLocId && String(existingLocId).trim()) {
+          setResolutionLocationId(String(existingLocId).trim());
+        }
       } catch (err) {
         if (cancelled) return;
         setContextError(err instanceof Error ? err.message : "Failed to load closure recipients");
@@ -166,7 +178,10 @@ export function CloseTicketDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, ticket.id]);
+  }, [open, ticket.id, ticket.resolution_location_id]);
+
+  const feAttendedLocationName =
+    (ticket as { resolution_location_name?: string | null }).resolution_location_name?.trim() || "";
 
   const toggleEmail = (email: string, checked: boolean) => {
     setSelectedEmails((prev) => {
@@ -187,7 +202,7 @@ export function CloseTicketDialog({
       Array.from(selectedEmails),
       emailTrim !== "" ? emailTrim : null,
       isOtherCategory ? resolutionOtherDetails.trim() : null,
-      resolutionLocationId,
+      resolutionLocationId.trim() !== "" ? resolutionLocationId : undefined,
       closeFormValues
     );
   };
@@ -286,8 +301,19 @@ export function CloseTicketDialog({
                         {!remarks.trim() ? (
                           <p className="text-xs text-destructive">Resolution remarks are required.</p>
                         ) : null}
+                        {reviewFieldHelperText ? (
+                          <p className="text-xs text-muted-foreground whitespace-pre-wrap rounded-md border border-dashed p-2 bg-muted/30">
+                            {reviewFieldHelperText}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="space-y-2">
+                        {feAttendedLocationName ? (
+                          <p className="text-xs text-muted-foreground rounded-md border border-dashed p-2 bg-muted/20">
+                            Field Executive selected: <strong>{feAttendedLocationName}</strong>.
+                            Confirm or change the attended location below.
+                          </p>
+                        ) : null}
                         <Label htmlFor="close-resolution-location">
                           Resolution Location{requiresResolutionLocation ? " *" : ""}
                         </Label>
@@ -313,17 +339,16 @@ export function CloseTicketDialog({
                         )}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="close-review-notes">Optional closure notes</Label>
+                        <Label htmlFor="close-review-notes">{reviewFieldLabel}</Label>
                         <Textarea
                           id="close-review-notes"
-                          placeholder="Optional notes for this closure"
+                          placeholder={`Optional ${reviewFieldLabel.toLowerCase()} note for this closure`}
                           value={reviewNotes}
                           onChange={(e) => setReviewNotes(e.target.value)}
                           className="min-h-[100px] whitespace-pre-wrap"
                         />
                         <p className="text-xs text-muted-foreground">
-                          Optional location note for this closure. Stored with the ticket; does not
-                          replace the ticket site location.
+                          Optional note stored with the ticket; does not replace the reported site location.
                         </p>
                       </div>
                       {closeFormFields.map((field) => {

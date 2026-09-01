@@ -30,6 +30,8 @@ model Ticket {
   registrationNumber    String?   @map("registration_number")
   category              String?
   issueType             String?   @map("issue_type")
+  /// Distinct from issue_type — email "Incident Title" and manual create capture this separately.
+  incidentTitle         String?   @map("incident_title")
   location              String?
   state                 String?
   openedByEmail         String?   @map("opened_by_email")
@@ -119,6 +121,8 @@ model TenantSla {
   endTime              String?      @map("end_time")
   /// Weekday numbers 0–6 (Sun–Sat) or 1–7; stored as JSON array
   workingDays          Json?        @map("working_days")
+  /// IANA timezone for business-hours SLA (e.g. Asia/Kolkata). Independent of server TZ.
+  timezone             String?      @default("Asia/Kolkata")
   createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
   organisation         Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)

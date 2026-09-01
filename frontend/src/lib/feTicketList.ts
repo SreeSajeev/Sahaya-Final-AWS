@@ -162,6 +162,7 @@ export function matchesFETicketSearch(ticket: FETicketRow, query: string): boole
     ticket.registration_number,
     ticket.category,
     ticket.issue_type,
+    ticket.incident_title,
     ticket.remarks,
     ticket.short_description,
     ticket.reporter_display,

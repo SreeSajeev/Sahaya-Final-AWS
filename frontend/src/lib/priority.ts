@@ -19,6 +19,7 @@ export function normalizePriorityLevel(
 ): PriorityLevel | null {
   if (typeof value === 'string') {
     const s = value.trim().toUpperCase();
+    if (s === 'CRITICAL') return 'HIGH';
     if (PRIORITY_LEVELS.includes(s as PriorityLevel)) return s as PriorityLevel;
   }
   if (value === true) return 'HIGH';

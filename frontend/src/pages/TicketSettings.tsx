@@ -205,6 +205,15 @@ export default function TicketSettings() {
         return;
       }
     }
+    const fieldCount = (localConfig.closeFormFields ?? []).filter((f) => f.label?.trim()).length;
+    if (fieldCount > 0 && fieldCount < 3) {
+      toast({
+        title: "Validation error",
+        description: "Configure at least 3 Verify & Close fields, or remove all custom fields.",
+        variant: "destructive",
+      });
+      return;
+    }
     upsertMutation.mutate(buildSavePayload(localConfig, serverValueRef.current));
   };
 

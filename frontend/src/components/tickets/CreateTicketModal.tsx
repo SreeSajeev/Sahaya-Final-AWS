@@ -84,6 +84,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
   const [manualVehicleMode, setManualVehicleMode] = useState(false);
   const [category, setCategory] = useState('');
   const [issueType, setIssueType] = useState('');
+  const [incidentTitle, setIncidentTitle] = useState('');
   const [customIssueType, setCustomIssueType] = useState('');
   const [customCategory, setCustomCategory] = useState('');
   const [location, setLocation] = useState('');
@@ -339,9 +340,14 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         }
       }
 
+      if (!incidentTitle.trim()) {
+        throw new Error('Incident title is required.');
+      }
+
       const validatedTicket = CreateTicketSchema.parse({
         vehicle_number:
           manualVehicleMode || !selectedVehicleId ? vehicleNumber.trim() || null : null,
+        incident_title: incidentTitle.trim(),
         category: effectiveCategory,
         issue_type: effectiveIssueType,
         location: location.trim(),
@@ -363,6 +369,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
         vehicle_id: !manualVehicleMode && selectedVehicleId ? selectedVehicleId : null,
         category: validatedTicket.category,
         issue_type: validatedTicket.issue_type,
+        incident_title: incidentTitle.trim() || null,
         location: validatedTicket.location,
         state: validatedTicket.state,
         complaint_id: validatedTicket.complaint_id,
@@ -436,6 +443,7 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
     setManualVehicleMode(false);
     setCategory('');
     setIssueType('');
+    setIncidentTitle('');
     setCustomIssueType('');
     setCustomCategory('');
     setLocation('');
@@ -757,6 +765,17 @@ export function CreateTicketModal({ open, onOpenChange, clientContext }: CreateT
                 className="mt-1.5 w-full"
               />
             )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="incidentTitle">Incident Title *</Label>
+            <Input
+              id="incidentTitle"
+              placeholder="Brief title describing the incident"
+              value={incidentTitle}
+              onChange={(e) => setIncidentTitle(e.target.value)}
+              required
+            />
           </div>
 
           {/* State */}

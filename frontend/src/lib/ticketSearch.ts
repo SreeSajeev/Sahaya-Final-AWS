@@ -44,6 +44,7 @@ function formatIlikeOrFragment(column: string, pattern: string): string {
 /** Shared ticket text columns for server + client search. */
 export const TICKET_SEARCH_TEXT_COLUMNS = [
   'issue_type',
+  'incident_title',
   'category',
   'ticket_number',
   'complaint_id',
@@ -72,6 +73,7 @@ export type TicketSearchFields = {
   short_description?: string | null;
   category?: string | null;
   issue_type?: string | null;
+  incident_title?: string | null;
   location?: string | null;
   state?: string | null;
   opened_by_email?: string | null;
@@ -275,6 +277,7 @@ function collectTicketSearchFieldValues(
     ticket.short_description,
     ticket.category,
     ticket.issue_type,
+    ticket.incident_title,
     ticket.location,
     ticket.opened_by_email,
     ticket.source,

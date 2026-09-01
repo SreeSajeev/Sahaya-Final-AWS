@@ -1,6 +1,15 @@
 /**
- * Pure tenant SLA calculation engine (elapsed wall-clock; business hours stored for future use).
+ * Pure tenant SLA calculation engine.
+ * When business_hours_enabled is true, due dates skip non-working periods
+ * in the tenant's configured IANA timezone (not server local time).
  */
+
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  getZonedParts,
+  normalizeTimezone,
+  zonedLocalToUtc,
+} from "../utils/timezoneUtils.js";
 
 export const SLA_STATUS = {
   ON_TRACK: "ON_TRACK",
@@ -24,7 +33,136 @@ export const DEFAULT_TENANT_SLA = {
   startTime: "09:00",
   endTime: "18:00",
   workingDays: [1, 2, 3, 4, 5],
+  timezone: DEFAULT_TENANT_TIMEZONE,
 };
+
+/** @param {unknown} cfg */
+export function normalizeBusinessHoursConfig(cfg) {
+  const c = cfg && typeof cfg === "object" ? cfg : {};
+  const rawDays = c.workingDays ?? c.working_days;
+  const workingDays = Array.isArray(rawDays)
+    ? rawDays.map((d) => Number(d)).filter((d) => Number.isFinite(d) && d >= 0 && d <= 6)
+    : [...DEFAULT_TENANT_SLA.workingDays];
+  return {
+    businessHoursEnabled: Boolean(c.businessHoursEnabled ?? c.business_hours_enabled),
+    startTime: String(c.startTime ?? c.start_time ?? DEFAULT_TENANT_SLA.startTime).trim(),
+    endTime: String(c.endTime ?? c.end_time ?? DEFAULT_TENANT_SLA.endTime).trim(),
+    workingDays: workingDays.length > 0 ? workingDays : [...DEFAULT_TENANT_SLA.workingDays],
+    timezone: normalizeTimezone(c.timezone ?? c.time_zone ?? DEFAULT_TENANT_SLA.timezone),
+  };
+}
+
+function parseHHMM(timeStr) {
+  const parts = String(timeStr || "09:00").trim().split(":");
+  const h = Math.min(23, Math.max(0, parseInt(parts[0], 10) || 0));
+  const m = Math.min(59, Math.max(0, parseInt(parts[1], 10) || 0));
+  return h * 60 + m;
+}
+
+function isWorkingDay(dayOfWeek, workingDays) {
+  return workingDays.includes(dayOfWeek);
+}
+
+function zonedDayStart(instant, timeZone, minutesFromMidnight) {
+  const p = getZonedParts(instant, timeZone);
+  const h = Math.floor(minutesFromMidnight / 60);
+  const m = minutesFromMidnight % 60;
+  return zonedLocalToUtc({ year: p.year, month: p.month, day: p.day, hour: h, minute: m, second: 0 }, timeZone);
+}
+
+function startOfNextCalendarDayInZone(from, timeZone) {
+  const p = getZonedParts(from, timeZone);
+  const next = new Date(p.year, p.month - 1, p.day);
+  next.setDate(next.getDate() + 1);
+  return zonedLocalToUtc(
+    { year: next.getFullYear(), month: next.getMonth() + 1, day: next.getDate(), hour: 0, minute: 0, second: 0 },
+    timeZone
+  );
+}
+
+function startOfNextWorkingDay(from, bh) {
+  let cursor = startOfNextCalendarDayInZone(from, bh.timezone);
+  for (let guard = 0; guard < 366; guard += 1) {
+    const p = getZonedParts(cursor, bh.timezone);
+    if (isWorkingDay(p.dayOfWeek, bh.workingDays)) {
+      return zonedDayStart(cursor, bh.timezone, parseHHMM(bh.startTime));
+    }
+    cursor = startOfNextCalendarDayInZone(cursor, bh.timezone);
+  }
+  return cursor;
+}
+
+/**
+ * Move `from` to the next in-window business instant in tenant timezone.
+ * @param {Date} from
+ * @param {ReturnType<typeof normalizeBusinessHoursConfig>} bh
+ */
+export function alignToBusinessWindow(from, bh) {
+  const startMin = parseHHMM(bh.startTime);
+  const endMin = parseHHMM(bh.endTime);
+  if (endMin <= startMin) return new Date(from);
+
+  let cursor = new Date(from);
+  for (let guard = 0; guard < 366; guard += 1) {
+    const p = getZonedParts(cursor, bh.timezone);
+    if (!isWorkingDay(p.dayOfWeek, bh.workingDays)) {
+      cursor = startOfNextWorkingDay(cursor, bh);
+      continue;
+    }
+    const dayStart = zonedDayStart(cursor, bh.timezone, startMin);
+    const dayEnd = zonedDayStart(cursor, bh.timezone, endMin);
+    if (cursor.getTime() < dayStart.getTime()) return dayStart;
+    if (cursor.getTime() >= dayEnd.getTime()) {
+      cursor = startOfNextWorkingDay(cursor, bh);
+      continue;
+    }
+    return cursor;
+  }
+  return cursor;
+}
+
+/**
+ * Add SLA minutes respecting tenant business hours + timezone when enabled.
+ * @param {Date|string} from
+ * @param {number} minutes
+ * @param {unknown} rawCfg
+ * @returns {Date|null}
+ */
+export function addBusinessMinutes(from, minutes, rawCfg) {
+  const ms = Number(minutes);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const base = from instanceof Date ? from : new Date(from);
+  if (Number.isNaN(base.getTime())) return null;
+
+  const bh = normalizeBusinessHoursConfig(rawCfg);
+  if (!bh.businessHoursEnabled) {
+    return new Date(base.getTime() + ms * 60 * 1000);
+  }
+
+  const endMin = parseHHMM(bh.endTime);
+  let remaining = ms;
+  let cursor = alignToBusinessWindow(base, bh);
+
+  for (let guard = 0; guard < 10000 && remaining > 0; guard += 1) {
+    const p = getZonedParts(cursor, bh.timezone);
+    if (!isWorkingDay(p.dayOfWeek, bh.workingDays)) {
+      cursor = startOfNextWorkingDay(cursor, bh);
+      continue;
+    }
+    const dayEnd = zonedDayStart(cursor, bh.timezone, endMin);
+    const available = Math.max(0, (dayEnd.getTime() - cursor.getTime()) / 60000);
+    if (available <= 0) {
+      cursor = startOfNextWorkingDay(cursor, bh);
+      continue;
+    }
+    if (remaining <= available) {
+      return new Date(cursor.getTime() + remaining * 60000);
+    }
+    remaining -= available;
+    cursor = startOfNextWorkingDay(cursor, bh);
+  }
+  return cursor;
+}
 
 /** @param {unknown} levels */
 export function normalizeEscalationLevels(levels) {
@@ -50,21 +188,45 @@ export function minutesToDueAt(openedAt, minutes) {
 }
 
 /**
+ * Build tenant SLA config object from a tenant_slas row (snake or camel).
+ * @param {Record<string, unknown>|null|undefined} row
+ */
+export function tenantSlaRowToEngineConfig(row) {
+  if (!row) return { ...DEFAULT_TENANT_SLA };
+  return {
+    responseMinutes: row.response_minutes ?? row.responseMinutes,
+    resolutionMinutes: row.resolution_minutes ?? row.resolutionMinutes,
+    escalationLevels: row.escalation_levels ?? row.escalationLevels,
+    businessHoursEnabled: row.business_hours_enabled ?? row.businessHoursEnabled,
+    startTime: row.start_time ?? row.startTime,
+    endTime: row.end_time ?? row.endTime,
+    workingDays: row.working_days ?? row.workingDays,
+    timezone: row.timezone ?? row.time_zone,
+  };
+}
+
+/**
  * Build immutable ticket SLA snapshot fields from tenant config + open time.
  */
 export function buildTicketSlaSnapshot(tenantSla, openedAt = new Date()) {
-  const cfg = tenantSla || DEFAULT_TENANT_SLA;
-  const responseMinutes = Math.max(1, Number(cfg.responseMinutes ?? cfg.response_minutes) || DEFAULT_TENANT_SLA.responseMinutes);
+  const raw = tenantSla || DEFAULT_TENANT_SLA;
+  const responseMinutes = Math.max(
+    1,
+    Number(raw.responseMinutes ?? raw.response_minutes) || DEFAULT_TENANT_SLA.responseMinutes
+  );
   const resolutionMinutes = Math.max(
     1,
-    Number(cfg.resolutionMinutes ?? cfg.resolution_minutes) || DEFAULT_TENANT_SLA.resolutionMinutes
+    Number(raw.resolutionMinutes ?? raw.resolution_minutes) || DEFAULT_TENANT_SLA.resolutionMinutes
   );
   const opened = openedAt instanceof Date ? openedAt : new Date(openedAt);
+  const engineCfg = normalizeBusinessHoursConfig(tenantSlaRowToEngineConfig(raw));
+  const responseDue = addBusinessMinutes(opened, responseMinutes, engineCfg);
+  const resolutionDue = addBusinessMinutes(opened, resolutionMinutes, engineCfg);
   return {
     response_sla_minutes: responseMinutes,
     resolution_sla_minutes: resolutionMinutes,
-    response_due_at: minutesToDueAt(opened, responseMinutes)?.toISOString() ?? null,
-    resolution_due_at: minutesToDueAt(opened, resolutionMinutes)?.toISOString() ?? null,
+    response_due_at: responseDue?.toISOString() ?? null,
+    resolution_due_at: resolutionDue?.toISOString() ?? null,
     escalation_level: null,
   };
 }
@@ -102,7 +264,6 @@ export function computePhaseSla({ dueAt, totalMinutes, now = new Date(), stopped
   const total = Number(totalMinutes);
   const remainingMs = due.getTime() - clock.getTime();
   const remainingMinutes = remainingMs / (60 * 1000);
-  // Elapsed from (due - total) = open; approximate using total - remaining
   const elapsedMinutes = total - remainingMinutes;
   const elapsedPercent = Math.max(0, (elapsedMinutes / total) * 100);
 
@@ -172,12 +333,8 @@ export function computeTicketSlaView(ticket, opts = {}) {
     stoppedAt: isClosed ? resolvedAt || now : null,
   });
 
-  const escalationLevel = computeEscalationLevel(
-    resolution.elapsedPercent ?? 0,
-    escalationLevels
-  );
+  const escalationLevel = computeEscalationLevel(resolution.elapsedPercent ?? 0, escalationLevels);
 
-  // Prefer resolution status for list "Status"; if NA, fall back to response.
   let overallStatus = resolution.status !== SLA_STATUS.NA ? resolution.status : response.status;
   if (response.status === SLA_STATUS.BREACHED && overallStatus === SLA_STATUS.ON_TRACK) {
     overallStatus = SLA_STATUS.APPROACHING;
@@ -186,15 +343,13 @@ export function computeTicketSlaView(ticket, opts = {}) {
   const responseTimeMinutes =
     assignedAt && (ticket.opened_at || ticket.created_at)
       ? Math.round(
-          (new Date(assignedAt).getTime() - new Date(ticket.opened_at || ticket.created_at).getTime()) /
-            60000
+          (new Date(assignedAt).getTime() - new Date(ticket.opened_at || ticket.created_at).getTime()) / 60000
         )
       : null;
   const resolutionTimeMinutes =
     resolvedAt && (ticket.opened_at || ticket.created_at)
       ? Math.round(
-          (new Date(resolvedAt).getTime() - new Date(ticket.opened_at || ticket.created_at).getTime()) /
-            60000
+          (new Date(resolvedAt).getTime() - new Date(ticket.opened_at || ticket.created_at).getTime()) / 60000
         )
       : null;
 

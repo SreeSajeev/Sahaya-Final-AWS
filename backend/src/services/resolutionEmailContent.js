@@ -51,6 +51,7 @@ export function buildResolutionEmailPlainText({
   priority = null,
   closeFormSnapshot = null,
   timelineSummary = null,
+  tenantResolutionInstructions = null,
 }) {
   const issueType =
     resolutionCategory != null && String(resolutionCategory).trim() !== ""
@@ -58,6 +59,11 @@ export function buildResolutionEmailPlainText({
         ? "Other"
         : String(resolutionCategory).trim()
       : ticket?.issue_type;
+
+  const incidentTitle =
+    ticket?.incident_title != null && String(ticket.incident_title).trim() !== ""
+      ? String(ticket.incident_title).trim()
+      : null;
 
   const loc =
     location != null && String(location).trim() !== ""
@@ -88,6 +94,7 @@ export function buildResolutionEmailPlainText({
     lines.push(`Registration Number: ${formatDetail(ticket.registration_number)}`);
   }
   lines.push(`Issue Type: ${formatDetail(issueType)}`);
+  if (incidentTitle) lines.push(`Incident Title: ${incidentTitle}`);
   lines.push(`Reported Location: ${formatDetail(loc)}`);
   if (closureLocation != null && String(closureLocation).trim() !== "") {
     lines.push(`Resolution Location: ${String(closureLocation).trim()}`);
@@ -98,6 +105,10 @@ export function buildResolutionEmailPlainText({
 
   lines.push("", "Initial Remarks:");
   lines.push(formatDetail(initialRemarks));
+  if (tenantResolutionInstructions != null && String(tenantResolutionInstructions).trim() !== "") {
+    lines.push("", "Resolution Instructions:");
+    lines.push(String(tenantResolutionInstructions).trim());
+  }
   lines.push("", "Resolution Remarks:");
   lines.push(formatDetail(resolutionRemarks));
   if (closeFormSnapshot?.fields && Array.isArray(closeFormSnapshot.fields)) {
@@ -132,6 +143,7 @@ export function buildResolutionEmailHtml({
   priority = null,
   closeFormSnapshot = null,
   timelineSummary = null,
+  tenantResolutionInstructions = null,
 }) {
   const plain = buildResolutionEmailPlainText({
     ticket,
@@ -148,6 +160,7 @@ export function buildResolutionEmailHtml({
     priority,
     closeFormSnapshot,
     timelineSummary,
+    tenantResolutionInstructions,
   });
   return `<div style="font-family:Georgia,serif;font-size:14px;line-height:1.45;color:#111">${textToHtmlPreservingNewlines(plain)}</div>`;
 }

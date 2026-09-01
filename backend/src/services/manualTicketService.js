@@ -39,6 +39,11 @@ export const createTicketBodySchema = z.object({
   ),
   category: optionalTrimmedString(200),
   issue_type: optionalTrimmedString(200),
+  incident_title: z
+    .string({ required_error: "Incident title is required." })
+    .trim()
+    .min(1, { message: "Incident title is required." })
+    .max(500),
   location: z
     .string({ required_error: "Location is required" })
     .trim()
@@ -194,6 +199,7 @@ export async function createManualTicketFromBody(req, body) {
     registration_number: vehicleResolved.registration_number ?? null,
     category: data.category ?? null,
     issue_type: data.issue_type ?? null,
+    incident_title: data.incident_title ?? null,
     location: normalizeLocation(data.location),
     state: normalizeTicketState(data.state),
     complaint_id: data.complaint_id ?? null,

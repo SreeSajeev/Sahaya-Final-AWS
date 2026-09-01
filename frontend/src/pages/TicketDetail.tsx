@@ -42,6 +42,7 @@ import { ConfidenceScore } from "@/components/tickets/ConfidenceScore";
 import { getDisplayConfidenceScore } from "@/lib/confidence";
 import { FEAssignmentModal } from "@/components/tickets/FEAssignmentModal";
 import { AssignmentContextSection } from "@/components/tickets/AssignmentContextSection";
+import { PostAssignmentContextPanel } from "@/components/tickets/PostAssignmentContextPanel";
 import { CloseTicketDialog } from "@/components/tickets/CloseTicketDialog";
 import { HideImageDialog } from "@/components/tickets/HideImageDialog";
 import { RejectTicketDialog } from "@/components/tickets/RejectTicketDialog";
@@ -264,6 +265,15 @@ export default function TicketDetail() {
   }
 
   const assignedFE = currentAssignment?.field_executives;
+  const assignmentType =
+    (currentAssignment as { assignment_type?: string } | undefined)?.assignment_type ??
+    "FIELD_EXECUTIVE";
+  const assignedSM = (
+    currentAssignment as
+      | { assigned_user?: { name?: string; email?: string; role?: string } }
+      | undefined
+  )?.assigned_user;
+  const isServiceManagerAssignment = assignmentType === "SERVICE_MANAGER";
 
   const isPendingVerification =
     ticket.status === "RESOLVED_PENDING_VERIFICATION";
@@ -857,6 +867,9 @@ export default function TicketDetail() {
                     <Info label="Registration Number" value={ticket.registration_number} />
                     <Info label="Category" value={ticket.category} />
                     <Info label="Issue Type" value={ticket.issue_type} />
+                    {(ticket as { incident_title?: string | null }).incident_title ? (
+                      <Info label="Incident Title" value={(ticket as { incident_title?: string | null }).incident_title} />
+                    ) : null}
                     <Info label="Client" value={ticket.client_slug} />
                     {canPerformActions && !ticket.location?.trim() ? (
                       <div className="space-y-2">
@@ -1094,8 +1107,8 @@ export default function TicketDetail() {
               </Card>
             )}
 
-            {/* Assignment */}
-            {currentAssignment && assignedFE && ticket.status !== "FE_ATTEMPT_FAILED" && (
+            {/* Assignment — Field Executive */}
+            {currentAssignment && assignedFE && !isServiceManagerAssignment && ticket.status !== "FE_ATTEMPT_FAILED" && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -1135,6 +1148,54 @@ export default function TicketDetail() {
                 </CardContent>
               </Card>
             )}
+
+            {/* Assignment — internal Service Manager (assignment type, not STAFF role label) */}
+            {currentAssignment && isServiceManagerAssignment && ticket.status !== "FE_ATTEMPT_FAILED" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <User className="h-5 w-5" />
+                    Assigned Service Manager (internal resolution)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 font-semibold">
+                      {(assignedSM?.name || "S").charAt(0)}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold">
+                        {assignedSM?.name?.trim() || "Service Manager — user unavailable"}
+                      </p>
+                      {assignedSM?.email ? (
+                        <p className="text-sm text-muted-foreground">{assignedSM.email}</p>
+                      ) : null}
+                      {(assignedSM as { unresolved?: boolean } | undefined)?.unresolved ? (
+                        <p className="text-xs text-amber-700">
+                          Assigned user record could not be loaded for this organisation.
+                        </p>
+                      ) : null}
+                      <p className="text-sm text-muted-foreground">
+                        Assigned{" "}
+                        {formatIST(
+                          currentAssignment.assigned_at || currentAssignment.created_at,
+                          "PPp"
+                        )}
+                      </p>
+                    </div>
+                    <Badge variant="outline">SERVICE_MANAGER assignment</Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {currentAssignment &&
+              assignedFE &&
+              !isServiceManagerAssignment &&
+              (userProfile?.role === "STAFF" || userProfile?.role === "ADMIN") &&
+              !["RESOLVED", "REJECTED", "CLOSED", "CANCELLED"].includes(ticket.status) && (
+                <PostAssignmentContextPanel ticketId={ticket.id} />
+              )}
 
             {comments && comments.length > 0 && (
               <AssignmentContextSection ticketId={ticket.id} comments={comments} />

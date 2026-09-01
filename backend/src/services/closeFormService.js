@@ -23,6 +23,28 @@ function cleanDefinition(raw) {
   };
 }
 
+/** Minimum configurable Verify & Close fields when a tenant defines any custom close fields.
+ * Audit wording: "3 or 4 more configurable fields" — product uses 3 as the minimum
+ * (issue type + resolution category + at least one tenant-defined field). */
+export const MIN_CLOSE_FORM_FIELDS = 3;
+
+export function validateCloseFormFieldsCount(rawFields) {
+  if (!Array.isArray(rawFields)) return { ok: true };
+  const valid = rawFields.map(cleanDefinition).filter(Boolean);
+  if (valid.length > 0 && valid.length < MIN_CLOSE_FORM_FIELDS) {
+    return {
+      ok: false,
+      error: `At least ${MIN_CLOSE_FORM_FIELDS} Verify & Close fields are required when configuring custom fields.`,
+    };
+  }
+  return { ok: true, count: valid.length };
+}
+
+export function validateOrgTicketConfigValue(value) {
+  if (!value || typeof value !== "object") return { ok: true };
+  return validateCloseFormFieldsCount(value.closeFormFields);
+}
+
 export async function getCloseFormFields(organisationId) {
   if (!organisationId) return [];
   const { data, error } = await getConfigurationByKey(`org_${organisationId}_ticket_config`);

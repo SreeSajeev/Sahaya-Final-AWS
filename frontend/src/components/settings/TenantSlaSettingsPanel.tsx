@@ -57,6 +57,7 @@ export function TenantSlaSettingsPanel({ organisationId, readOnly = false }: Pro
     if (data) {
       setLocal({
         ...data,
+        timezone: data.timezone ?? "Asia/Kolkata",
         escalation_levels:
           Array.isArray(data.escalation_levels) && data.escalation_levels.length > 0
             ? data.escalation_levels
@@ -80,6 +81,7 @@ export function TenantSlaSettingsPanel({ organisationId, readOnly = false }: Pro
           start_time: local.start_time,
           end_time: local.end_time,
           working_days: local.working_days,
+          timezone: local.timezone ?? "Asia/Kolkata",
         },
       });
     },
@@ -110,8 +112,8 @@ export function TenantSlaSettingsPanel({ organisationId, readOnly = false }: Pro
         <CardTitle className={typography.sectionTitle}>SLA Configuration</CardTitle>
         <CardDescription className={typography.body}>
           Response and resolution targets are snapshotted onto each new ticket. Changing these values
-          does not alter historical tickets. Business hours are stored for future use; current
-          calculations use elapsed wall-clock time (24×7).
+          does not alter historical tickets. When business hours are enabled, SLA deadlines count only
+          working minutes in the configured timezone.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -235,6 +237,20 @@ export function TenantSlaSettingsPanel({ organisationId, readOnly = false }: Pro
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="sla-timezone">Timezone (IANA)</Label>
+          <Input
+            id="sla-timezone"
+            disabled={readOnly}
+            placeholder="Asia/Kolkata"
+            value={local.timezone ?? "Asia/Kolkata"}
+            onChange={(e) => setLocal((c) => (c ? { ...c, timezone: e.target.value } : c))}
+          />
+          <p className="text-xs text-muted-foreground">
+            Used for business-hours SLA calculations (e.g. Asia/Kolkata, Asia/Dubai).
+          </p>
         </div>
 
         <div className="space-y-3 rounded-md border p-4">

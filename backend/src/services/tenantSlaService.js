@@ -5,7 +5,9 @@ import {
   computeTicketSlaView,
   DEFAULT_TENANT_SLA,
   normalizeEscalationLevels,
+  tenantSlaRowToEngineConfig,
 } from "./tenantSlaEngine.js";
+import { normalizeTimezone } from "../utils/timezoneUtils.js";
 import {
   ensureDefaultTenantSla,
   getTenantSlaByOrgId,
@@ -63,6 +65,7 @@ function formatSlaConfig(row) {
     start_time: row.start_time,
     end_time: row.end_time,
     working_days: Array.isArray(row.working_days) ? row.working_days : DEFAULT_TENANT_SLA.workingDays,
+    timezone: row.timezone ?? DEFAULT_TENANT_SLA.timezone,
     created_at: row.created_at,
     updated_at: row.updated_at,
     presets: {
@@ -122,6 +125,7 @@ export async function updateTenantSlaConfig(req, body) {
     start_time: startTime,
     end_time: endTime,
     working_days: workingDays,
+    timezone: normalizeTimezone(body?.timezone ?? body?.time_zone),
   });
   if (error) return { error: { status: 400, message: error.message } };
 
@@ -150,16 +154,7 @@ export async function loadSlaSnapshotForOrg(organisationId) {
     return buildTicketSlaSnapshot(DEFAULT_TENANT_SLA, new Date());
   }
   const { data } = await ensureDefaultTenantSla(organisationId);
-  return buildTicketSlaSnapshot(
-    data
-      ? {
-          responseMinutes: data.response_minutes,
-          resolutionMinutes: data.resolution_minutes,
-          escalationLevels: data.escalation_levels,
-        }
-      : DEFAULT_TENANT_SLA,
-    new Date()
-  );
+  return buildTicketSlaSnapshot(data ? tenantSlaRowToEngineConfig(data) : DEFAULT_TENANT_SLA, new Date());
 }
 
 /**

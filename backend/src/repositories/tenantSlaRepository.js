@@ -35,6 +35,7 @@ export async function upsertTenantSlaRow(organisationId, fields) {
       startTime: fields.start_time ?? fields.startTime ?? null,
       endTime: fields.end_time ?? fields.endTime ?? null,
       workingDays: fields.working_days ?? fields.workingDays ?? DEFAULT_TENANT_SLA.workingDays,
+      timezone: fields.timezone ?? fields.time_zone ?? DEFAULT_TENANT_SLA.timezone,
       updatedAt: new Date(),
     };
     const row = await prisma.tenantSla.upsert({
@@ -62,6 +63,7 @@ export async function ensureDefaultTenantSla(organisationId) {
     start_time: DEFAULT_TENANT_SLA.startTime,
     end_time: DEFAULT_TENANT_SLA.endTime,
     working_days: DEFAULT_TENANT_SLA.workingDays,
+    timezone: DEFAULT_TENANT_SLA.timezone,
   });
 }
 

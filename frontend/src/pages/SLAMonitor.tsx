@@ -306,7 +306,7 @@ export default function SLAMonitor() {
   }, [slaData]);
 
   const handleExport = useCallback(() => {
-    const baseHeaders = ['ticket_number', 'status', 'category', 'assignment_breached', 'onsite_breached', 'resolution_breached', 'fe_name', 'created_at'];
+    const baseHeaders = ['ticket_number', 'status', 'category', 'incident_title', 'issue_type', 'assignment_breached', 'onsite_breached', 'resolution_breached', 'fe_name', 'created_at'];
     const headers = [...baseHeaders, ...TICKET_EXPORT_APPENDED_HEADERS];
 
     const emptyMaps = buildTicketExportEnrichmentMaps([], [], []);
@@ -331,6 +331,8 @@ export default function SLAMonitor() {
         t.ticket_number ?? '',
         t.status ?? '',
         t.category ?? '',
+        (t as { incident_title?: string | null }).incident_title ?? '',
+        t.issue_type ?? '',
         String(!!sla.assignment_breached),
         String(!!sla.onsite_breached),
         String(!!sla.resolution_breached),

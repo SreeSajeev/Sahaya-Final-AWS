@@ -84,6 +84,11 @@ export type ReviewCompleteInput = z.infer<typeof ReviewCompleteSchema>;
 
 export const CreateTicketSchema = z.object({
   vehicle_number: z.string().max(20).nullable().optional(),
+  incident_title: z
+    .string({ required_error: 'Incident title is required' })
+    .trim()
+    .min(1, { message: 'Incident title is required' })
+    .max(255, { message: 'Incident title too long' }),
   category: z.string().max(50).nullable().optional(),
   issue_type: z.string().max(100).nullable().optional(),
   location: z

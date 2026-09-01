@@ -1,12 +1,11 @@
 import express from "express";
-import { TOKEN_STATES, isTokenExpired } from "../services/tokenService.js";
-import { SAFE_TOKEN_LIFECYCLE } from "../config/appConfig.js";
 import { hasPublicColumn } from "../services/schemaCompatService.js";
 import {
   getFeActionTokenById,
-  markFeActionTokenExpired,
 } from "../repositories/feActionTokenRepository.js";
 import { getTicketByIdUnscoped } from "../repositories/ticketQueryRepository.js";
+import { listResolutionLocations } from "../services/resolutionLocationService.js";
+import { validateFeActionTokenLifecycle } from "../services/fePublicTokenGuard.js";
 import { jsonError, jsonOk } from "../utils/http.js";
 import { logEvent } from "../utils/structuredLog.js";
 import { maskTokenForLog } from "../utils/tokenRedact.js";
@@ -75,7 +74,6 @@ router.get("/action/:tokenId/context", async (req, res) => {
   if (!tokenId) return jsonError(res, 400, "Token missing");
 
   try {
-    const hasTokenStateColumn = await hasPublicColumn("fe_action_tokens", "token_state");
     const tokenSelect = await tokenContextSelectColumns();
 
     const { data: actionToken, error: tokenError } = await getFeActionTokenById(tokenId, tokenSelect);
@@ -83,24 +81,11 @@ router.get("/action/:tokenId/context", async (req, res) => {
     if (tokenError) return jsonError(res, 500, tokenError.message);
     if (!actionToken) return jsonError(res, 404, "Invalid token");
 
-    const effectiveTokenState =
-      actionToken.token_state == null && SAFE_TOKEN_LIFECYCLE
-        ? TOKEN_STATES.ACTIVE
-        : actionToken.token_state;
-
-    if (actionToken.used || effectiveTokenState === TOKEN_STATES.USED) {
-      return jsonError(res, 410, "Token already used", { code: "TOKEN_USED" });
+    const lifecycle = await validateFeActionTokenLifecycle(actionToken, { tokenId });
+    if (!lifecycle.ok) {
+      return jsonError(res, lifecycle.status, lifecycle.message, { code: lifecycle.code });
     }
-    if (effectiveTokenState === TOKEN_STATES.REVOKED) {
-      return jsonError(res, 410, "Token revoked", { code: "TOKEN_REVOKED" });
-    }
-    if (effectiveTokenState === TOKEN_STATES.EXPIRED || isTokenExpired(actionToken.expires_at)) {
-      // Best-effort mark expired when token_state exists; never block on it.
-      if (hasTokenStateColumn) {
-        await markFeActionTokenExpired(tokenId);
-      }
-      return jsonError(res, 410, "Token expired", { code: "TOKEN_EXPIRED" });
-    }
+    const effectiveTokenState = lifecycle.effectiveTokenState;
 
     const ticketSelect = await ticketContextSelectColumns();
     const { data: ticket, error: ticketError } = await getTicketByIdUnscoped(
@@ -136,6 +121,60 @@ router.get("/action/:tokenId/context", async (req, res) => {
     });
   } catch (err) {
     return jsonError(res, 500, err?.message || "Failed to load context");
+  }
+});
+
+/**
+ * Active attended/resolution locations for the ticket's organisation (magic-link FE proof).
+ * GET /fe/action/:tokenId/resolution-locations
+ */
+router.get("/action/:tokenId/resolution-locations", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const tokenId = req.params.tokenId;
+  if (!tokenId) return jsonError(res, 400, "Token missing");
+
+  try {
+    const tokenSelect = await tokenContextSelectColumns();
+    const { data: actionToken, error: tokenError } = await getFeActionTokenById(tokenId, tokenSelect);
+    if (tokenError) return jsonError(res, 500, tokenError.message);
+    if (!actionToken) return jsonError(res, 404, "Invalid token");
+
+    const lifecycle = await validateFeActionTokenLifecycle(actionToken, { tokenId });
+    if (!lifecycle.ok) {
+      return jsonError(res, lifecycle.status, lifecycle.message, { code: lifecycle.code });
+    }
+
+    const { data: ticket, error: ticketError } = await getTicketByIdUnscoped(
+      actionToken.ticket_id,
+      "organisation_id, status"
+    );
+    if (ticketError) return jsonError(res, 500, ticketError.message);
+    if (!ticket) return jsonError(res, 404, "Ticket not found");
+    if (ticket.status === "REJECTED") {
+      return jsonError(res, 403, "Ticket rejected — action not allowed", { code: "TICKET_REJECTED" });
+    }
+
+    if (
+      actionToken.organisation_id &&
+      ticket.organisation_id &&
+      actionToken.organisation_id !== ticket.organisation_id
+    ) {
+      return jsonError(res, 403, "Forbidden", { code: "TENANT_MISMATCH" });
+    }
+
+    const orgId = ticket.organisation_id ?? actionToken.organisation_id ?? null;
+    if (!orgId) return jsonOk(res, { items: [] });
+
+    const result = await listResolutionLocations(
+      { tenantId: orgId, isSuperAdmin: false },
+      { organisation_id: orgId, active_only: true }
+    );
+    if (result.error) {
+      return jsonError(res, result.error.status ?? 500, result.error.message);
+    }
+    return jsonOk(res, { items: result.data ?? [] });
+  } catch (err) {
+    return jsonError(res, 500, err?.message || "Failed to load resolution locations");
   }
 });
 

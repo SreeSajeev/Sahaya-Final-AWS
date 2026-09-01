@@ -410,6 +410,12 @@ router.put("/configurations/:key", async (req, res) => {
   const value = req.body?.value ?? null;
   if (value == null || typeof value !== "object") return jsonError(res, 400, "Invalid value");
 
+  const { validateOrgTicketConfigValue } = await import("../services/closeFormService.js");
+  const configValidation = validateOrgTicketConfigValue(value);
+  if (!configValidation.ok) {
+    return jsonError(res, 400, configValidation.error);
+  }
+
   try {
     const updated_at = new Date().toISOString();
     const { data: existing, error: exErr } = await configurationKeyExists(key);

@@ -1,4 +1,5 @@
 import { TENANT_CLIENTS_ENABLED } from "../config/appConfig.js";
+import { resolveIncidentTitle } from "../utils/resolveIncidentTitle.js";
 import { parseVerificationToken } from "./otp/otpCrypto.js";
 import { hasRequiredFieldsForOpen } from "./ticketService.js";
 import { generateTicketNumberForCreation } from "../utils/ticketNumber.js";
@@ -150,6 +151,11 @@ export async function submitPublicComplaint(req, body) {
   const { category, issue_type } = resolveEffectiveCategoryAndIssue(form);
   const description = form.description.trim();
   const shortDescription = description.slice(0, SHORT_DESCRIPTION_MAX_LEN);
+  const incidentTitle = resolveIncidentTitle({
+    description,
+    issue_type,
+    category,
+  });
   const vehicleNumber = form.vehicle_number.trim() || null;
   const location = normalizeLocation(form.location);
   const complaintId = form.complaint_id.trim() || null;
@@ -177,6 +183,7 @@ export async function submitPublicComplaint(req, body) {
     vehicle_number: vehicleNumber,
     category,
     issue_type,
+    incident_title: incidentTitle,
     location,
     short_description: shortDescription,
     client_slug: clientSlug,

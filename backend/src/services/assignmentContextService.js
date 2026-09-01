@@ -19,6 +19,8 @@ import {
   findFieldExecutiveByName,
 } from "../repositories/fieldExecutiveRepository.js";
 import { getAssignmentById } from "../repositories/assignmentRepository.js";
+import { getTicketByIdScoped } from "../repositories/ticketQueryRepository.js";
+import { isTenantAllowed } from "../middleware/tenantContext.js";
 
 export const ASSIGNMENT_CONTEXT_MAX_IMAGES = 10;
 export const ASSIGNMENT_CONTEXT_REMARK_MAX = 4000;
@@ -98,6 +100,7 @@ export function parseAssignmentContextImages(raw) {
  *   feId: string | null;
  *   items: Array<{ buffer: Buffer; contentType: string; filename: string; remark: string }>;
  *   isReassign?: boolean;
+ *   eventType?: string;
  * }} opts
  */
 export async function persistAssignmentContextImages(opts) {
@@ -109,7 +112,12 @@ export async function persistAssignmentContextImages(opts) {
     feId,
     items,
     isReassign = false,
+    eventType = null,
   } = opts;
+
+  const contextEventType =
+    eventType ||
+    (isReassign ? "REASSIGNMENT_CONTEXT" : "ASSIGNMENT_CONTEXT");
 
   if (!items?.length) {
     return { ok: true, commentIds: [], uploaded: 0 };
@@ -152,7 +160,7 @@ export async function persistAssignmentContextImages(opts) {
       body: remark,
       attachments: {
         assignment_context: {
-          event_type: isReassign ? "REASSIGNMENT_CONTEXT" : "ASSIGNMENT_CONTEXT",
+          event_type: contextEventType,
           assignment_id: assignmentId,
           fe_id: feId,
           uploaded_by_user_id: req.appUser.id,
@@ -202,7 +210,7 @@ export async function persistAssignmentContextImages(opts) {
             ...(prevAtt.assignment_context && typeof prevAtt.assignment_context === "object"
               ? prevAtt.assignment_context
               : {}),
-            event_type: isReassign ? "REASSIGNMENT_CONTEXT" : "ASSIGNMENT_CONTEXT",
+            event_type: contextEventType,
             assignment_id: assignmentId,
             fe_id: feId,
             uploaded_by_user_id: req.appUser.id,
@@ -239,6 +247,61 @@ export async function persistAssignmentContextImages(opts) {
   }
 
   return { ok: true, commentIds, uploaded: commentIds.length };
+}
+
+/**
+ * Add manager context images/remarks after FE assignment (without reassigning).
+ */
+export async function addPostAssignmentContextImages({ req, ticketId, contextImagesRaw }) {
+  const parsed = parseAssignmentContextImages(contextImagesRaw);
+  if (!parsed.ok) return parsed;
+  if (!parsed.items.length) {
+    return { ok: false, error: "At least one context image is required", status: 400 };
+  }
+
+  const { data: ticket, error: ticketError } = await getTicketByIdScoped(
+    req,
+    ticketId,
+    "id, organisation_id, current_assignment_id, status"
+  );
+  if (ticketError || !ticket) {
+    return { ok: false, error: "Ticket not found", status: 404 };
+  }
+  if (!isTenantAllowed(req, ticket.organisation_id)) {
+    return { ok: false, error: "Ticket does not belong to your organisation", status: 403 };
+  }
+  if (!ticket.current_assignment_id) {
+    return { ok: false, error: "Ticket has no active assignment", status: 400 };
+  }
+
+  const { data: assignment, error: assignErr } = await getAssignmentById(
+    ticket.current_assignment_id,
+    "id, fe_id, assignment_type, organisation_id"
+  );
+  if (assignErr || !assignment) {
+    return { ok: false, error: "Assignment not found", status: 404 };
+  }
+  if (assignment.assignment_type === "SERVICE_MANAGER") {
+    return {
+      ok: false,
+      error: "Post-assignment context images apply to Field Executive assignments only",
+      status: 400,
+    };
+  }
+  if (!assignment.fe_id) {
+    return { ok: false, error: "No Field Executive on current assignment", status: 400 };
+  }
+
+  return persistAssignmentContextImages({
+    req,
+    ticketId,
+    organisationId: ticket.organisation_id ?? null,
+    assignmentId: assignment.id,
+    feId: assignment.fe_id,
+    items: parsed.items,
+    isReassign: false,
+    eventType: "POST_ASSIGNMENT_CONTEXT",
+  });
 }
 
 /**

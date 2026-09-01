@@ -6,6 +6,7 @@ const EXAMPLE_ROW = [
   "KA51AF2857",
   "Telematics",
   "GPS NOT WORKING",
+  "GPS signal lost on NH48",
   "Bangalore",
   "Karnataka",
   "false",

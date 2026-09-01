@@ -31,6 +31,7 @@ import {
 import {
   parseAssignmentContextImages,
   persistAssignmentContextImages,
+  addPostAssignmentContextImages,
 } from "../services/assignmentContextService.js";
 import { insertAuditLog } from "../services/auditLogService.js";
 import { createManualTicketFromBody } from "../services/manualTicketService.js";
@@ -82,7 +83,8 @@ import { getFieldExecutiveById } from "../repositories/fieldExecutiveRepository.
 import { findActiveResolutionTokenForTicket } from "../repositories/feActionTokenRepository.js";
 import { hideCommentImages } from "../services/imageVisibilityService.js";
 import { getCloseFormFields, validateCloseFormSnapshot } from "../services/closeFormService.js";
-import { resolveResolutionLocationForClose } from "../services/resolutionLocationService.js";
+import { resolveResolutionLocationForTicketClose } from "../services/resolutionLocationService.js";
+import { getOrganisationById } from "../repositories/organisationRepository.js";
 import { buildClosureTimelineSummary } from "../services/closureTimelineSummary.js";
 
 const router = express.Router();
@@ -163,6 +165,34 @@ const assignBodySchema = z
       });
     }
   });
+
+const postAssignmentContextSchema = z.object({
+  context_images: assignBodySchema.shape.context_images,
+});
+
+router.post("/:id/assignment-context", requireRole(STAFF_OPERATION_ROLES), async (req, res) => {
+  const ticketId = req.params.id;
+  const parsed = postAssignmentContextSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return jsonRes(res, 400, { error: "Invalid request body", details: parsed.error.flatten() });
+  }
+  try {
+    const outcome = await addPostAssignmentContextImages({
+      req,
+      ticketId,
+      contextImagesRaw: parsed.data.context_images,
+    });
+    if (!outcome.ok) {
+      return jsonRes(res, outcome.status ?? 400, { error: outcome.error });
+    }
+    return jsonOk(res, {
+      uploaded: outcome.uploaded ?? 0,
+      comment_ids: outcome.commentIds ?? [],
+    });
+  } catch (err) {
+    return jsonRes(res, 500, { error: safeDbErrorForClient(err, "Failed to add assignment context") });
+  }
+});
 
 const bulkAssignBodySchema = z.object({
   ticketIds: z.array(z.string().uuid()).min(1).max(BULK_ASSIGN_MAX_TICKETS),
@@ -808,6 +838,20 @@ router.get("/:id/closure-context", requireRole(STAFF_OPERATION_ROLES), async (re
     const closeable =
       ticket.status === "ON_SITE" || ticket.status === "RESOLVED_PENDING_VERIFICATION";
 
+    let organisationReview = null;
+    if (ticket.organisation_id) {
+      const { data: orgRow } = await getOrganisationById(
+        ticket.organisation_id,
+        "review_field_label, review_field_helper_text"
+      );
+      if (orgRow) {
+        organisationReview = {
+          review_field_label: orgRow.review_field_label ?? null,
+          review_field_helper_text: orgRow.review_field_helper_text ?? null,
+        };
+      }
+    }
+
     return jsonOk(res, {
       ticket: {
         id: ticket.id,
@@ -821,6 +865,7 @@ router.get("/:id/closure-context", requireRole(STAFF_OPERATION_ROLES), async (re
       client,
       recipients,
       canClose: closeable,
+      organisation: organisationReview,
     });
   } catch (err) {
     console.error("[closure-context]", err);
@@ -1418,7 +1463,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
 
   try {
     const selectFields =
-      "ticket_number, opened_by_email, complaint_id, vehicle_number, vehicle_name, vehicle_type, registration_number, category, issue_type, location, organisation_id, status, current_assignment_id, client_slug, remarks, short_description, priority, priority_level, resolution_location_name";
+      "ticket_number, opened_by_email, complaint_id, vehicle_number, vehicle_name, vehicle_type, registration_number, category, issue_type, location, organisation_id, status, current_assignment_id, client_slug, remarks, short_description, priority, priority_level, resolution_location_id, resolution_location_name";
 
     const { data: existing, error: loadErr } = await getTicketByIdUnscoped(ticketId, selectFields);
 
@@ -1443,10 +1488,12 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
     const closeFormFields = await getCloseFormFields(existing.organisation_id);
     const closeFormResult = validateCloseFormSnapshot(closeFormFields, close_form_values);
     if (!closeFormResult.ok) return jsonRes(res, 400, { error: closeFormResult.error });
-    const resolutionLocation = await resolveResolutionLocationForClose(
-      resolution_location_id,
-      existing.organisation_id
-    );
+    const resolutionLocation = await resolveResolutionLocationForTicketClose({
+      bodyLocationId: resolution_location_id,
+      existingLocationId: existing.resolution_location_id ?? null,
+      existingLocationName: existing.resolution_location_name ?? null,
+      organisationId: existing.organisation_id,
+    });
     if (resolutionLocation.error) {
       return jsonRes(res, resolutionLocation.error.status, { error: resolutionLocation.error.message });
     }
@@ -1640,6 +1687,17 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
           existing.priority_level ?? ticket.priority_level,
           ticket.priority ?? existing.priority
         );
+        let tenantResolutionInstructions = null;
+        if (existing.organisation_id) {
+          const { data: orgRow } = await getOrganisationById(
+            existing.organisation_id,
+            "review_field_helper_text"
+          );
+          const helper = orgRow?.review_field_helper_text;
+          if (helper != null && String(helper).trim() !== "") {
+            tenantResolutionInstructions = String(helper).trim();
+          }
+        }
         let sentCount = 0;
         let attemptedAny = false;
         const reasons = [];
@@ -1671,6 +1729,7 @@ router.post("/:id/close", requireRole(STAFF_OPERATION_ROLES), async (req, res) =
               null,
             closeFormSnapshot: closeFormResult.snapshot,
             timelineSummary,
+            tenantResolutionInstructions,
           });
           attemptedAny = attemptedAny || Boolean(emailResult?.attempted);
           if (emailResult?.sent) sentCount += 1;

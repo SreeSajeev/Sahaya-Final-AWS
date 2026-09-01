@@ -10,7 +10,7 @@ export const FORM_TEMPLATES = Object.freeze([
       fields: [
         { internalName: "title", displayLabel: "Title", fieldType: "single_line_text", required: true, searchable: true },
         { internalName: "description", displayLabel: "Description", fieldType: "paragraph", required: true },
-        { internalName: "priority", displayLabel: "Priority", fieldType: "dropdown", required: true, options: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+        { internalName: "priority", displayLabel: "Priority", fieldType: "dropdown", required: true, options: ["LOW", "MEDIUM", "HIGH"] },
         { internalName: "category", displayLabel: "Category", fieldType: "dropdown", options: ["Network", "Hardware", "Software", "Other"] },
         { internalName: "impact", displayLabel: "Impact", fieldType: "radio", options: ["User", "Team", "Org"] },
       ],

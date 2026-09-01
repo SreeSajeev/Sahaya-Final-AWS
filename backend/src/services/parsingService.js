@@ -94,6 +94,7 @@ function extractStructuredHTMLFields(raw) {
     complaint_id: null,
     vehicle_number: null,
     category: null,
+    incident_title: null,
     issue_type: null,
     location: null,
     remarks: null,
@@ -138,7 +139,8 @@ function extractStructuredHTMLFields(raw) {
 
   out.complaint_id = get('Record ID', 'Incident Number') || null;
   out.category = get('Category') || null;
-  out.issue_type = get('Item Name', 'Incident Title') || null;
+  out.incident_title = get('Incident Title') || null;
+  out.issue_type = get('Item Name', 'Issue type') || null;
   out.remarks = get('Remarks') || null;
   out.location = get('Location') || null;
   out.contact_number = get('Contact Numbers', 'Contact Number') || null;
@@ -163,6 +165,7 @@ function safeParserOutput(parse_errors = ['parser_error']) {
     complaint_id: null,
     vehicle_number: null,
     category: null,
+    incident_title: null,
     issue_type: null,
     location: null,
     remarks: null,
@@ -197,6 +200,7 @@ export function parseEmail(raw) {
     const result = {
       complaint_id: null,
       vehicle_number: null,
+      incident_title: null,
       issue_type: null,
       category: null,
       location: null,
@@ -221,6 +225,7 @@ export function parseEmail(raw) {
     if (!result.vehicle_number) result.vehicle_number = extractVehicleFromText(textFlat);
 
     result.category = extractField('Category', textForLabels);
+    result.incident_title = extractField('Incident Title', textForLabels);
     result.issue_type =
       extractField('Issue type', textForLabels) || extractField('Item Name', textForLabels);
     result.location = extractField('Location', textForLabels);
@@ -235,6 +240,7 @@ export function parseEmail(raw) {
     if (htmlFields.complaint_id && !result.complaint_id) result.complaint_id = htmlFields.complaint_id;
     if (htmlFields.vehicle_number && !result.vehicle_number) result.vehicle_number = htmlFields.vehicle_number;
     if (htmlFields.category && !result.category) result.category = htmlFields.category;
+    if (htmlFields.incident_title && !result.incident_title) result.incident_title = htmlFields.incident_title;
     if (htmlFields.issue_type && !result.issue_type) result.issue_type = htmlFields.issue_type;
     if (htmlFields.location && !result.location) result.location = htmlFields.location;
     if (htmlFields.remarks && !result.remarks) result.remarks = htmlFields.remarks;
