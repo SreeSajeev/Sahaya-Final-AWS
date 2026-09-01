@@ -1,7 +1,7 @@
 import { APP_BASE_URL } from "../config/appConfig.js";
 import { safeTrim } from "./http.js";
 
-const PRODUCTION_APP_ORIGIN = "https://sahaya.pariskq.in";
+const PRODUCTION_APP_ORIGIN = "https://test-sahaya.pariskq.in";
 
 /** Canonical SPA reset page URL (env-driven, never bare localhost in production). */
 export function getCanonicalPasswordResetUrl() {

@@ -207,13 +207,13 @@ export function sanitizePhoneForSms(phone) {
 
 /**
  * Render the DLT-registered assignment SMS message.
- * Template default: "Login to sahaya.pariskq.in for ticket no {#alphanumeric}"
+ * Template default: "Login to test-sahaya.pariskq.in for ticket no {#alphanumeric}"
  * @param {{ ticketNumber: string }} params
  */
 export function renderAssignmentSms({ ticketNumber }) {
   const tmpl = truthyEnv(
     "SMS_ASSIGNMENT_TEMPLATE",
-    "Login to sahaya.pariskq.in for ticket no {#alphanumeric}"
+    "Login to test-sahaya.pariskq.in for ticket no {#alphanumeric}"
   );
   const tn = ticketNumber != null ? String(ticketNumber).trim() : "";
   return tmpl.replace("{#alphanumeric}", tn);

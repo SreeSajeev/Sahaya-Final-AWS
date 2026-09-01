@@ -109,7 +109,7 @@ jobs:
             echo "Deployed revision: $(git rev-parse HEAD)"
             git status
 
-            # Env upserts (existing TEST host paths / flags — unchanged architecture).
+            # Env upserts (active production: test-sahaya.pariskq.in — unchanged EC2 paths).
             ensure_env_flag() {
               local file="$1"
               local key="$2"
@@ -132,8 +132,11 @@ jobs:
             ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED true
             ensure_env_flag backend/.env AWS_REGION ap-south-1
             ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
+            ensure_env_flag backend/.env PORT 4100
             ensure_env_flag backend/.env APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env PASSWORD_RESET_REDIRECT_URL https://test-sahaya.pariskq.in/reset-password
             ensure_env_flag frontend/.env VITE_APP_BASE_URL https://test-sahaya.pariskq.in
+            ensure_env_flag frontend/.env VITE_CRM_API_URL https://api.test-sahaya.pariskq.in
             ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN .test-sahaya.pariskq.in
             ensure_env_flag backend/.env AUTH_COOKIE_SECURE true
             ensure_env_flag backend/.env AUTH_COOKIE_SAMESITE lax
@@ -142,6 +145,8 @@ jobs:
             ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
             ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
             ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN false
+            ensure_env_flag backend/.env MAIL_DRY_RUN false
+            ensure_env_flag backend/.env PUBLIC_OTP_ALLOW_SMS_SKIP false
             ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
             ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
             ensure_env_flag backend/.env TENANT_CLIENTS_ENABLED true
@@ -256,6 +261,11 @@ jobs:
             echo "Restarting PM2"
             echo "========================"
 
+            cd "$MONOREPO/backend"
+            set -a
+            # shellcheck disable=SC1091
+            source .env
+            set +a
             pm2 restart "$PM2_NAME" --update-env
 
             echo "========================"
@@ -268,10 +278,26 @@ jobs:
             echo "Running health checks"
             echo "========================"
 
-            sleep 5
-            curl --fail --silent --show-error "$HEALTH_URL"
-            echo
-            echo "Health check OK"
+            health_ok=false
+            for i in $(seq 1 30); do
+              if curl --fail --silent --show-error "$HEALTH_URL"; then
+                echo
+                echo "Health check OK (attempt ${i}/30)"
+                health_ok=true
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "Health check failed after 30 attempts" >&2
+                print_diagnostics
+                exit 1
+              fi
+              sleep 2
+            done
+
+            if [ "$health_ok" != "true" ]; then
+              print_diagnostics
+              exit 1
+            fi
 
             trap - ERR
 
