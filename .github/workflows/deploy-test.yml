@@ -114,16 +114,46 @@ jobs:
               local file="$1"
               local key="$2"
               local value="$3"
+              local tmp="${file}.deploy_tmp.$$"
+
+              echo "Upserting ${key} in ${file}..."
+
+              if [ -z "${key}" ]; then
+                echo "FATAL: ensure_env_flag called with empty key (file=${file})" >&2
+                return 1
+              fi
+
+              local dir
+              dir="$(dirname "$file")"
+              if [ ! -d "$dir" ]; then
+                echo "FATAL: missing directory ${dir} for key=${key}" >&2
+                return 1
+              fi
               if [ ! -f "$file" ]; then
-                echo "Missing env file: $file" >&2
-                exit 1
+                echo "Creating missing env file ${file} (key=${key})"
+                if ! touch "$file"; then
+                  echo "FATAL: could not create ${file} for key=${key}" >&2
+                  return 1
+                fi
               fi
-              if grep -q "^${key}=" "$file"; then
-                sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file"
-                rm -f "${file}.bak"
-              else
-                printf '\n%s=%s\n' "$key" "$value" >> "$file"
+
+              # awk avoids sed delimiter/escaping failures on URL values under set -e.
+              if ! awk -v k="$key" -v v="$value" '
+                BEGIN { updated = 0 }
+                substr($0, 1, length(k) + 1) == k "=" { print k "=" v; updated = 1; next }
+                { print }
+                END { if (!updated) print k "=" v }
+              ' "$file" > "$tmp"; then
+                echo "FATAL: awk upsert failed for key=${key} file=${file}" >&2
+                rm -f "$tmp"
+                return 1
               fi
+              if ! mv "$tmp" "$file"; then
+                echo "FATAL: could not write ${file} for key=${key}" >&2
+                rm -f "$tmp"
+                return 1
+              fi
+
               echo "Set ${key}=${value} in ${file}"
             }
 
@@ -133,14 +163,14 @@ jobs:
             ensure_env_flag backend/.env AWS_REGION ap-south-1
             ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
             ensure_env_flag backend/.env PORT 4100
-            ensure_env_flag backend/.env APP_BASE_URL https://test-sahaya.pariskq.in
-            ensure_env_flag backend/.env PASSWORD_RESET_REDIRECT_URL https://test-sahaya.pariskq.in/reset-password
-            ensure_env_flag frontend/.env VITE_APP_BASE_URL https://test-sahaya.pariskq.in
-            ensure_env_flag frontend/.env VITE_CRM_API_URL https://api.test-sahaya.pariskq.in
-            ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN .test-sahaya.pariskq.in
+            ensure_env_flag backend/.env APP_BASE_URL 'https://test-sahaya.pariskq.in'
+            ensure_env_flag backend/.env PASSWORD_RESET_REDIRECT_URL 'https://test-sahaya.pariskq.in/reset-password'
+            ensure_env_flag frontend/.env VITE_APP_BASE_URL 'https://test-sahaya.pariskq.in'
+            ensure_env_flag frontend/.env VITE_CRM_API_URL 'https://api.test-sahaya.pariskq.in'
+            ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN '.test-sahaya.pariskq.in'
             ensure_env_flag backend/.env AUTH_COOKIE_SECURE true
             ensure_env_flag backend/.env AUTH_COOKIE_SAMESITE lax
-            ensure_env_flag backend/.env AUTH_CORS_ORIGINS https://test-sahaya.pariskq.in
+            ensure_env_flag backend/.env AUTH_CORS_ORIGINS 'https://test-sahaya.pariskq.in'
             ensure_env_flag backend/.env JWT_ACCESS_TTL_SEC 900
             ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
             ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
