@@ -33,16 +33,39 @@ cd "$MONOREPO"
 
 # --- Env file helpers (safe for URL/special-char values; no sed replacement) ---
 
+# Write a dotenv value with double quotes when needed (spaces, #, quotes, etc.).
+# Node dotenv and this script's loader both accept quoted and unquoted forms.
+dotenv_encode_value() {
+  local value="$1"
+  case "$value" in
+    ''|*[!A-Za-z0-9_./:@%,+=-]*)
+      value="${value//\\/\\\\}"
+      value="${value//\"/\\\"}"
+      value="${value//\$/\\\$}"
+      value="${value//\`/\\\`}"
+      printf '"%s"' "$value"
+      ;;
+    *)
+      printf '%s' "$value"
+      ;;
+  esac
+}
+
 ensure_env_flag() {
   local file="$1"
   local key="$2"
   local value="$3"
+  local encoded
   local tmp="${file}.deploy_tmp.$$"
 
   echo "Upserting ${key} in ${file}..."
 
   if [ -z "${key}" ]; then
     echo "FATAL: ensure_env_flag called with empty key (file=${file})" >&2
+    return 1
+  fi
+  if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "FATAL: invalid env key=${key}" >&2
     return 1
   fi
 
@@ -57,7 +80,10 @@ ensure_env_flag() {
     touch "$file"
   fi
 
-  if ! awk -v k="$key" -v v="$value" '
+  encoded="$(dotenv_encode_value "$value")"
+
+  # Single-line awk only (runs inside deploy-ec2.sh on EC2 — never embed awk in appleboy YAML).
+  if ! awk -v k="$key" -v v="$encoded" '
     BEGIN { updated = 0 }
     substr($0, 1, length(k) + 1) == k "=" { print k "=" v; updated = 1; next }
     { print }
@@ -202,14 +228,63 @@ apply_deploy_env() {
   grep -qx 'PORT=4100' backend/.env
 }
 
-load_backend_env_for_pm2() {
-  # .env may contain legacy unquoted values; disable nounset while sourcing.
+# Load KEY=VALUE dotenv into the current shell WITHOUT `source` / `.`.
+# dotenv files commonly contain unquoted values with spaces (e.g. MAIL_FROM_NAME=Sahaya Support).
+# Bash `source` treats those as shell and fails with: `Support: command not found` (exit 127).
+# Node's dotenv.config() already accepts this syntax; PM2 --update-env needs a safe export path.
+load_dotenv_into_shell() {
+  local file="$1"
+  local line key val
+
+  if [ ! -f "$file" ]; then
+    echo "FATAL: dotenv file missing: ${file}" >&2
+    return 1
+  fi
+
   set +u
-  set -a
-  # shellcheck disable=SC1091
-  source "$MONOREPO/backend/.env"
-  set +a
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    if [[ "$line" =~ ^[[:space:]]*export[[:space:]]+(.*)$ ]]; then
+      line="${BASH_REMATCH[1]}"
+    fi
+    case "$line" in
+      *=*) ;;
+      *)
+        echo "FATAL: invalid dotenv line in ${file} (expected KEY=VALUE; values not shown)" >&2
+        set -u
+        return 1
+        ;;
+    esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "FATAL: invalid dotenv key in ${file} (key not shown)" >&2
+      set -u
+      return 1
+    fi
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+      val="${val//\\\"/\"}"
+      val="${val//\\\$/\$}"
+      val="${val//\\\`/\`}"
+      val="${val//\\\\/\\}"
+    elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+    printf -v "$key" '%s' "$val"
+    export "$key"
+  done < "$file"
   set -u
+}
+
+load_backend_env_for_pm2() {
+  echo "Loading backend/.env into shell for PM2 (safe dotenv parser; not bash source)"
+  load_dotenv_into_shell "$MONOREPO/backend/.env"
 }
 
 restart_pm2_with_env() {
@@ -218,6 +293,8 @@ restart_pm2_with_env() {
   echo "========================"
   cd "$MONOREPO/backend"
   load_backend_env_for_pm2
+  # App also loads dotenv via dotenv.config(); --update-env refreshes PM2-injected env
+  # so stale shell-exported values do not override newer .env file entries.
   pm2 restart "$PM2_NAME" --update-env
 }
 
