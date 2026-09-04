@@ -349,7 +349,7 @@ export function useAssignTicket() {
           (err.message === "Failed to fetch" || err.message?.includes("fetch"));
         throw new Error(
           isNetwork
-            ? "Cannot reach backend. Check that the API is running and that your network allows https://api.test-sahaya.pariskq.in (or set VITE_CRM_API_URL for a custom host)."
+            ? "Cannot reach backend. Check that the API is running and that your network allows https://api.sahaya.pariskq.in (or set VITE_CRM_API_URL for a custom host)."
             : err instanceof Error
               ? err.message
               : "Assignment request failed"
@@ -433,7 +433,7 @@ export function useReassignTicket() {
           (err.message === "Failed to fetch" || err.message?.includes("fetch"));
         throw new Error(
           isNetwork
-            ? "Cannot reach backend. Check that the API is running and that your network allows https://api.test-sahaya.pariskq.in (or set VITE_CRM_API_URL for a custom host)."
+            ? "Cannot reach backend. Check that the API is running and that your network allows https://api.sahaya.pariskq.in (or set VITE_CRM_API_URL for a custom host)."
             : err instanceof Error
               ? err.message
               : "Reassignment request failed"

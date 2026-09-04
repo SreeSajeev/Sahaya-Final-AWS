@@ -3,13 +3,13 @@
  *
  * Resolution order:
  * 1. VITE_CRM_API_URL (trimmed) when set at build time
- * 2. Non-localhost browsers: production fallback https://api.test-sahaya.pariskq.in (avoids bad builds defaulting to localhost)
+ * 2. Non-localhost browsers: production fallback https://api.sahaya.pariskq.in (avoids bad builds defaulting to localhost)
  * 3. localhost / 127.0.0.1 (or non-browser): development fallback http://localhost:3000
  *
  * Production bundles must never default to localhost when the env var is missing.
  */
 
-export const CRM_API_PRODUCTION_FALLBACK = "https://api.test-sahaya.pariskq.in" as const;
+export const CRM_API_PRODUCTION_FALLBACK = "https://api.sahaya.pariskq.in" as const;
 export const CRM_API_DEVELOPMENT_FALLBACK = "http://localhost:3000" as const;
 
 function normalizeBaseUrl(url: string): string {

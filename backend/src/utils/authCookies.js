@@ -1,6 +1,6 @@
 /**
  * Refresh-cookie helpers for Sahaya local auth.
- * Prefer Domain=.test-sahaya.pariskq.in so FE + API share the cookie without covering production.
+ * Prefer Domain=.sahaya.pariskq.in so FE (sahaya.pariskq.in) + API (api.sahaya.pariskq.in) share the refresh cookie.
  */
 
 export const REFRESH_COOKIE_NAME = "sahaya_refresh";

@@ -122,5 +122,5 @@ jobs:
         run: npm run build
         env:
           # Build-time API target for CI compile only (runtime FE uses EC2 frontend/.env).
-          VITE_CRM_API_URL: https://api.test-sahaya.pariskq.in
-          VITE_APP_BASE_URL: https://test-sahaya.pariskq.in
+          VITE_CRM_API_URL: https://api.sahaya.pariskq.in
+          VITE_APP_BASE_URL: https://sahaya.pariskq.in

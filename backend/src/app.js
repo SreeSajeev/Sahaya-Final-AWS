@@ -185,7 +185,7 @@ async function resolveInboundOrganisationId(toEmail) {
    GLOBAL MIDDLEWARE
 ====================================================== */
 
-// CORS: APP_BASE_URL + AUTH_CORS_ORIGINS (comma-separated). Prefer TEST SPA only on TEST.
+// CORS: APP_BASE_URL + AUTH_CORS_ORIGINS + explicit prod/test SPA origins (cutover-safe).
 const extraCors = String(process.env.AUTH_CORS_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
@@ -193,6 +193,8 @@ const extraCors = String(process.env.AUTH_CORS_ORIGINS || "")
 const corsOrigins = [
   APP_BASE_URL,
   ...extraCors,
+  "https://sahaya.pariskq.in",
+  "https://test-sahaya.pariskq.in",
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",

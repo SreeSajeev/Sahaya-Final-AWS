@@ -3,7 +3,7 @@
  * Prefer VITE_APP_BASE_URL so production builds never send localhost to the API.
  */
 
-const PRODUCTION_RESET_URL = "https://test-sahaya.pariskq.in/reset-password";
+const PRODUCTION_RESET_URL = "https://sahaya.pariskq.in/reset-password";
 
 export function getPasswordResetRedirectUrl(): string {
   const fromEnv = import.meta.env.VITE_APP_BASE_URL?.trim();

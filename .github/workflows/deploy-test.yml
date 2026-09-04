@@ -59,279 +59,29 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
-
             MONOREPO="/var/www/apps/sahaya-final-aws-monorepo"
             PM2_NAME="sahaya-final-aws-monorepo-api"
-            HEALTH_URL="http://127.0.0.1:4100/health"
-
-            print_diagnostics() {
-              echo "========================"
-              echo "DEPLOYMENT FAILED — diagnostics"
-              echo "========================"
-              echo "--- git rev-parse HEAD ---"
-              git -C "$MONOREPO" rev-parse HEAD 2>/dev/null || true
-              echo "--- git status ---"
-              git -C "$MONOREPO" status 2>/dev/null || true
-              echo "--- pm2 status ---"
-              pm2 status 2>/dev/null || true
-              echo "--- pm2 logs (last 100) ---"
-              pm2 logs "$PM2_NAME" --lines 100 --nostream 2>/dev/null || true
-            }
-
-            trap 'print_diagnostics' ERR
-
+            export MONOREPO PM2_NAME DEPLOY_SHA
             echo "========================"
             echo "Sahaya deploy starting"
             echo "DEPLOY_SHA=${DEPLOY_SHA:-origin/main}"
             echo "========================"
-
             cd "$MONOREPO"
-
-            if [ ! -d .git ]; then
-              echo "Monorepo missing at $MONOREPO" >&2
-              exit 1
-            fi
-
+            if [ ! -d .git ]; then echo "Monorepo missing at $MONOREPO" >&2; exit 1; fi
             echo "========================"
             echo "Pulling latest code (main)"
             echo "========================"
-
             git fetch origin
-
             git checkout main
-
-            if [ -n "${DEPLOY_SHA:-}" ]; then
-              git reset --hard "$DEPLOY_SHA"
-            else
-              git reset --hard origin/main
-            fi
-
+            if [ -n "${DEPLOY_SHA:-}" ]; then git reset --hard "$DEPLOY_SHA"; else git reset --hard origin/main; fi
             echo "Deployed revision: $(git rev-parse HEAD)"
             git status
-
-            # Env upserts (active production: test-sahaya.pariskq.in — unchanged EC2 paths).
-            ensure_env_flag() {
-              local file="$1"
-              local key="$2"
-              local value="$3"
-              local tmp="${file}.deploy_tmp.$$"
-
-              echo "Upserting ${key} in ${file}..."
-
-              if [ -z "${key}" ]; then
-                echo "FATAL: ensure_env_flag called with empty key (file=${file})" >&2
-                return 1
-              fi
-
-              local dir
-              dir="$(dirname "$file")"
-              if [ ! -d "$dir" ]; then
-                echo "FATAL: missing directory ${dir} for key=${key}" >&2
-                return 1
-              fi
-              if [ ! -f "$file" ]; then
-                echo "Creating missing env file ${file} (key=${key})"
-                if ! touch "$file"; then
-                  echo "FATAL: could not create ${file} for key=${key}" >&2
-                  return 1
-                fi
-              fi
-
-              # awk avoids sed delimiter/escaping failures on URL values under set -e.
-              if ! awk -v k="$key" -v v="$value" '
-                BEGIN { updated = 0 }
-                substr($0, 1, length(k) + 1) == k "=" { print k "=" v; updated = 1; next }
-                { print }
-                END { if (!updated) print k "=" v }
-              ' "$file" > "$tmp"; then
-                echo "FATAL: awk upsert failed for key=${key} file=${file}" >&2
-                rm -f "$tmp"
-                return 1
-              fi
-              if ! mv "$tmp" "$file"; then
-                echo "FATAL: could not write ${file} for key=${key}" >&2
-                rm -f "$tmp"
-                return 1
-              fi
-
-              echo "Set ${key}=${value} in ${file}"
-            }
-
-            ensure_env_flag backend/.env DB_MODE prisma
-            ensure_env_flag backend/.env S3_FE_PROOFS_BUCKET sahaya-test-fe-proofs
-            ensure_env_flag backend/.env S3_FE_PROOFS_ENABLED true
-            ensure_env_flag backend/.env AWS_REGION ap-south-1
-            ensure_env_flag backend/.env PHASE_A_DB_PROBE_ENABLED false
-            ensure_env_flag backend/.env PORT 4100
-            ensure_env_flag backend/.env APP_BASE_URL 'https://test-sahaya.pariskq.in'
-            ensure_env_flag backend/.env PASSWORD_RESET_REDIRECT_URL 'https://test-sahaya.pariskq.in/reset-password'
-            ensure_env_flag frontend/.env VITE_APP_BASE_URL 'https://test-sahaya.pariskq.in'
-            ensure_env_flag frontend/.env VITE_CRM_API_URL 'https://api.test-sahaya.pariskq.in'
-            ensure_env_flag backend/.env AUTH_COOKIE_DOMAIN '.test-sahaya.pariskq.in'
-            ensure_env_flag backend/.env AUTH_COOKIE_SECURE true
-            ensure_env_flag backend/.env AUTH_COOKIE_SAMESITE lax
-            ensure_env_flag backend/.env AUTH_CORS_ORIGINS 'https://test-sahaya.pariskq.in'
-            ensure_env_flag backend/.env JWT_ACCESS_TTL_SEC 900
-            ensure_env_flag backend/.env JWT_REFRESH_TTL_SEC 604800
-            ensure_env_flag backend/.env PASSWORD_RESET_TOKEN_TTL_SEC 3600
-            ensure_env_flag backend/.env PASSWORD_RESET_DRY_RUN false
-            ensure_env_flag backend/.env MAIL_DRY_RUN false
-            ensure_env_flag backend/.env PUBLIC_OTP_ALLOW_SMS_SKIP false
-            ensure_env_flag backend/.env PROVISION_SERVER_SIDE_ENABLED true
-            ensure_env_flag backend/.env ENFORCE_TENANT_GUARD true
-            ensure_env_flag backend/.env TENANT_CLIENTS_ENABLED true
-            ensure_env_flag frontend/.env VITE_TENANT_CLIENTS_ENABLED true
-            ensure_env_flag backend/.env RATE_LIMIT_LOGIN_MAX 200
-
-            remove_env_key() {
-              local file="$1"
-              local key="$2"
-              if [ ! -f "$file" ]; then
-                return 0
-              fi
-              if grep -q "^${key}=" "$file"; then
-                sed -i.bak "/^${key}=/d" "$file"
-                rm -f "${file}.bak"
-                echo "Removed ${key} from ${file}"
-              fi
-            }
-            remove_env_key backend/.env SUPABASE_URL
-            remove_env_key backend/.env SUPABASE_ANON_KEY
-            remove_env_key backend/.env SUPABASE_SERVICE_ROLE_KEY
-            remove_env_key backend/.env SHARED_SUPABASE_MUTATIONS_DISABLED
-            remove_env_key frontend/.env VITE_SUPABASE_URL
-            remove_env_key frontend/.env VITE_SUPABASE_ANON_KEY
-            remove_env_key frontend/.env VITE_SUPABASE_PUBLISHABLE_KEY
-            remove_env_key frontend/.env VITE_SHARED_SUPABASE_MUTATIONS_DISABLED
-
-            ensure_secret_once() {
-              local file="$1"
-              local key="$2"
-              if [ ! -f "$file" ]; then
-                echo "Missing env file: $file" >&2
-                exit 1
-              fi
-              if grep -q "^${key}=.\+" "$file"; then
-                echo "Keeping existing ${key}"
-              else
-                local val
-                val="$(openssl rand -base64 48 | tr -d '\n')"
-                if grep -q "^${key}=" "$file"; then
-                  sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file"
-                  rm -f "${file}.bak"
-                else
-                  printf '\n%s=%s\n' "$key" "$val" >> "$file"
-                fi
-                echo "Generated ${key} in ${file}"
-              fi
-            }
-            ensure_secret_once backend/.env JWT_ACCESS_SECRET
-            ensure_secret_once backend/.env JWT_REFRESH_SECRET
-
-            warn_if_missing() {
-              local file="$1"
-              local key="$2"
-              local label="$3"
-              if [ ! -f "$file" ]; then
-                return 0
-              fi
-              if ! grep -q "^${key}=.\+" "$file"; then
-                echo "WARNING: ${label} (${key}) is not set in ${file} — outbound email will fail at runtime" >&2
-              fi
-            }
-            warn_if_missing backend/.env POSTMARK_SERVER_TOKEN "Postmark server token"
-            warn_if_missing backend/.env FROM_EMAIL "From email (FROM_EMAIL)"
-            warn_if_missing backend/.env MAIL_FROM_EMAIL "From email (MAIL_FROM_EMAIL)"
-
             echo "========================"
-            echo "Installing backend + migrations"
+            echo "Running deploy-ec2.sh from checked-out revision"
             echo "========================"
-
-            cd backend
-            npm install
-
-            echo "========================"
-            echo "Generating Prisma Client"
-            echo "========================"
-
-            npx prisma generate
-
-            echo "========================"
-            echo "Running Prisma migrations"
-            echo "========================"
-
-            # Run migrations BEFORE frontend publish so a failed migration leaves the live site unchanged.
-            if ! npx prisma migrate deploy; then
-              echo "migrate deploy failed — baselining Phase D auth migration if needed"
-              npx prisma db execute --schema prisma/schema.prisma --file prisma/migrations/20260802160000_phase_d_local_auth/migration.sql
-              npx prisma migrate resolve --applied 20260802160000_phase_d_local_auth
-              if ! npx prisma migrate deploy; then
-                echo "FATAL: prisma migrate deploy failed after baseline retry — aborting deploy" >&2
-                exit 1
-              fi
-            fi
-
-            echo "========================"
-            echo "Building frontend"
-            echo "========================"
-
-            cd ../frontend
-            npm install
-            npm run build
-            rm -rf /var/www/test-sahaya/*
-            cp -R dist/* /var/www/test-sahaya/
-
-            echo "========================"
-            echo "Backend ready (deps + migrations applied)"
-            echo "========================"
-
-            cd ../backend
-
-            echo "========================"
-            echo "Restarting PM2"
-            echo "========================"
-
-            cd "$MONOREPO/backend"
-            set -a
-            # shellcheck disable=SC1091
-            source .env
-            set +a
-            pm2 restart "$PM2_NAME" --update-env
-
-            echo "========================"
-            echo "Reloading nginx"
-            echo "========================"
-
-            systemctl reload nginx
-
-            echo "========================"
-            echo "Running health checks"
-            echo "========================"
-
-            health_ok=false
-            for i in $(seq 1 30); do
-              if curl --fail --silent --show-error "$HEALTH_URL"; then
-                echo
-                echo "Health check OK (attempt ${i}/30)"
-                health_ok=true
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "Health check failed after 30 attempts" >&2
-                print_diagnostics
-                exit 1
-              fi
-              sleep 2
-            done
-
-            if [ "$health_ok" != "true" ]; then
-              print_diagnostics
+            if [ ! -f backend/scripts/deploy-ec2.sh ]; then
+              echo "FATAL: backend/scripts/deploy-ec2.sh missing at $(git rev-parse HEAD)" >&2
+              echo "This deploy revision predates the external deploy script; push a commit that includes deploy-ec2.sh." >&2
               exit 1
             fi
-
-            trap - ERR
-
-            echo "========================"
-            echo "DEPLOYMENT SUCCESS"
-            echo "revision=$(git -C "$MONOREPO" rev-parse HEAD)"
-            echo "========================"
+            bash backend/scripts/deploy-ec2.sh

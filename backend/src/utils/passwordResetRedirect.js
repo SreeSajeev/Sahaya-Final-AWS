@@ -1,7 +1,7 @@
 import { APP_BASE_URL } from "../config/appConfig.js";
 import { safeTrim } from "./http.js";
 
-const PRODUCTION_APP_ORIGIN = "https://test-sahaya.pariskq.in";
+const PRODUCTION_APP_ORIGIN = "https://sahaya.pariskq.in";
 
 /** Canonical SPA reset page URL (env-driven, never bare localhost in production). */
 export function getCanonicalPasswordResetUrl() {
@@ -55,6 +55,8 @@ export function getAllowedPasswordResetOrigins() {
   addOrigin("http://127.0.0.1:5173");
   addOrigin("https://opsxbypariskq.vercel.app");
   addOrigin(PRODUCTION_APP_ORIGIN);
+  // Cutover: allow legacy test SPA origin until DNS fully switched.
+  addOrigin("https://test-sahaya.pariskq.in");
 
   return origins;
 }
