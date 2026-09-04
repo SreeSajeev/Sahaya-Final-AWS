@@ -332,26 +332,78 @@ run_health_checks() {
   fi
 }
 
+# Fail if deployment mutated tracked files in the Git checkout (no auto-restore).
+# Untracked files (e.g. .env) are ignored — they are expected outside Git.
+assert_git_tracked_clean() {
+  local phase="$1"
+  local dirty
+  dirty="$(git -C "$MONOREPO" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [ -n "$dirty" ]; then
+    echo "FATAL: deployment left tracked Git files dirty after: ${phase}" >&2
+    echo "----- git status --porcelain --untracked-files=no -----" >&2
+    echo "$dirty" >&2
+    echo "----- likely cause -----" >&2
+    if echo "$dirty" | grep -q 'package-lock.json'; then
+      echo "A package-lock.json changed. Use npm ci (not npm install) and ensure EC2 npm matches lockfileVersion." >&2
+    fi
+    echo "Do NOT git restore on the server as a workaround — fix the deploy command that mutated the tree." >&2
+    return 1
+  fi
+  echo "Git tracked tree clean after: ${phase}"
+}
+
+# Install deps exactly from the committed lockfile. Never rewrite package-lock.json.
+# prisma CLI lives in backend devDependencies — must include dev deps for generate/migrate.
+npm_ci_deterministic() {
+  local dir="$1"
+  local label="$2"
+  echo "========================"
+  echo "npm ci (${label})"
+  echo "node=$(node -v) npm=$(npm -v)"
+  echo "cwd=${dir}"
+  echo "========================"
+  if [ ! -f "${dir}/package-lock.json" ]; then
+    echo "FATAL: missing package-lock.json in ${dir} — cannot run npm ci" >&2
+    return 1
+  fi
+  if [ ! -f "${dir}/package.json" ]; then
+    echo "FATAL: missing package.json in ${dir}" >&2
+    return 1
+  fi
+  # Avoid NODE_ENV=production / npm production mode omitting prisma (devDependency).
+  if ! (
+    cd "$dir"
+    NPM_CONFIG_PRODUCTION=false npm ci --no-fund --no-audit
+  ); then
+    echo "FATAL: npm ci failed in ${dir} (exit preserved from npm)" >&2
+    return 1
+  fi
+  assert_git_tracked_clean "npm ci (${label})"
+}
+
 # --- Main deploy sequence ---
 
 echo "========================"
 echo "Sahaya EC2 deploy script"
 echo "revision=$(git -C "$MONOREPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+echo "node=$(node -v 2>/dev/null || echo unknown) npm=$(npm -v 2>/dev/null || echo unknown)"
 echo "========================"
+
+assert_git_tracked_clean "pre-deploy checkout"
 
 apply_deploy_env
 
 echo "========================"
-echo "Installing backend + migrations"
+echo "Installing backend dependencies (deterministic)"
 echo "========================"
 
-cd "$MONOREPO/backend"
-npm install
+npm_ci_deterministic "$MONOREPO/backend" "backend"
 
 echo "========================"
 echo "Generating Prisma Client"
 echo "========================"
 
+cd "$MONOREPO/backend"
 npx prisma generate
 
 echo "========================"
@@ -368,13 +420,17 @@ if ! npx prisma migrate deploy; then
   fi
 fi
 
+assert_git_tracked_clean "prisma generate/migrate"
+
 echo "========================"
 echo "Building frontend"
 echo "========================"
 
+npm_ci_deterministic "$MONOREPO/frontend" "frontend"
 cd "$MONOREPO/frontend"
-npm install
 npm run build
+
+assert_git_tracked_clean "frontend build"
 
 echo "========================"
 echo "Publishing frontend"
@@ -393,9 +449,12 @@ systemctl reload nginx
 
 run_health_checks
 
+assert_git_tracked_clean "post-deploy final"
+
 trap - ERR
 
 echo "========================"
 echo "DEPLOYMENT SUCCESS"
 echo "revision=$(git -C "$MONOREPO" rev-parse HEAD)"
+echo "git tracked tree: clean"
 echo "========================"
