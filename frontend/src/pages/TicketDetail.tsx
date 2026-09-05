@@ -690,7 +690,7 @@ export default function TicketDetail() {
                   }}
                 >
                   <User className="mr-2 h-4 w-4" />
-                  Assign {terminology.fieldExecutiveLabel}
+                  Assign
                 </Button>
               )}
               {canReassignTicket(ticket) && (
