@@ -256,11 +256,18 @@ export default function FEMyTickets() {
       visitRemarks,
       { fetchSignedUrl },
     );
-    await openFieldVisitPrintWindow(visitSheetTickets, visitFrom, visitTo, {
+    const opened = await openFieldVisitPrintWindow(visitSheetTickets, visitFrom, visitTo, {
       feName: userProfile?.name || user?.email,
       remarksByTicketId: visitRemarks,
       imagesByTicketId,
     });
+    if (!opened) {
+      toast({
+        title: 'Pop-up blocked',
+        description: 'Allow pop-ups for Sahaya to print or download the field visit sheet.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const downloadVisitCsv = () => {

@@ -11,6 +11,7 @@ import {
   type FETicketRow,
 } from '@/lib/feTicketList';
 import { resolveTicketPriorityLevel } from '@/lib/priority';
+import { openPrintHtmlDocument } from '@/lib/feTicketPrint';
 
 export type FERemarkLine = {
   id?: string | null;
@@ -333,7 +334,7 @@ export async function openFieldVisitPrintWindow(
     remarksByTicketId?: Record<string, FERemarkLine[]>;
     imagesByTicketId?: Record<string, string[]>;
   } = {},
-): Promise<void> {
+): Promise<boolean> {
   const remarksByTicketId = opts.remarksByTicketId ?? {};
   const imagesByTicketId =
     opts.imagesByTicketId ??
@@ -359,6 +360,7 @@ export async function openFieldVisitPrintWindow(
         ${block('Contact Number', fmtDash(t.contact_number))}
         ${block('Resolution Location', fmtDash(t.resolution_location_name))}
         ${block('Issue Type', fmtDash(t.issue_type ?? t.category))}
+        ${block('Category', fmtDash(t.category))}
         ${block('Incident Title', fmtDash(t.incident_title))}
         ${block('Priority', priority)}
         ${block('Status', fmtDash(t.status))}
@@ -412,9 +414,5 @@ export async function openFieldVisitPrintWindow(
 </body>
 </html>`;
 
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  return Boolean(openPrintHtmlDocument(html));
 }

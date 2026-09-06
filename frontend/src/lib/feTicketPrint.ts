@@ -8,7 +8,14 @@ import {
   type FETicketRow,
 } from '@/lib/feTicketList';
 import { resolveTicketPriorityLevel } from '@/lib/priority';
-import type { FERemarkLine } from '@/lib/feFieldVisitExport';
+
+type FERemarkLine = {
+  id?: string | null;
+  at?: string | null;
+  source?: string | null;
+  author?: string | null;
+  body: string;
+};
 
 function fmt(v: unknown): string {
   if (v == null) return '';
@@ -45,11 +52,43 @@ export type FETicketPrintInput = {
   comments?: FERemarkLine[];
 };
 
+/**
+ * Open HTML in a new window for Print / Save as PDF.
+ *
+ * IMPORTANT: Do not pass `noopener`/`noreferrer` in window.open *features* when using
+ * document.write — modern browsers return null and leave a blank tab (the blank print bug).
+ * We null `opener` after a successful write instead.
+ */
+export function openPrintHtmlDocument(html: string): Window | null {
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if (!w) return null;
+  try {
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    try {
+      w.opener = null;
+    } catch {
+      /* ignore cross-origin / locked opener */
+    }
+    w.focus();
+    return w;
+  } catch {
+    try {
+      w.close();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+}
+
 export function buildFETicketPrintHtml(input: FETicketPrintInput): string {
   const t = input.ticket;
   const priority = resolveTicketPriorityLevel(t);
   const description = fmt(t.short_description) || '—';
   const initialRemarks = fmt(t.remarks) || '—';
+  const assignmentRemarks = fmt(t.assignment_remarks) || '—';
 
   const additional =
     (input.comments ?? [])
@@ -97,11 +136,15 @@ export function buildFETicketPrintHtml(input: FETicketPrintInput): string {
     ${block('Complaint ID', formatComplaintIdDisplay(t.complaint_id))}
     ${block('Status', fmtDash(t.status))}
     ${block('Priority', priority)}
+    ${block('Incident Title', fmtDash(t.incident_title))}
+    ${block('Category', fmtDash(t.category))}
     ${block('Issue Type', fmtDash(t.issue_type ?? t.category))}
     ${block('Customer', fmtDash(t.client_name ?? t.client_slug))}
     ${block('Vehicle Number', fmtDash(t.vehicle_number))}
     ${block('State', formatStateDisplay(t.state))}
     ${block('Location', fmtDash(t.location))}
+    ${block('Contact Person', fmtDash(t.contact_person))}
+    ${block('Contact Number', fmtDash(t.contact_number))}
     ${block('Created Date', fmtDate(t.created_at || t.opened_at))}
     ${block('Assigned Date', fmtDate(t.assigned_at))}
     ${block('Field Executive', fmtDash(input.feName))}
@@ -112,6 +155,9 @@ export function buildFETicketPrintHtml(input: FETicketPrintInput): string {
 
   <h2>Initial Remarks</h2>
   ${block('Remarks', initialRemarks)}
+
+  <h2>Assignment Remarks</h2>
+  ${block('Manager instructions', assignmentRemarks)}
 
   <h2>Additional Remarks / Comments</h2>
   ${additional}
@@ -124,11 +170,7 @@ export function buildFETicketPrintHtml(input: FETicketPrintInput): string {
 </html>`;
 }
 
-export function openFETicketPrintWindow(input: FETicketPrintInput): void {
+export function openFETicketPrintWindow(input: FETicketPrintInput): boolean {
   const html = buildFETicketPrintHtml(input);
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  return Boolean(openPrintHtmlDocument(html));
 }

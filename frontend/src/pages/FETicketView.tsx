@@ -106,17 +106,47 @@ export default function FETicketView() {
     resolutionId && resTok?.actionable !== false && !resolutionLocked
   );
 
-  const handlePrint = () => {
-    openFETicketPrintWindow({
+  const handlePrint = async () => {
+    let remarkLines = comments.map((c) => ({
+      at: c.created_at,
+      source: c.source,
+      author: c.author_id,
+      body: c.body ?? "",
+    }));
+
+    // Prefer FE-scoped batch comments so print remarks work even if /data comments fail for FE.
+    try {
+      const batch = await fetchJson<{
+        by_ticket_id?: Record<string, TicketComment[]>;
+      }>("/fe/me/tickets/comments-batch", {
+        method: "POST",
+        body: { ticket_ids: [ticketId] },
+      });
+      const items = batch.by_ticket_id?.[ticketId] ?? [];
+      if (items.length > 0) {
+        remarkLines = items.map((c) => ({
+          at: c.created_at,
+          source: c.source,
+          author: c.author_id,
+          body: c.body ?? "",
+        }));
+      }
+    } catch {
+      /* keep already-loaded comments */
+    }
+
+    const opened = openFETicketPrintWindow({
       ticket: t as unknown as FETicketRow,
       feName: userProfile?.name || user?.email,
-      comments: comments.map((c) => ({
-        at: c.created_at,
-        source: c.source,
-        author: c.author_id,
-        body: c.body ?? "",
-      })),
+      comments: remarkLines,
     });
+    if (!opened) {
+      toast({
+        title: "Pop-up blocked",
+        description: "Allow pop-ups for Sahaya to print or download this ticket.",
+        variant: "destructive",
+      });
+    }
   };
 
   const submitAdditionalRemark = async () => {
@@ -185,7 +215,13 @@ export default function FETicketView() {
             My tickets
           </Link>
         </Button>
-        <Button type="button" variant="outline" size="sm" className="gap-1" onClick={handlePrint}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-1"
+          onClick={() => void handlePrint()}
+        >
           <Printer className="h-4 w-4" />
           Print / Download Ticket
         </Button>
