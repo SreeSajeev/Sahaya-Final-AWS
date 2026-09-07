@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { CheckCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { Ticket, TicketStatus } from "@/lib/types";
+import { ticketCategoryCloseDisplay } from "@/lib/ticketClientDisplay";
 import { TicketNumberDisplay } from "@/components/common/TicketNumberDisplay";
 import {
   RESOLUTION_CATEGORY_OTHER,
@@ -246,6 +247,18 @@ export function CloseTicketDialog({
                     <p className="text-sm text-destructive">{contextError}</p>
                   ) : (
                     <>
+                      <div className="space-y-2">
+                        <Label>Category</Label>
+                        <p
+                          className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-foreground"
+                          data-testid="close-ticket-category"
+                        >
+                          {ticketCategoryCloseDisplay(ticket.category)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Ticket category from creation (read-only). Separate from Issue Type below.
+                        </p>
+                      </div>
                       <div className="space-y-2">
                         <Label htmlFor="close-resolution-category">Issue Type *</Label>
                         <Select

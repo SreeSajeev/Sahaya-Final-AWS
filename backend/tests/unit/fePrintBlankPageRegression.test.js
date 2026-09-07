@@ -36,4 +36,31 @@ describe("FE print window open (blank page regression)", () => {
     expect(visitSrc).toMatch(/Remarks \/ Timeline/);
     expect(visitSrc).toMatch(/combineTicketRemarks/);
   });
+
+  it("bulk export supports CSV and Excel and empty date-range message", () => {
+    expect(visitSrc).toMatch(/downloadFieldVisitCsv/);
+    expect(visitSrc).toMatch(/downloadFieldVisitExcel/);
+    expect(visitSrc).toMatch(/No assigned tickets found for this date range/);
+  });
+
+  it("FE My Tickets wires date-range generate + print/csv/excel for assigned tickets only", () => {
+    const myTicketsSrc = readFileSync(
+      join(here, "../../../frontend/src/pages/FEMyTickets.tsx"),
+      "utf8"
+    );
+    expect(myTicketsSrc).toMatch(/filterFETicketsByDateRange\(displayedTickets/);
+    expect(myTicketsSrc).toMatch(/openFieldVisitPrintWindow/);
+    expect(myTicketsSrc).toMatch(/downloadFieldVisitCsv/);
+    expect(myTicketsSrc).toMatch(/downloadFieldVisitExcel/);
+    expect(myTicketsSrc).toMatch(/loadRemarksForTickets/);
+  });
+
+  it("FE individual ticket view uses openPrintHtmlDocument path via print helper", () => {
+    const viewSrc = readFileSync(
+      join(here, "../../../frontend/src/pages/FETicketView.tsx"),
+      "utf8"
+    );
+    expect(viewSrc).toMatch(/printFETicket|feTicketPrint|openPrintHtmlDocument|buildFeTicketPrintHtml/);
+    expect(viewSrc).toMatch(/comments-batch/);
+  });
 });

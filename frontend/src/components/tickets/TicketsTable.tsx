@@ -1,8 +1,14 @@
-import { memo, type KeyboardEvent, type MouseEvent } from 'react';
+import { memo, useMemo, type KeyboardEvent, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { formatIST } from '@/lib/dateUtils';
 import { Ticket } from '@/lib/types';
 import { useAuth } from '@/hooks/useAuth';
+import { useTenantClients } from '@/hooks/useTenantClients';
+import { isTenantClientsEnabled } from '@/lib/tenantClientsFeature';
+import {
+  buildCompanyShortNameBySlug,
+  ticketClientTableLabel,
+} from '@/lib/ticketClientDisplay';
 import { StatusBadge } from './StatusBadge';
 import { ConfidenceScore } from './ConfidenceScore';
 import { TicketPriorityBadge } from './TicketPriorityBadge';
@@ -148,6 +154,7 @@ function AllTicketsTable({
   onToggleTicket,
   onTogglePage,
   userRole,
+  companyShortNameBySlug,
 }: {
   tickets: Ticket[];
   rowExtra: Record<string, TicketRowSupplement>;
@@ -156,6 +163,7 @@ function AllTicketsTable({
   onToggleTicket?: (ticketId: string, checked: boolean) => void;
   onTogglePage?: (ticketIds: string[], checked: boolean) => void;
   userRole: string | undefined;
+  companyShortNameBySlug: Record<string, string>;
 }) {
   const navigate = useNavigate();
   const stickyLeft = allTicketsStickyLeft(selectable);
@@ -372,8 +380,11 @@ function AllTicketsTable({
                   )}
                 </TableCell>
                 <TableCell className="max-w-[160px]">
-                  <span className={cn(typography.body, 'line-clamp-2 break-words font-mono')}>
-                    {ticket.client_slug?.trim() ? ticket.client_slug : '—'}
+                  <span
+                    className={cn(typography.body, 'line-clamp-2 break-words')}
+                    title={ticket.client_slug?.trim() || undefined}
+                  >
+                    {ticketClientTableLabel(ticket, companyShortNameBySlug)}
                   </span>
                 </TableCell>
                 <TableCell className={typography.body}>
@@ -487,6 +498,15 @@ function TicketsTableComponent({
   onTogglePage,
 }: TicketsTableProps) {
   const { userProfile } = useAuth();
+  const isSuperAdmin = userProfile?.role === 'SUPER_ADMIN';
+  const { data: tenantClients = [] } = useTenantClients({
+    organisationId: isSuperAdmin ? null : (userProfile?.organisation_id ?? null),
+    enabled: Boolean(userProfile && isTenantClientsEnabled()),
+  });
+  const companyShortNameBySlug = useMemo(
+    () => buildCompanyShortNameBySlug(tenantClients),
+    [tenantClients],
+  );
 
   const assignableOnPage = selectable
     ? tickets.filter((t) => isTicketBulkAssignable(t.status))
@@ -512,6 +532,7 @@ function TicketsTableComponent({
         onToggleTicket={onToggleTicket}
         onTogglePage={onTogglePage}
         userRole={userProfile?.role}
+        companyShortNameBySlug={companyShortNameBySlug}
       />
     );
   }
@@ -677,8 +698,11 @@ function TicketsTableComponent({
                   )}
                 </TableCell>
                 <TableCell className="max-w-[160px]">
-                  <span className={cn(typography.body, 'line-clamp-2 break-words font-mono')}>
-                    {ticket.client_slug?.trim() ? ticket.client_slug : '—'}
+                  <span
+                    className={cn(typography.body, 'line-clamp-2 break-words')}
+                    title={ticket.client_slug?.trim() || undefined}
+                  >
+                    {ticketClientTableLabel(ticket, companyShortNameBySlug)}
                   </span>
                 </TableCell>
                 <TableCell className={typography.body}>{ticket.issue_type || '—'}</TableCell>
